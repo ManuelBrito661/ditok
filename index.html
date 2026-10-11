@@ -11,190 +11,240 @@
     <div class="layout">
       <nav class="sidebar" aria-label="Secções">
         <div class="brand">
-          <img id="mascot" alt="" width="56" height="56" />
+          <span class="brand-mark"><img id="mascot" alt="" width="40" height="40" /></span>
           <div>
             <strong>Ditok</strong>
             <span class="muted">Ditado por voz</span>
           </div>
         </div>
-        <a href="#geral" class="nav-link">Geral</a>
-        <a href="#transcricao" class="nav-link">Transcrição</a>
-        <a href="#limpeza" class="nav-link">Limpeza com IA</a>
-        <a href="#historico" class="nav-link">Histórico</a>
-        <a href="#metricas" class="nav-link">Métricas e custos</a>
+
+        <a href="#geral" class="nav-link">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+          Geral
+        </a>
+        <a href="#transcricao" class="nav-link">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
+          Transcrição
+        </a>
+        <a href="#limpeza" class="nav-link">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+          Limpeza com IA
+        </a>
+        <a href="#historico" class="nav-link">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
+          Histórico
+        </a>
+        <a href="#metricas" class="nav-link">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/></svg>
+          Métricas e custos
+        </a>
+
+        <div class="sidebar-status">
+          <span id="status-dot" class="dot"></span>
+          <span id="status-text">A carregar…</span>
+        </div>
       </nav>
 
       <main>
         <div id="toast" role="status" aria-live="polite" hidden></div>
 
         <section id="geral" class="panel">
-          <h1>Geral</h1>
-
-          <div class="field">
-            <div class="field-label">
-              <span id="shortcut-label">Atalho de ditado</span>
-              <span class="hint">Segura para falar; toca rapidamente para o modo alternar. Esc cancela.</span>
+          <div class="hero">
+            <div class="hero-text">
+              <span class="eyebrow">Ditok</span>
+              <h1>Olá! Estou pronto para ouvir.</h1>
+              <p class="muted">Segura <kbd id="hero-shortcut" class="kbd-inline"></kbd> e fala. Quando largas, eu escrevo onde estiver o cursor.</p>
             </div>
-            <div class="row">
-              <kbd id="shortcut-display" aria-labelledby="shortcut-label"></kbd>
-              <button id="shortcut-record" type="button">Mudar</button>
-              <button id="shortcut-reset" type="button" class="ghost">Repor</button>
-            </div>
-            <p id="shortcut-error" class="error" hidden></p>
+            <img id="hero-mascot" class="hero-mascot" alt="" width="132" height="120" />
           </div>
 
-          <div class="field">
-            <label class="field-label" for="language">
-              <span>Idioma</span>
-              <span class="hint">Indicar o idioma melhora a precisão e a velocidade.</span>
-            </label>
-            <select id="language">
-              <option value="pt">Português</option>
-              <option value="en">Inglês</option>
-              <option value="es">Espanhol</option>
-              <option value="fr">Francês</option>
-              <option value="de">Alemão</option>
-              <option value="it">Italiano</option>
-              <option value="">Detetar automaticamente</option>
-            </select>
+          <header class="panel-head">
+            <h2 class="panel-title">Geral</h2>
+            <p class="muted">Atalho, idioma e comportamento da app.</p>
+          </header>
+
+          <div class="group">
+            <div class="setting">
+              <div class="field-label">
+                <span id="shortcut-label">Atalho de ditado</span>
+                <span class="hint">Segura para falar; toca rapidamente para o modo alternar. Esc cancela.</span>
+              </div>
+              <div class="controls">
+                <kbd id="shortcut-display" aria-labelledby="shortcut-label"></kbd>
+                <button id="shortcut-record" type="button" class="secondary">Mudar</button>
+                <button id="shortcut-reset" type="button" class="ghost">Repor</button>
+              </div>
+              <p id="shortcut-error" class="error" hidden></p>
+            </div>
+
+            <div class="setting">
+              <label class="field-label" for="language">
+                <span>Idioma</span>
+                <span class="hint">Indicar o idioma melhora a precisão e a velocidade.</span>
+              </label>
+              <div class="controls">
+                <select id="language">
+                  <option value="pt">Português</option>
+                  <option value="en">Inglês</option>
+                  <option value="es">Espanhol</option>
+                  <option value="fr">Francês</option>
+                  <option value="de">Alemão</option>
+                  <option value="it">Italiano</option>
+                  <option value="">Detetar automaticamente</option>
+                </select>
+              </div>
+            </div>
           </div>
 
-          <div class="field">
-            <label class="switch">
-              <input id="autostart" type="checkbox" />
+          <div class="group">
+            <label class="setting switch">
               <span class="field-label">
                 <span>Arrancar com o sistema</span>
                 <span class="hint">O Ditok fica no tray sem abrir nenhuma janela.</span>
               </span>
+              <input id="autostart" type="checkbox" role="switch" />
             </label>
-          </div>
 
-          <div class="field">
-            <label class="switch">
-              <input id="show-overlay" type="checkbox" />
+            <label class="setting switch">
               <span class="field-label">
                 <span>Mostrar a barra com a mascote</span>
                 <span class="hint">Pequena em baixo ao centro; cresce enquanto falas, pensa e cola. Desligá-la poupa ~40–80 MB de RAM.</span>
               </span>
+              <input id="show-overlay" type="checkbox" role="switch" />
             </label>
-          </div>
 
-          <div class="field">
-            <label class="switch">
-              <input id="save-last-recording" type="checkbox" />
+            <label class="setting switch">
               <span class="field-label">
                 <span>Guardar a última gravação</span>
                 <span class="hint">Escreve <code>debug/last.wav</code>, útil para diagnosticar a qualidade do áudio.</span>
               </span>
+              <input id="save-last-recording" type="checkbox" role="switch" />
             </label>
           </div>
         </section>
 
         <section id="transcricao" class="panel">
-          <h1>Transcrição</h1>
+          <header class="panel-head">
+            <h2 class="panel-title">Transcrição</h2>
+            <p class="muted">Ligação ao OpenRouter e modelo que converte a tua voz em texto.</p>
+          </header>
 
-          <div class="field">
-            <div class="field-label">
-              <span>Chave do OpenRouter</span>
-              <span class="hint">Guardada no cofre do sistema. Nunca é mostrada nem gravada em ficheiros.</span>
+          <div class="group">
+            <div class="setting stacked">
+              <div class="field-label">
+                <span>Chave do OpenRouter <span id="key-status" class="pill"></span></span>
+                <span class="hint">Guardada no cofre do sistema. Nunca é mostrada nem gravada em ficheiros.</span>
+                <span id="key-info" class="hint"></span>
+              </div>
+              <form id="key-form" class="controls">
+                <input id="key-input" type="password" autocomplete="off" spellcheck="false"
+                       placeholder="sk-or-v1-…" aria-label="Nova chave do OpenRouter" />
+                <button type="submit">Guardar chave</button>
+                <button id="key-test" type="button" class="secondary">Testar</button>
+                <button id="key-delete" type="button" class="ghost danger">Apagar</button>
+              </form>
             </div>
-            <div class="row">
-              <span id="key-status" class="pill"></span>
-              <span id="key-info" class="muted"></span>
+
+            <div class="setting">
+              <div class="field-label">
+                <span>Formato de envio</span>
+                <span class="hint">Multipart envia o áudio em bruto; JSON usa base64 (~33% maior).</span>
+              </div>
+              <div class="segmented" role="radiogroup" aria-label="Formato de envio">
+                <label><input type="radio" name="transport" value="multipart" /><span>Multipart</span></label>
+                <label><input type="radio" name="transport" value="json" /><span>JSON</span></label>
+              </div>
             </div>
-            <form id="key-form" class="row">
-              <input id="key-input" type="password" autocomplete="off" spellcheck="false"
-                     placeholder="sk-or-v1-…" aria-label="Nova chave do OpenRouter" />
-              <button type="submit">Guardar chave</button>
-              <button id="key-test" type="button" class="ghost">Testar</button>
-              <button id="key-delete" type="button" class="ghost danger">Apagar</button>
-            </form>
           </div>
 
-          <div class="field">
-            <div class="field-label">
-              <span>Modelo de transcrição</span>
-              <span class="hint" id="stt-current"></span>
-            </div>
-            <div class="row">
-              <input id="stt-search" type="search" placeholder="Pesquisar modelos…" aria-label="Pesquisar modelos de transcrição" />
-              <button id="stt-refresh" type="button" class="ghost">Atualizar lista</button>
-            </div>
-            <p class="hint" id="stt-meta"></p>
-            <ul id="stt-models" class="model-list" role="listbox" aria-label="Modelos de transcrição"></ul>
-          </div>
-
-          <div class="field">
-            <div class="field-label">
-              <span>Formato de envio</span>
-              <span class="hint">Multipart envia o áudio em bruto; JSON usa base64 (~33% maior).</span>
-            </div>
-            <div class="row" role="radiogroup" aria-label="Formato de envio">
-              <label class="radio"><input type="radio" name="transport" value="multipart" /> Multipart</label>
-              <label class="radio"><input type="radio" name="transport" value="json" /> JSON (base64)</label>
+          <div class="group">
+            <div class="setting stacked">
+              <div class="field-label">
+                <span>Modelo de transcrição</span>
+                <span class="hint" id="stt-current"></span>
+              </div>
+              <div class="controls">
+                <input id="stt-search" type="search" placeholder="Pesquisar modelos…" aria-label="Pesquisar modelos de transcrição" />
+                <button id="stt-refresh" type="button" class="secondary">Atualizar lista</button>
+              </div>
+              <ul id="stt-models" class="model-list" role="listbox" aria-label="Modelos de transcrição"></ul>
+              <p class="hint" id="stt-meta"></p>
             </div>
           </div>
         </section>
 
         <section id="limpeza" class="panel">
-          <h1>Limpeza com IA</h1>
-          <p class="muted">
-            Depois da transcrição, um modelo de texto corrige a pontuação e remove hesitações ("ééé", "hmm").
-            Acrescenta uma ida à rede a cada ditado. Se falhar ou demorar mais de 6 s, é colado o texto original.
-          </p>
-          <div class="field">
-            <label class="switch">
-              <input id="cleanup-enabled" type="checkbox" />
+          <header class="panel-head">
+            <h2 class="panel-title">Limpeza com IA</h2>
+            <p class="muted">
+              Depois da transcrição, um modelo de texto corrige a pontuação e remove hesitações ("ééé", "hmm").
+              Acrescenta uma ida à rede a cada ditado. Se falhar ou demorar mais de 6 s, é colado o texto original.
+            </p>
+          </header>
+
+          <div class="group">
+            <label class="setting switch">
               <span class="field-label"><span>Ativar limpeza</span></span>
+              <input id="cleanup-enabled" type="checkbox" role="switch" />
             </label>
-          </div>
-          <div class="field">
-            <div class="field-label">
-              <span>Modelo de texto</span>
-              <span class="hint" id="cleanup-current"></span>
+            <div class="setting stacked">
+              <div class="field-label">
+                <span>Modelo de texto</span>
+                <span class="hint" id="cleanup-current"></span>
+              </div>
+              <div class="controls">
+                <input id="cleanup-search" type="search" placeholder="Pesquisar modelos…" aria-label="Pesquisar modelos de texto" />
+                <button id="cleanup-refresh" type="button" class="secondary">Atualizar lista</button>
+              </div>
+              <ul id="cleanup-models" class="model-list" role="listbox" aria-label="Modelos de texto"></ul>
+              <p class="hint" id="cleanup-meta"></p>
             </div>
-            <div class="row">
-              <input id="cleanup-search" type="search" placeholder="Pesquisar modelos…" aria-label="Pesquisar modelos de texto" />
-              <button id="cleanup-refresh" type="button" class="ghost">Atualizar lista</button>
-            </div>
-            <p class="hint" id="cleanup-meta"></p>
-            <ul id="cleanup-models" class="model-list" role="listbox" aria-label="Modelos de texto"></ul>
           </div>
         </section>
 
         <section id="historico" class="panel">
-          <h1>Histórico</h1>
-          <p class="muted">Guarda o texto dos últimos ditados apenas neste computador. Desligado por omissão.</p>
-          <div class="field">
-            <label class="switch">
-              <input id="history-enabled" type="checkbox" />
+          <header class="panel-head">
+            <h2 class="panel-title">Histórico</h2>
+            <p class="muted">Guarda o texto dos últimos ditados apenas neste computador. Desligado por omissão.</p>
+          </header>
+
+          <div class="group">
+            <label class="setting switch">
               <span class="field-label"><span>Guardar histórico</span></span>
+              <input id="history-enabled" type="checkbox" role="switch" />
             </label>
-          </div>
-          <div class="field">
-            <label class="field-label" for="history-limit"><span>Número de ditados a guardar</span></label>
-            <div class="row">
-              <input id="history-limit" type="number" min="1" max="1000" step="1" />
-              <button id="history-clear" type="button" class="ghost danger">Apagar histórico</button>
+            <div class="setting">
+              <label class="field-label" for="history-limit"><span>Número de ditados a guardar</span></label>
+              <div class="controls">
+                <input id="history-limit" type="number" min="1" max="1000" step="1" />
+                <button id="history-clear" type="button" class="ghost danger">Apagar histórico</button>
+              </div>
             </div>
           </div>
+
           <ol id="history-list" class="history"></ol>
-          <p id="history-empty" class="muted" hidden>Ainda não há ditados no histórico.</p>
+          <div id="history-empty" class="empty" hidden>
+            <img id="empty-mascot" alt="" width="88" height="80" />
+            <p class="muted">Ainda não há ditados no histórico.</p>
+          </div>
         </section>
 
         <section id="metricas" class="panel">
-          <h1>Métricas e custos</h1>
+          <header class="panel-head">
+            <h2 class="panel-title">Métricas e custos</h2>
+            <p class="muted">Percentis dos últimos 50 ditados bem-sucedidos. Custos em USD, tal como reportados pelo OpenRouter.</p>
+          </header>
+
           <div class="cards">
-            <div class="card"><span class="card-label">Custo este mês</span><span id="m-cost" class="card-value">—</span></div>
+            <div class="card accent"><span class="card-label">Custo este mês</span><span id="m-cost" class="card-value">—</span></div>
             <div class="card"><span class="card-label">Ditados este mês</span><span id="m-count" class="card-value">—</span></div>
             <div class="card"><span class="card-label">Soltar → colado (p50 / p90)</span><span id="m-total" class="card-value">—</span></div>
             <div class="card"><span class="card-label">Transcrição (p50 / p90)</span><span id="m-stt" class="card-value">—</span></div>
             <div class="card"><span class="card-label">Limpeza (p50 / p90)</span><span id="m-cleanup" class="card-value">—</span></div>
             <div class="card"><span class="card-label">RAM: app / janela</span><span id="m-memory" class="card-value">—</span></div>
           </div>
-          <p class="hint">Percentis dos últimos 50 ditados bem-sucedidos. Custos em USD, tal como reportados pelo OpenRouter.</p>
 
-          <h2>Últimos ditados</h2>
+          <h3>Últimos ditados</h3>
           <div class="table-wrap">
             <table>
               <thead>
@@ -212,7 +262,7 @@
             </table>
           </div>
 
-          <h2>Por mês</h2>
+          <h3>Por mês</h3>
           <div class="table-wrap">
             <table>
               <thead>
@@ -222,7 +272,7 @@
             </table>
           </div>
 
-          <p class="hint" id="paths"></p>
+          <p class="hint paths" id="paths"></p>
         </section>
       </main>
     </div>

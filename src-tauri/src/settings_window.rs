@@ -22,7 +22,9 @@ pub fn open(app: &AppHandle) {
     let built = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html".into()))
         .title("Ditok — Definições")
         .inner_size(820.0, 660.0)
-        .min_inner_size(640.0, 480.0)
+        // Tamanho fixo: o layout foi desenhado para 820×660.
+        .resizable(false)
+        .maximizable(false)
         .center()
         .additional_browser_args(crate::overlay::BROWSER_ARGS)
         .build();

@@ -1,7 +1,10 @@
 // Janela de definições do Ditok. Sem framework: cada secção lê o estado do backend
 // via `api` e grava cada alteração logo que acontece (sem botão "Guardar" global).
 
-import mascotUrl from "../design/mascot/parado.svg";
+import mascotUrl from "../design/mascot/parado.svg?inline";
+import listeningMascotUrl from "../design/mascot/a-ouvir.svg?inline";
+import thinkingMascotUrl from "../design/mascot/a-processar.svg?inline";
+import readyMascotUrl from "../design/mascot/pronto.svg?inline";
 import {
   api,
   errorText,
@@ -175,6 +178,9 @@ function renderKey() {
   status.className = `pill ${view.api_key_set ? "ok" : "warn"}`;
   $<HTMLButtonElement>("key-test").disabled = !view.api_key_set;
   $<HTMLButtonElement>("key-delete").disabled = !view.api_key_set;
+  // A barra lateral mostra se o ditado está pronto a usar.
+  $("status-dot").className = `dot ${view.api_key_set ? "ok" : "warn"}`;
+  $("status-text").textContent = view.api_key_set ? "Pronto a ditar" : "Falta a chave do OpenRouter";
 }
 
 function setupKey() {
@@ -365,6 +371,7 @@ async function renderMemory() {
 function renderConfig() {
   const c = view.config;
   $("shortcut-display").textContent = prettyShortcut(c.shortcut);
+  $("hero-shortcut").textContent = prettyShortcut(c.shortcut);
   $<HTMLSelectElement>("language").value = c.language ?? "";
   $<HTMLInputElement>("autostart").checked = view.autostart;
   $<HTMLInputElement>("save-last-recording").checked = c.save_last_recording;
@@ -417,6 +424,24 @@ function bindSimpleControls() {
   });
 }
 
+/** A mascote do cartão de boas-vindas passa pelas quatro poses, como num ditado. */
+function cycleHeroMascot() {
+  const img = $<HTMLImageElement>("hero-mascot");
+  const poses = [mascotUrl, listeningMascotUrl, thinkingMascotUrl, readyMascotUrl];
+  let i = 0;
+  img.src = poses[0];
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  window.setInterval(() => {
+    if (document.hidden) return; // janela minimizada: não vale a pena animar
+    img.classList.add("swap");
+    window.setTimeout(() => {
+      i = (i + 1) % poses.length;
+      img.src = poses[i];
+      img.classList.remove("swap");
+    }, 180);
+  }, 2600);
+}
+
 /** Marca na navegação a secção visível. */
 function setupNav() {
   const links = [...document.querySelectorAll<HTMLAnchorElement>(".nav-link")];
@@ -434,6 +459,8 @@ function setupNav() {
 
 async function main() {
   $<HTMLImageElement>("mascot").src = mascotUrl;
+  $<HTMLImageElement>("empty-mascot").src = mascotUrl;
+  cycleHeroMascot();
   try {
     view = await api.getSettings();
   } catch (e) {
