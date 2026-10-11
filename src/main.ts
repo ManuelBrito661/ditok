@@ -49,8 +49,13 @@ async function save(patch: Partial<Config>): Promise<boolean> {
   }
 }
 
-const usd = (v: number | null | undefined, digits = 4) =>
-  v == null ? "—" : v === 0 ? "$0" : v < 0.0001 ? `$${v.toExponential(2)}` : `$${v.toFixed(digits)}`;
+/** Valores pequenos em decimal com 2 algarismos significativos ($0.000087), nunca em notação científica. */
+const usd = (v: number | null | undefined, digits = 4) => {
+  if (v == null) return "—";
+  if (v === 0) return "$0";
+  if (Math.abs(v) >= 0.01) return `$${v.toFixed(Math.min(digits, 2))}`;
+  return `$${v.toLocaleString("en-US", { maximumSignificantDigits: 2, maximumFractionDigits: 12 })}`;
+};
 const ms = (v: number | null | undefined) => (v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v} ms`);
 
 function ago(iso: string): string {
