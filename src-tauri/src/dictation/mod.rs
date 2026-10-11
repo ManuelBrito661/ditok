@@ -3,18 +3,22 @@
 //!
 //! Porquê assim (padrão "actor"): como só esta tarefa toca no estado, não precisamos
 //! de `Mutex` nem de nos preocupar com duas threads a mudá-lo ao mesmo tempo. Quem
-//! quer influenciar o ditado (atalho, temporizadores, mais tarde o áudio e a rede)
+//! quer influenciar o ditado (atalho, áudio, temporizadores, mais tarde a rede)
 //! envia uma mensagem. O `rx.recv().await` adormece a tarefa até chegar uma
 //! mensagem: não há polling.
 
 pub mod machine;
 
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use tauri::AppHandle;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::{
+    audio::{Recorder, Recording},
     hotkey,
     tray::{Tray, TrayState},
 };
@@ -22,44 +26,78 @@ use machine::{Action, Input, Machine, Phase};
 
 /// Quanto tempo o ícone "pronto" fica visível depois de colar.
 const DONE_ICON_FOR: Duration = Duration::from_millis(1200);
+/// Gravações mais curtas do que isto são quase de certeza toques acidentais.
+const MIN_AUDIO: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 pub enum DictationEvent {
-    Hotkey { pressed: bool, at: Instant },
+    Hotkey {
+        pressed: bool,
+        at: Instant,
+    },
     Cancel,
-    ProcessingFinished,
+    /// O microfone não abriu ou desligou-se a meio.
+    AudioFailed(String),
+    ProcessingFinished {
+        ok: bool,
+    },
     DoneIconElapsed,
 }
 
+/// O que o orquestrador precisa do resto da app. Agrupar num struct evita funções
+/// com muitos argumentos e deixa claro o que pertence à tarefa.
+pub struct Deps {
+    pub app: AppHandle,
+    pub tray: Tray,
+    pub recorder: Recorder,
+    /// Onde guardar `last.wav` para inspeção.
+    pub debug_dir: PathBuf,
+}
+
 pub fn spawn(
-    app: AppHandle,
-    tray: Tray,
+    deps: Deps,
     tx: UnboundedSender<DictationEvent>,
     rx: UnboundedReceiver<DictationEvent>,
 ) {
-    // `tray` e `rx` são movidos para dentro da tarefa: a partir daqui pertencem-lhe.
-    tauri::async_runtime::spawn(run(app, tray, tx, rx));
+    // `deps` e `rx` são movidos para dentro da tarefa: a partir daqui pertencem-lhe.
+    tauri::async_runtime::spawn(run(deps, tx, rx));
 }
 
 async fn run(
-    app: AppHandle,
-    mut tray: Tray,
+    mut deps: Deps,
     tx: UnboundedSender<DictationEvent>,
     mut rx: UnboundedReceiver<DictationEvent>,
 ) {
     let mut machine = Machine::default();
-    let mut recording_since: Option<Instant> = None;
 
     while let Some(event) = rx.recv().await {
         let (input, at) = match event {
             DictationEvent::Hotkey { pressed: true, at } => (Input::Pressed, at),
             DictationEvent::Hotkey { pressed: false, at } => (Input::Released, at),
             DictationEvent::Cancel => (Input::Cancel, Instant::now()),
-            DictationEvent::ProcessingFinished => (Input::ProcessingFinished, Instant::now()),
+            DictationEvent::AudioFailed(reason) => {
+                tracing::error!(%reason, "falha de áudio");
+                // Para a máquina é igual a cancelar; depois mostramos o motivo.
+                if machine.handle(Input::Cancel, Instant::now()).is_some() {
+                    hotkey::set_cancel_enabled(&deps.app, false);
+                    deps.recorder.cancel();
+                }
+                deps.tray.set(TrayState::Idle);
+                deps.tray.set_tooltip(&format!("Ditok: {reason}"));
+                continue;
+            }
+            DictationEvent::ProcessingFinished { ok } => {
+                let before = machine.phase();
+                machine.handle(Input::ProcessingFinished, Instant::now());
+                if before == Phase::Processing {
+                    finish_processing(&mut deps.tray, &tx, ok);
+                }
+                continue;
+            }
             DictationEvent::DoneIconElapsed => {
                 // Só volta a "parado" se entretanto não começou outro ditado.
-                if tray.state() == TrayState::Done {
-                    tray.set(TrayState::Idle);
+                if deps.tray.state() == TrayState::Done {
+                    deps.tray.set(TrayState::Idle);
                 }
                 continue;
             }
@@ -68,45 +106,43 @@ async fn run(
         let before = machine.phase();
         match machine.handle(input, at) {
             Some(Action::StartRecording) => {
-                recording_since = Some(at);
-                tray.set(TrayState::Recording);
-                hotkey::set_cancel_enabled(&app, true);
+                // Primeiro o microfone (é o que tem latência), depois o resto.
+                deps.recorder.start(at);
+                deps.tray.set(TrayState::Recording);
+                hotkey::set_cancel_enabled(&deps.app, true);
                 tracing::info!("a gravar");
             }
             Some(Action::StopAndProcess) => {
-                hotkey::set_cancel_enabled(&app, false);
-                let held = recording_since
-                    .take()
-                    .map(|t| at.saturating_duration_since(t));
-                tray.set(TrayState::Processing);
-                tracing::info!(
-                    duration_ms = held.map(|d| d.as_millis()),
-                    "gravação terminada"
-                );
+                // `stop()` envia já o pedido à thread de áudio; o future que devolve
+                // só entrega a gravação quando estiver pronta.
+                let recording = deps.recorder.stop();
+                hotkey::set_cancel_enabled(&deps.app, false);
+                deps.tray.set(TrayState::Processing);
 
-                // Fase 1: simula a transcrição. Na fase 3 é aqui que entram o áudio,
-                // o pedido STT e a colagem, numa tarefa à parte que no fim envia
-                // `ProcessingFinished` pelo mesmo canal.
+                // O processamento corre numa tarefa à parte para o orquestrador
+                // continuar a responder (ex.: ignorar premires enquanto processa).
                 let tx = tx.clone();
+                let debug_dir = deps.debug_dir.clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(400)).await;
-                    let _ = tx.send(DictationEvent::ProcessingFinished);
+                    let ok = match recording.await {
+                        Ok(rec) => {
+                            log_recording(&rec, at);
+                            save_debug_wav(debug_dir, &rec).await;
+                            true
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "gravação falhou");
+                            false
+                        }
+                    };
+                    let _ = tx.send(DictationEvent::ProcessingFinished { ok });
                 });
             }
             Some(Action::CancelRecording) => {
-                hotkey::set_cancel_enabled(&app, false);
-                recording_since = None;
-                tray.set(TrayState::Idle);
+                deps.recorder.cancel();
+                hotkey::set_cancel_enabled(&deps.app, false);
+                deps.tray.set(TrayState::Idle);
                 tracing::info!("gravação cancelada");
-            }
-            None if before == Phase::Processing && machine.phase() == Phase::Idle => {
-                tray.set(TrayState::Done);
-                tracing::info!("ditado concluído");
-                let tx = tx.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(DONE_ICON_FOR).await;
-                    let _ = tx.send(DictationEvent::DoneIconElapsed);
-                });
             }
             None if machine.phase() == Phase::Latched && before != Phase::Latched => {
                 tracing::info!("modo alternar: prime o atalho outra vez para terminar");
@@ -115,4 +151,65 @@ async fn run(
         }
     }
     tracing::debug!("orquestrador terminado");
+}
+
+fn finish_processing(tray: &mut Tray, tx: &UnboundedSender<DictationEvent>, ok: bool) {
+    if !ok {
+        tray.set(TrayState::Idle);
+        return;
+    }
+    tray.set(TrayState::Done);
+    tracing::info!("ditado concluído");
+    let tx = tx.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(DONE_ICON_FOR).await;
+        let _ = tx.send(DictationEvent::DoneIconElapsed);
+    });
+}
+
+fn log_recording(rec: &Recording, released_at: Instant) {
+    let ms = |d: Duration| d.as_millis() as u64;
+    tracing::info!(
+        audio_ms = ms(rec.audio),
+        device = %rec.device,
+        device_rate = rec.device_rate,
+        device_channels = rec.device_channels,
+        mic_start_ms = rec.mic_start.map(ms),
+        finalize_ms = ms(rec.finalize),
+        release_to_wav_ms = ms(released_at.elapsed()),
+        wav_kb = rec.wav.len() / 1024,
+        dropped = rec.dropped_samples,
+        "gravação pronta"
+    );
+    if rec.audio < MIN_AUDIO {
+        tracing::warn!(
+            audio_ms = ms(rec.audio),
+            "gravação demasiado curta (na fase 3 não será enviada)"
+        );
+    }
+    if rec.dropped_samples > 0 {
+        tracing::warn!(
+            dropped = rec.dropped_samples,
+            "perderam-se amostras de áudio"
+        );
+    }
+}
+
+/// Escrever no disco bloqueia, por isso vai para o pool de threads de bloqueio em
+/// vez de ocupar uma thread do runtime assíncrono.
+async fn save_debug_wav(dir: PathBuf, rec: &Recording) {
+    // Clonar `Bytes` só incrementa um contador de referências; os dados não são copiados.
+    let wav = rec.wav.clone();
+    let path = dir.join("last.wav");
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(&path, &wav)?;
+        Ok::<_, std::io::Error>(path)
+    })
+    .await;
+    match result {
+        Ok(Ok(path)) => tracing::debug!(path = %path.display(), "WAV de teste guardado"),
+        Ok(Err(e)) => tracing::warn!(error = %e, "não foi possível guardar o WAV de teste"),
+        Err(e) => tracing::warn!(error = %e, "tarefa de gravação do WAV falhou"),
+    }
 }

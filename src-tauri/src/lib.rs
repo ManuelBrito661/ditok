@@ -1,3 +1,4 @@
+mod audio;
 mod dictation;
 mod hotkey;
 mod logging;
@@ -33,7 +34,14 @@ pub fn run() {
                 tracing::error!(error = %e, "sem atalho de ditado");
                 tray.set_tooltip("Ditok: atalho indisponível (ver log)");
             }
-            dictation::spawn(app.handle().clone(), tray, tx, rx);
+            let recorder = audio::Recorder::spawn(tx.clone())?;
+            let deps = dictation::Deps {
+                app: app.handle().clone(),
+                tray,
+                recorder,
+                debug_dir: app.path().app_data_dir()?.join("debug"),
+            };
+            dictation::spawn(deps, tx, rx);
 
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "pronto");
             Ok(())
