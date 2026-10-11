@@ -27,7 +27,18 @@ const MIN_AUDIO: Duration = Duration::from_millis(250);
 /// guardar as métricas de um ditado, para atualizar o ecrã sem polling.
 pub const EVENT_DICTATION_RECORDED: &str = "dictation-recorded";
 
-/// Processa um ditado do princípio ao fim. Devolve `true` se colou texto.
+/// Como acabou um ditado; decide o que a barra e o tray mostram a seguir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Texto colado na app em foco.
+    Pasted,
+    /// Nada para colar: toque acidental ou silêncio. Não é um erro.
+    Nothing,
+    /// A gravação, a transcrição ou a colagem falharam (há uma notificação).
+    Failed,
+}
+
+/// Processa um ditado do princípio ao fim.
 ///
 /// Recebe `Arc`s por valor: a função é dona de uma referência a cada um e pode
 /// passá-la às tarefas de fundo que continuam depois de ela terminar.
@@ -36,7 +47,7 @@ pub async fn process(
     openrouter: Arc<OpenRouter>,
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
-) -> bool {
+) -> Outcome {
     // Uma "fotografia" da configuração: o ditado usa-a do princípio ao fim.
     let config = state.config();
 
@@ -45,7 +56,7 @@ pub async fn process(
         Err(e) => {
             tracing::error!(error = %e, "gravação falhou");
             state.notify(&e.to_string());
-            return false;
+            return Outcome::Failed;
         }
     };
     let release_to_wav = released_at.elapsed();
@@ -55,7 +66,7 @@ pub async fn process(
             audio_ms = ms(rec.audio),
             "gravação demasiado curta; ignorada"
         );
-        return false;
+        return Outcome::Nothing;
     }
 
     // O pipeline fala com o STT através do trait; o tipo concreto só é preciso
@@ -86,12 +97,12 @@ pub async fn process(
     };
     let mut history_entry = None;
 
-    let pasted = match stt.transcribe(rec.wav.clone(), &req).await {
+    let outcome = match stt.transcribe(rec.wav.clone(), &req).await {
         Err(e) => {
             tracing::error!(error = %e, model = %config.stt_model, "transcrição falhou");
             state.notify(&format!("Transcrição falhou: {e}"));
             m.error = Some(e.to_string());
-            false
+            Outcome::Failed
         }
         Ok(t) => {
             m.stt_ms = Some(ms(t.elapsed));
@@ -102,7 +113,7 @@ pub async fn process(
 
             if raw.is_empty() {
                 tracing::info!("nenhuma fala detetada; nada para colar");
-                false
+                Outcome::Nothing
             } else {
                 let text = if config.cleanup_enabled {
                     match cleanup::clean(&openrouter, &config.cleanup_model, &raw).await {
@@ -121,8 +132,8 @@ pub async fn process(
                     raw.clone()
                 };
                 m.chars = text.chars().count();
-                let ok = paste_text(&state, text.clone(), released_at, &mut m).await;
-                if ok && config.history_enabled {
+                let outcome = paste_text(&state, text.clone(), released_at, &mut m).await;
+                if outcome == Outcome::Pasted && config.history_enabled {
                     history_entry = Some(HistoryEntry {
                         at: m.at,
                         raw_text: (text != raw).then_some(raw),
@@ -132,7 +143,7 @@ pub async fn process(
                         total_ms: m.total_ms,
                     });
                 }
-                ok
+                outcome
             }
         }
     };
@@ -168,7 +179,7 @@ pub async fn process(
         // Sem janela aberta não há ninguém a ouvir, e o `emit` não custa nada.
         let _ = state.app.emit(EVENT_DICTATION_RECORDED, ());
     });
-    pasted
+    outcome
 }
 
 async fn paste_text(
@@ -176,7 +187,7 @@ async fn paste_text(
     text: String,
     released_at: Instant,
     m: &mut DictationMetrics,
-) -> bool {
+) -> Outcome {
     // `move` passa a posse do `text` para a thread de bloqueio.
     match tauri::async_runtime::spawn_blocking(move || paste::paste(&text)).await {
         Ok(Ok((took, restore))) => {
@@ -186,18 +197,18 @@ async fn paste_text(
                 std::thread::sleep(paste::RESTORE_AFTER);
                 restore.run();
             });
-            true
+            Outcome::Pasted
         }
         Ok(Err(e)) => {
             tracing::error!(error = %e, "colagem falhou");
             state.notify(&e.to_string());
             m.error = Some(e.to_string());
-            false
+            Outcome::Failed
         }
         Err(e) => {
             tracing::error!(error = %e, "tarefa de colagem falhou");
             m.error = Some(e.to_string());
-            false
+            Outcome::Failed
         }
     }
 }

@@ -24,6 +24,7 @@ pub fn open(app: &AppHandle) {
         .inner_size(820.0, 660.0)
         .min_inner_size(640.0, 480.0)
         .center()
+        .additional_browser_args(crate::overlay::BROWSER_ARGS)
         .build();
 
     match built {

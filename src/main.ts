@@ -368,6 +368,7 @@ function renderConfig() {
   $<HTMLSelectElement>("language").value = c.language ?? "";
   $<HTMLInputElement>("autostart").checked = view.autostart;
   $<HTMLInputElement>("save-last-recording").checked = c.save_last_recording;
+  $<HTMLInputElement>("show-overlay").checked = c.show_overlay;
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) r.checked = r.value === c.transport;
   $<HTMLInputElement>("cleanup-enabled").checked = c.cleanup_enabled;
   $<HTMLInputElement>("history-enabled").checked = c.history_enabled;
@@ -381,6 +382,8 @@ function bindSimpleControls() {
     save({ language: (e.target as HTMLSelectElement).value || null }));
   $<HTMLInputElement>("save-last-recording").addEventListener("change", (e) =>
     save({ save_last_recording: (e.target as HTMLInputElement).checked }));
+  $<HTMLInputElement>("show-overlay").addEventListener("change", (e) =>
+    save({ show_overlay: (e.target as HTMLInputElement).checked }));
   $<HTMLInputElement>("cleanup-enabled").addEventListener("change", (e) =>
     save({ cleanup_enabled: (e.target as HTMLInputElement).checked }));
   $<HTMLInputElement>("history-enabled").addEventListener("change", (e) =>

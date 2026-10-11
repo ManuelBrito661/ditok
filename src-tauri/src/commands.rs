@@ -19,7 +19,7 @@ use crate::{
     history::HistoryEntry,
     hotkey,
     metrics::Stats,
-    secrets,
+    overlay, secrets,
     state::AppState,
     stt::{
         SttError,
@@ -104,6 +104,8 @@ pub async fn save_settings(
         hotkey::change_dictation(&app, &current.shortcut, &config.shortcut)?;
     }
     let transport_changed = config.transport != current.transport;
+    let overlay_changed = config.show_overlay != current.show_overlay;
+    let show_overlay = config.show_overlay;
     let new_shortcut = config.shortcut.clone();
     let state_ = Arc::clone(&state);
     let saved = blocking(move || state_.replace_config(config)).await?;
@@ -115,6 +117,13 @@ pub async fn save_settings(
     }
     if transport_changed {
         let _ = state.events.send(DictationEvent::ProviderChanged);
+    }
+    if overlay_changed {
+        if show_overlay {
+            overlay::create(&app);
+        } else {
+            overlay::destroy(&app);
+        }
     }
     tracing::info!("definições guardadas");
     settings_view(&app, &state).await

@@ -41,6 +41,18 @@ pub fn downmix<T: Copy>(
     }
 }
 
+/// Nível de áudio entre 0 e 1 para o indicador visual: RMS em dBFS, mapeado de
+/// -60 dB (silêncio, 0.0) a 0 dB (máximo, 1.0). A escala logarítmica acompanha a
+/// forma como ouvimos: com uma escala linear, a fala normal mal mexia as barras.
+pub fn level(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mean_square = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+    let db = 10.0 * mean_square.max(1e-10).log10(); // 10·log10(x²) = 20·log10(x)
+    ((db + 60.0) / 60.0).clamp(0.0, 1.0)
+}
+
 /// Converte gravações completas para 16 kHz. Criar um resampler FFT é caro (planeia
 /// as FFT), por isso guardamos o último e só o recriamos se a taxa de entrada mudar
 /// (por exemplo, se trocares de microfone).
@@ -129,6 +141,20 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!((out[0] - 0.99997).abs() < 1e-4);
         assert_eq!(out[1], 0.0);
+    }
+
+    #[test]
+    fn level_maps_dbfs_to_unit_range() {
+        assert_eq!(level(&[]), 0.0);
+        assert_eq!(level(&[0.0; 100]), 0.0, "silêncio");
+        assert!(
+            (level(&[1.0, -1.0, 1.0, -1.0]) - 1.0).abs() < 1e-6,
+            "escala cheia = 0 dBFS"
+        );
+        // 0.1 de amplitude = -20 dBFS → 40/60.
+        assert!((level(&[0.1, -0.1, 0.1, -0.1]) - 40.0 / 60.0).abs() < 1e-4);
+        // -70 dBFS fica abaixo do mínimo.
+        assert_eq!(level(&[0.0003; 10]), 0.0);
     }
 
     #[test]

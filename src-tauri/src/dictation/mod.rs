@@ -25,8 +25,9 @@ use crate::{
     tray::{Tray, TrayState},
 };
 use machine::{Action, Input, Machine, Phase};
+use pipeline::Outcome;
 
-/// Quanto tempo o ícone "pronto" fica visível depois de colar.
+/// Quanto tempo o estado "pronto" (ou "falhou") fica visível.
 const DONE_ICON_FOR: Duration = Duration::from_millis(1200);
 
 #[derive(Debug)]
@@ -38,9 +39,7 @@ pub enum DictationEvent {
     Cancel,
     /// O microfone não abriu ou desligou-se a meio.
     AudioFailed(String),
-    ProcessingFinished {
-        ok: bool,
-    },
+    ProcessingFinished(Outcome),
     DoneIconElapsed,
     /// A chave ou o modo de envio mudaram nas definições: o cliente do OpenRouter
     /// tem de ser recriado no próximo ditado.
@@ -97,17 +96,17 @@ async fn run(
                 openrouter = None;
                 continue;
             }
-            DictationEvent::ProcessingFinished { ok } => {
+            DictationEvent::ProcessingFinished(outcome) => {
                 let before = machine.phase();
                 machine.handle(Input::ProcessingFinished, Instant::now());
                 if before == Phase::Processing {
-                    finish_processing(&mut deps.tray, &tx, ok);
+                    finish_processing(&mut deps.tray, &tx, outcome);
                 }
                 continue;
             }
             DictationEvent::DoneIconElapsed => {
                 // Só volta a "parado" se entretanto não começou outro ditado.
-                if deps.tray.state() == TrayState::Done {
+                if matches!(deps.tray.state(), TrayState::Done | TrayState::Failed) {
                     deps.tray.set(TrayState::Idle);
                 }
                 continue;
@@ -129,6 +128,8 @@ async fn run(
                 // Primeiro o microfone (é o que tem latência), depois a ligação HTTP
                 // (corre enquanto falas), depois o resto.
                 deps.recorder.start(at);
+                // A barra segue o monitor onde está o cursor (como no Wispr Flow).
+                crate::overlay::reposition_for(&app);
                 let provider = Arc::clone(provider);
                 tauri::async_runtime::spawn(async move { provider.prewarm().await });
                 deps.tray.set(TrayState::Recording);
@@ -146,7 +147,7 @@ async fn run(
                     // Só acontece se a chave mudou a meio da gravação; o compilador
                     // obriga-nos a decidir o que fazer.
                     deps.recorder.cancel();
-                    let _ = tx.send(DictationEvent::ProcessingFinished { ok: false });
+                    let _ = tx.send(DictationEvent::ProcessingFinished(Outcome::Failed));
                     continue;
                 };
                 // O processamento corre numa tarefa à parte para o orquestrador
@@ -154,8 +155,8 @@ async fn run(
                 let state = Arc::clone(&deps.state);
                 let tx = tx.clone();
                 tauri::async_runtime::spawn(async move {
-                    let ok = pipeline::process(state, provider, recording, at).await;
-                    let _ = tx.send(DictationEvent::ProcessingFinished { ok });
+                    let outcome = pipeline::process(state, provider, recording, at).await;
+                    let _ = tx.send(DictationEvent::ProcessingFinished(outcome));
                 });
             }
             Some(Action::CancelRecording) => {
@@ -190,12 +191,17 @@ fn load_openrouter(state: &AppState) -> Option<Arc<OpenRouter>> {
     }
 }
 
-fn finish_processing(tray: &mut Tray, tx: &UnboundedSender<DictationEvent>, ok: bool) {
-    if !ok {
-        tray.set(TrayState::Idle);
-        return;
-    }
-    tray.set(TrayState::Done);
+fn finish_processing(tray: &mut Tray, tx: &UnboundedSender<DictationEvent>, outcome: Outcome) {
+    let shown = match outcome {
+        Outcome::Pasted => TrayState::Done,
+        Outcome::Failed => TrayState::Failed,
+        Outcome::Nothing => {
+            tray.set(TrayState::Idle);
+            return;
+        }
+    };
+    // "Pronto" ou "falhou" ficam visíveis um instante e depois voltam a "parado".
+    tray.set(shown);
     let tx = tx.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(DONE_ICON_FOR).await;

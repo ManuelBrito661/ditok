@@ -105,13 +105,22 @@ pub struct Recorder {
     tx: mpsc::Sender<Command>,
 }
 
+/// Recebe o nível de áudio (0–1) a cada esvaziamento do ring buffer (~20 vezes por
+/// segundo) enquanto se grava. `Box<dyn Fn>`: o módulo de áudio não precisa de
+/// saber quem está a ouvir (a barra no ecrã); só que é uma função que pode ir para
+/// outra thread (`Send`).
+pub type LevelSink = Box<dyn Fn(f32) + Send>;
+
 impl Recorder {
     /// Lança a thread de áudio. O microfone só é aberto no `start`, não aqui.
-    pub fn spawn(events: UnboundedSender<DictationEvent>) -> std::io::Result<Self> {
+    pub fn spawn(
+        events: UnboundedSender<DictationEvent>,
+        level: LevelSink,
+    ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         thread::Builder::new()
             .name("ditok-audio".into())
-            .spawn(move || audio_thread(rx, events))?;
+            .spawn(move || audio_thread(rx, events, level))?;
         Ok(Self { tx })
     }
 
@@ -137,7 +146,11 @@ impl Recorder {
     }
 }
 
-fn audio_thread(rx: mpsc::Receiver<Command>, events: UnboundedSender<DictationEvent>) {
+fn audio_thread(
+    rx: mpsc::Receiver<Command>,
+    events: UnboundedSender<DictationEvent>,
+    level: LevelSink,
+) {
     let mut session: Option<Session> = None;
     let mut to16k = To16k::default();
 
@@ -153,7 +166,9 @@ fn audio_thread(rx: mpsc::Receiver<Command>, events: UnboundedSender<DictationEv
             Some(s) => match rx.recv_timeout(DRAIN_EVERY) {
                 Ok(cmd) => cmd,
                 Err(RecvTimeoutError::Timeout) => {
-                    s.drain();
+                    let new_from = s.drain();
+                    // Só as amostras que acabaram de chegar: o nível "de agora".
+                    level(resample::level(&s.samples[new_from..]));
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -265,10 +280,12 @@ impl Session {
 
     /// Move o que estiver no ring buffer para `samples`. O ring buffer é circular,
     /// por isso os dados podem vir em duas fatias (fim e início do buffer).
-    fn drain(&mut self) {
+    /// Devolve o índice onde começam as amostras novas.
+    fn drain(&mut self) -> usize {
+        let start = self.samples.len();
         let n = self.consumer.slots();
         if n == 0 {
-            return;
+            return start;
         }
         if let Ok(chunk) = self.consumer.read_chunk(n) {
             let (a, b) = chunk.as_slices();
@@ -276,6 +293,7 @@ impl Session {
             self.samples.extend_from_slice(b);
             chunk.commit_all();
         }
+        start
     }
 
     /// Consome a sessão (`self` por valor): depois de terminar já não pode ser usada,

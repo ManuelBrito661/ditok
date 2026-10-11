@@ -18,6 +18,7 @@ export interface Config {
   history_enabled: boolean;
   history_limit: number;
   save_last_recording: boolean;
+  show_overlay: boolean;
 }
 
 export interface SettingsView {

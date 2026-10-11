@@ -1,6 +1,9 @@
 //! Ícone e menu da bandeja do sistema. O ícone reflete o estado do ditado com as
-//! poses da mascote (ver design/mascot e scripts/gen-icons.mjs).
+//! poses da mascote (ver design/mascot e scripts/gen-icons.mjs). Cada mudança de
+//! estado também é enviada à barra flutuante (`overlay.rs`), para os dois nunca
+//! mostrarem coisas diferentes.
 
+use serde::Serialize;
 use tauri::{
     AppHandle, Wry,
     image::Image,
@@ -11,12 +14,16 @@ use tauri::{
 const MENU_OPEN_SETTINGS: &str = "open_settings";
 const MENU_QUIT: &str = "quit";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serializado em minúsculas ("recording", …) porque é o que a barra recebe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TrayState {
     Idle,
     Recording,
     Processing,
     Done,
+    /// A transcrição ou a colagem falhou (a notificação explica porquê).
+    Failed,
 }
 
 impl TrayState {
@@ -26,6 +33,7 @@ impl TrayState {
             Self::Recording => "Ditok: a ouvir…",
             Self::Processing => "Ditok: a transcrever…",
             Self::Done => "Ditok: texto colado",
+            Self::Failed => "Ditok: o último ditado falhou",
         }
     }
 }
@@ -33,6 +41,7 @@ impl TrayState {
 /// Os PNG são embutidos no binário com `include_bytes!` (sem ler do disco no
 /// arranque) e descodificados uma única vez; trocar de estado só troca o ícone.
 pub struct Tray {
+    app: AppHandle,
     icon: TrayIcon,
     idle: Image<'static>,
     recording: Image<'static>,
@@ -76,6 +85,7 @@ impl Tray {
             .build(app)?;
 
         Ok(Self {
+            app: app.clone(),
             icon,
             idle,
             recording,
@@ -96,7 +106,7 @@ impl Tray {
             return;
         }
         let image = match state {
-            TrayState::Idle => &self.idle,
+            TrayState::Idle | TrayState::Failed => &self.idle,
             TrayState::Recording => &self.recording,
             TrayState::Processing => &self.processing,
             TrayState::Done => &self.done,
@@ -110,6 +120,7 @@ impl Tray {
             tracing::warn!(error = %e, "não foi possível mudar a tooltip do tray");
         }
         self.state = state;
+        crate::overlay::emit_state(&self.app, state);
     }
 
     pub fn set_tooltip(&self, text: &str) {

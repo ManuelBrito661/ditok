@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pt">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/overlay.css" />
+    <title>Ditok</title>
+    <script type="module" src="/src/overlay.ts" defer></script>
+  </head>
+  <body>
+    <!-- data-state: idle | recording | processing | done | failed (vem do backend) -->
+    <div id="pill" data-state="idle" role="status" aria-live="polite">
+      <img id="mascot" alt="" />
+      <div id="bars" aria-hidden="true"></div>
+      <div id="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+      <span id="label"></span>
+    </div>
+  </body>
+</html>

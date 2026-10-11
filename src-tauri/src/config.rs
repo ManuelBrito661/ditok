@@ -37,6 +37,8 @@ pub struct Config {
     pub history_limit: usize,
     /// Guarda a última gravação em `debug/last.wav`.
     pub save_last_recording: bool,
+    /// Barra flutuante com a mascote. Desligá-la liberta a RAM do WebView dela.
+    pub show_overlay: bool,
 }
 
 impl Default for Config {
@@ -51,6 +53,7 @@ impl Default for Config {
             history_enabled: false,
             history_limit: 50,
             save_last_recording: false,
+            show_overlay: true,
         }
     }
 }
@@ -163,18 +166,12 @@ mod tests {
             stt_model: "chirp-3".into(),
             ..Config::default()
         };
-        assert!(matches!(
-            bad_model.validate(),
-            Err(ConfigError::Model)
-        ));
+        assert!(matches!(bad_model.validate(), Err(ConfigError::Model)));
         let bad_lang = Config {
             language: Some("PT-pt".into()),
             ..Config::default()
         };
-        assert!(matches!(
-            bad_lang.validate(),
-            Err(ConfigError::Language)
-        ));
+        assert!(matches!(bad_lang.validate(), Err(ConfigError::Language)));
         let auto_lang = Config {
             language: None,
             ..Config::default()

@@ -7,6 +7,7 @@ mod history;
 mod hotkey;
 mod logging;
 mod metrics;
+mod overlay;
 mod paste;
 pub mod secrets;
 mod settings_window;
@@ -74,7 +75,17 @@ pub fn run() {
             ));
             // Os comandos da janela recebem o mesmo `Arc` via `State<Arc<AppState>>`.
             app.manage(Arc::clone(&state));
-            let recorder = audio::Recorder::spawn(tx.clone())?;
+            if state.config().show_overlay {
+                // Criar um WebView demora ~300 ms. Fazemo-lo numa thread à parte,
+                // depois de o tray e o atalho estarem prontos: o arranque continua
+                // instantâneo e a barra aparece um instante depois.
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || overlay::create(&handle));
+            }
+            // O nível do microfone vai diretamente da thread de áudio para a barra.
+            let handle = app.handle().clone();
+            let level_sink: audio::LevelSink = Box::new(move |level| overlay::emit_level(&handle, level));
+            let recorder = audio::Recorder::spawn(tx.clone(), level_sink)?;
             dictation::spawn(dictation::Deps { tray, recorder, state }, tx, rx);
 
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "pronto");

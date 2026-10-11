@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Janela de definições (criada a pedido)",
+  "description": "Janelas de definições e barra flutuante",
   "windows": [
-    "settings"
+    "settings",
+    "overlay"
   ],
   "permissions": [
     "core:default"

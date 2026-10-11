@@ -245,7 +245,9 @@ pub async fn list_models(
     output_modality: &str,
 ) -> Result<Vec<ModelInfo>, SttError> {
     let response = client
-        .get(format!("{BASE_URL}/models?output_modalities={output_modality}"))
+        .get(format!(
+            "{BASE_URL}/models?output_modalities={output_modality}"
+        ))
         .send()
         .await?;
     let status = response.status();
