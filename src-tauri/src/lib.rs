@@ -46,13 +46,14 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(hotkey::plugin(tx.clone()))
         .setup(move |app| {
+            // macOS: app de barra de menus, sem ícone na Dock. Tem de vir antes de
+            // `app.path()`, que empresta `app` enquanto `paths` existir.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let paths = app.path();
             logging::init(&paths.app_log_dir()?)?;
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "Ditok a arrancar");
-
-            // macOS: app de barra de menus, sem ícone na Dock.
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let config_dir = paths.app_config_dir()?;
             let config = config::Config::load_or_create(&config_dir);
