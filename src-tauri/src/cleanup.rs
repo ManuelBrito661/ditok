@@ -34,6 +34,10 @@ struct ChatRequest<'a> {
     usage: UsageOpt,
     /// Escolhe o fornecedor com menor latência para este modelo.
     provider: ProviderPrefs,
+    /// Desliga o "pensar" dos modelos com raciocínio (Qwen3, DeepSeek R1…): senão
+    /// gastam o `max_tokens` a raciocinar e a resposta chega vazia. Modelos sem
+    /// raciocínio ignoram o campo.
+    reasoning: ReasoningOpt,
 }
 #[derive(Serialize)]
 struct Message<'a> {
@@ -43,6 +47,10 @@ struct Message<'a> {
 #[derive(Serialize)]
 struct UsageOpt {
     include: bool,
+}
+#[derive(Serialize)]
+struct ReasoningOpt {
+    enabled: bool,
 }
 #[derive(Serialize)]
 struct ProviderPrefs {
@@ -58,6 +66,9 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: ChoiceMessage,
+    /// "length" quando o modelo esgotou o `max_tokens` antes de terminar.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 #[derive(Deserialize)]
 struct ChoiceMessage {
@@ -89,6 +100,7 @@ pub async fn clean(openrouter: &OpenRouter, model: &str, text: &str) -> Result<C
         ],
         usage: UsageOpt { include: true },
         provider: ProviderPrefs { sort: "latency" },
+        reasoning: ReasoningOpt { enabled: false },
     };
     let response = openrouter
         .post("/chat/completions")
@@ -103,12 +115,18 @@ pub async fn clean(openrouter: &OpenRouter, model: &str, text: &str) -> Result<C
     }
     let parsed: ChatResponse =
         serde_json::from_slice(&bytes).map_err(|e| SttError::Decode(e.to_string()))?;
-    let cleaned = parsed
+    let choice = parsed
         .choices
         .into_iter()
         .next()
-        .and_then(|c| c.message.content)
-        .ok_or_else(|| SttError::Decode("resposta sem texto".into()))?;
+        .ok_or_else(|| SttError::Decode("resposta sem escolhas".into()))?;
+    let cleaned = choice.message.content.unwrap_or_default();
+    if cleaned.trim().is_empty() {
+        // Dizer porquê poupa uma tarde a adivinhar (foi assim que se descobriu o
+        // problema do raciocínio: finish_reason=length).
+        let reason = choice.finish_reason.as_deref().unwrap_or("?");
+        return Err(SttError::Decode(format!("resposta sem texto (finish_reason={reason})")));
+    }
     let cleaned = sanitize(&cleaned, text)?;
     Ok(Cleaned {
         text: cleaned,
@@ -162,6 +180,20 @@ mod tests {
         assert!(sanitize("Qual é a capital de França?", original).is_ok());
     }
 
+    /// Pedido real ao OpenRouter com a chave do cofre (custa uma fração de cêntimo).
+    /// `cargo test live_cleanup -- --ignored --nocapture`; modelo em DITOK_CLEANUP_MODEL.
+    #[tokio::test]
+    #[ignore]
+    async fn live_cleanup() {
+        let key = crate::secrets::get().unwrap().expect("sem chave no cofre");
+        let model = std::env::var("DITOK_CLEANUP_MODEL").unwrap_or("qwen/qwen3.6-flash".into());
+        let client = crate::stt::http_client().unwrap();
+        let or = OpenRouter::new(client, key, crate::stt::openrouter::Transport::Multipart);
+        let raw = "ééé olá tudo bem hmm hoje vou vou testar a limpeza do ditok";
+        let c = clean(&or, &model, raw).await.unwrap();
+        println!("{model}: {:?} ({} ms, custo {:?})", c.text, c.elapsed.as_millis(), c.cost);
+    }
+
     #[test]
     fn request_has_expected_shape() {
         let body = ChatRequest {
@@ -180,8 +212,10 @@ mod tests {
             ],
             usage: UsageOpt { include: true },
             provider: ProviderPrefs { sort: "latency" },
+            reasoning: ReasoningOpt { enabled: false },
         };
         let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["reasoning"]["enabled"], false);
         assert_eq!(v["usage"]["include"], true);
         assert_eq!(v["provider"]["sort"], "latency");
         assert_eq!(v["messages"][1]["role"], "user");
