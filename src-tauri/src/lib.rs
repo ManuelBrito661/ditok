@@ -46,11 +46,6 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(hotkey::plugin(tx.clone()))
         .setup(move |app| {
-            // macOS: app de barra de menus, sem ícone na Dock. Tem de vir antes de
-            // `app.path()`, que empresta `app` enquanto `paths` existir.
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
             let paths = app.path();
             logging::init(&paths.app_log_dir()?)?;
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "Ditok a arrancar");
@@ -127,16 +122,23 @@ pub fn run() {
         }
     };
 
-    app.run(|_app, event| match event {
-        // Sem janelas, o Tauri pede para sair quando a última janela fecha. Só
-        // deixamos sair quando há código de saída, i.e. via `app.exit(0)` no "Sair".
-        RunEvent::ExitRequested {
-            api, code: None, ..
-        } => api.prevent_exit(),
-        RunEvent::Exit => {
-            tracing::info!("a sair");
-            logging::shutdown();
-        }
-        _ => {}
-    });
+    app.run(
+        |#[cfg_attr(not(target_os = "macos"), allow(unused_variables))] app, event| match event {
+            // macOS: clicar no ícone da Dock (ou abrir a app no Finder) com ela já a
+            // correr. A barra flutuante conta como janela visível, por isso ignoramos
+            // `has_visible_windows` e abrimos sempre a janela principal.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => settings_window::open(app),
+            // Sem janelas, o Tauri pede para sair quando a última janela fecha. Só
+            // deixamos sair quando há código de saída, i.e. via `app.exit(0)` no "Sair".
+            RunEvent::ExitRequested {
+                api, code: None, ..
+            } => api.prevent_exit(),
+            RunEvent::Exit => {
+                tracing::info!("a sair");
+                logging::shutdown();
+            }
+            _ => {}
+        },
+    );
 }
