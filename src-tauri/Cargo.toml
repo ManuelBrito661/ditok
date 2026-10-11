@@ -15,6 +15,15 @@ default-run = "ditok"
 name = "ditok_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Ferramenta de desenvolvimento: só é compilada com `--features cli`, para não
+# entrar nos instaladores (o build universal do macOS só junta o binário principal).
+[[bin]]
+name = "set-key"
+required-features = ["cli"]
+
+[features]
+cli = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

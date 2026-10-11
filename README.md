@@ -48,7 +48,7 @@ A chave do [OpenRouter](https://openrouter.ai/settings/keys) fica no cofre do si
 Em alternativa à janela, na pasta `src-tauri`:
 
 ```bash
-cargo run --bin set-key
+cargo run --bin set-key --features cli
 ```
 
 ### Ficheiros
