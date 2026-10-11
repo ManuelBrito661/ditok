@@ -7,20 +7,23 @@
 //! - Trabalho bloqueante (disco, cofre, lista de processos) vai para
 //!   `spawn_blocking` para não ocupar as threads do runtime assíncrono.
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_dialog::DialogExt;
 
 use crate::{
+    audio::decode,
     config::Config,
     dictation::DictationEvent,
+    files::{self, JobView},
     history::HistoryEntry,
     hotkey,
     metrics::Stats,
-    overlay, paste, secrets,
-    state::AppState,
+    overlay, paste, secrets, settings_window,
+    state::{AppState, MISSING_KEY},
     stt::{
         SttError,
         models::{self, ModelKind, ModelList},
@@ -292,4 +295,92 @@ pub fn overlay_cancel(state: AppStateRef<'_>) {
 #[tauri::command]
 pub fn overlay_hit_rect(rect: overlay::HitRect) {
     overlay::set_hit_rect(rect);
+}
+
+// ---------------------------------------------------------------- ficheiros
+
+/// O que a janela mostra antes de começar.
+#[derive(Serialize)]
+pub struct FileProbe {
+    name: String,
+    path: String,
+    duration_s: Option<f64>,
+    size_bytes: u64,
+}
+
+/// Lê o cabeçalho de um ficheiro: confirma que o formato é suportado e diz a duração.
+#[tauri::command]
+pub async fn file_probe(path: String) -> CmdResult<FileProbe> {
+    let path = PathBuf::from(path);
+    blocking(move || {
+        let info = decode::probe(&path)?;
+        Ok(FileProbe {
+            name: path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            size_bytes: std::fs::metadata(&path)?.len(),
+            duration_s: info.duration.map(|d| d.as_secs_f64()),
+            path: path.display().to_string(),
+        })
+    })
+    .await?
+}
+
+/// O diálogo do sistema para escolher um ficheiro: a alternativa a arrastar.
+#[tauri::command]
+pub async fn file_pick(app: AppHandle) -> CmdResult<Option<String>> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Escolher um ficheiro para transcrever")
+        .add_filter("Áudio e vídeo", decode::EXTENSIONS);
+    if let Some(window) = app.get_webview_window(settings_window::LABEL) {
+        dialog = dialog.set_parent(&window);
+    }
+    // O diálogo responde num callback; o `oneshot` transforma-o em algo que se
+    // pode esperar com `.await`.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.pick_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let picked = rx.await.ok().flatten();
+    Ok(picked
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.display().to_string()))
+}
+
+#[tauri::command]
+pub async fn file_start(state: AppStateRef<'_>, path: String) -> CmdResult<JobView> {
+    let path = PathBuf::from(path);
+    let state_ = Arc::clone(&state);
+    let openrouter = blocking(move || state_.load_openrouter())
+        .await??
+        .ok_or(MISSING_KEY)?;
+    let probe_path = path.clone();
+    let info = blocking(move || decode::probe(&probe_path)).await??;
+    Ok(files::start(state.inner(), openrouter, path, info)?)
+}
+
+#[tauri::command]
+pub fn file_cancel(state: AppStateRef<'_>) {
+    state.files.cancel();
+}
+
+#[tauri::command]
+pub fn file_status(state: AppStateRef<'_>) -> Option<JobView> {
+    state.files.view()
+}
+
+#[tauri::command]
+pub fn file_clear(state: AppStateRef<'_>) {
+    state.files.clear();
+}
+
+/// Guarda o texto ao lado do ficheiro original; devolve o caminho.
+#[tauri::command]
+pub async fn file_save_beside(state: AppStateRef<'_>) -> CmdResult<String> {
+    let state = Arc::clone(&state);
+    let path = blocking(move || state.files.save_beside()).await??;
+    tracing::info!(path = %path.display(), "transcrição guardada ao lado do original");
+    Ok(path.display().to_string())
 }

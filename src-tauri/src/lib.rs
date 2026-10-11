@@ -3,6 +3,7 @@ mod cleanup;
 mod commands;
 mod config;
 mod dictation;
+mod files;
 mod history;
 mod hotkey;
 mod logging;
@@ -46,6 +47,8 @@ pub fn run() {
         // Updates assinados vindos das Releases do GitHub; `process` serve para reiniciar.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Diálogo para escolher um ficheiro a transcrever (usado só a partir do Rust).
+        .plugin(tauri_plugin_dialog::init())
         .plugin(hotkey::plugin(tx.clone()))
         .setup(move |app| {
             let paths = app.path();
@@ -120,6 +123,13 @@ pub fn run() {
             commands::overlay_click,
             commands::overlay_cancel,
             commands::overlay_hit_rect,
+            commands::file_probe,
+            commands::file_pick,
+            commands::file_start,
+            commands::file_cancel,
+            commands::file_status,
+            commands::file_clear,
+            commands::file_save_beside,
         ])
         .build(tauri::generate_context!());
 

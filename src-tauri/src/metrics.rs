@@ -39,6 +39,10 @@ pub struct DictationMetrics {
     pub chars: usize,
     pub generation_id: Option<String>,
     pub error: Option<String>,
+    /// Transcrição de um ficheiro (`files.rs`), não um ditado: não conta para os
+    /// percentis nem para o número de ditados, só para o custo.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub file: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -140,6 +144,8 @@ pub struct MetricsRow {
     #[serde(default)]
     pub cleanup_cost_usd: Option<f64>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub file: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -274,6 +280,7 @@ mod tests {
             cleanup_cost_usd: None,
             chars: 80,
             generation_id: Some("gen-1".into()),
+            file: false,
             error: error.map(str::to_owned),
         }
     }

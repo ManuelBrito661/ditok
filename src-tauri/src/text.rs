@@ -176,6 +176,13 @@ impl TextRules {
         out
     }
 
+    /// Só as palavras do dicionário, sem comandos nem expansões: é o que se aplica
+    /// a um ficheiro transcrito (uma aula onde se diga "nova linha" ou "o meu
+    /// email" não é um ditado teu).
+    pub fn apply_dictionary(&self, text: &str) -> String {
+        self.replace_words(text, &mut 0)
+    }
+
     fn replace_words(&self, text: &str, count: &mut usize) -> String {
         let Some(set) = &self.dictionary else {
             return text.to_owned();

@@ -111,6 +111,7 @@ pub async fn process(
         cleanup_cost_usd: None,
         chars: 0,
         generation_id: None,
+        file: false,
         error: None,
     };
     let mut history_entry = None;

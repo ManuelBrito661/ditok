@@ -11,8 +11,8 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::Config, dictation::DictationEvent, history::HistoryStore, metrics::MetricsStore,
-    secrets, stt::openrouter::OpenRouter, text::TextRules,
+    config::Config, dictation::DictationEvent, files::FileJobs, history::HistoryStore,
+    metrics::MetricsStore, secrets, stt::openrouter::OpenRouter, text::TextRules,
 };
 
 pub struct AppState {
@@ -29,6 +29,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub metrics: MetricsStore,
     pub history: HistoryStore,
+    /// O ficheiro a ser transcrito (ou o último), ver `files.rs`.
+    pub files: FileJobs,
     /// Para avisar o orquestrador (ex.: a chave mudou).
     pub events: UnboundedSender<DictationEvent>,
 }
@@ -69,6 +71,7 @@ impl AppState {
             current: RwLock::new(Current::new(config)),
             metrics: MetricsStore::new(dirs.data.clone()),
             history: HistoryStore::new(dirs.data.clone()),
+            files: FileJobs::default(),
             config_dir: dirs.config,
             data_dir: dirs.data,
             cache_dir: dirs.cache,
