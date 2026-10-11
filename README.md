@@ -1,6 +1,6 @@
 # Ditok
 
-App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema, mostra o estado numa pequena barra com a mascote e só abre uma janela quando pedes as definições.
+App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, métricas e definições.
 
 Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é feita através do [OpenRouter](https://openrouter.ai).
 
@@ -10,7 +10,8 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é fei
 | - | - |
 | Ditar (push-to-talk) | segurar **Ctrl+Shift+Espaço** (Mac: **Cmd+Shift+Espaço**) e largar no fim |
 | Ditar (modo alternar) | tocar no atalho (<300 ms), falar, tocar outra vez |
-| Cancelar a gravação | **Esc** |
+| Ditar com o rato | clicar na barra com a mascote, falar, clicar no **■** |
+| Cancelar a gravação | **Esc** (ou o **✕** na barra) |
 
 O atalho pode ser mudado nas definições.
 
@@ -27,7 +28,7 @@ Em baixo ao centro do ecrã (no monitor onde está o cursor) há uma pílula peq
 | Falhou | contorno vermelho; uma notificação explica o motivo |
 | Não ouvi nada | durante ~1 s, quando a gravação só tinha silêncio ou ruído: não foi enviada nem colada |
 
-A barra nunca recebe o foco, por isso o texto é sempre colado na app em que estavas, e os cliques passam através dela. Pode ser escondida nas definições.
+A barra reage ao rato: ao passares por cima cresce e mostra uma dica com o atalho, e um clique começa a ditar em modo alternar. Enquanto ouve nesse modo mostra um **✕** (cancelar) e um **■** (parar e colar). Fora da pílula os cliques passam através da janela. A barra nunca recebe o foco, por isso o texto é sempre colado na app em que estavas. Pode ser escondida nas definições.
 
 O ícone do tray mostra o mesmo estado: parado, a ouvir (vermelho), a processar (laranja), pronto (verde).
 
@@ -35,17 +36,29 @@ O ícone do tray mostra o mesmo estado: parado, a ouvir (vermelho), a processar 
 
 Antes de enviar, o Ditok procura a voz na gravação. O silêncio do início e do fim é cortado (com uma margem de 0,3 s antes e 0,4 s depois), porque os modelos são cobrados ao segundo. Se não houver voz nenhuma, nada é enviado: quando só recebem silêncio, os modelos de transcrição costumam inventar frases ("Obrigado por assistir.").
 
-## Configurar
+## A janela
 
-Clica no ícone do Ditok no tray → **Abrir definições**. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua no tray. Cada alteração é guardada logo, sem botão "Guardar".
+Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua a correr. Tem modo claro e escuro.
 
-| Secção | O que tem |
+| Página | O que tem |
 | - | - |
-| Geral | atalho (com deteção de conflitos com outras apps), idioma, arranque com o sistema, mostrar a barra com a mascote, deixar o ditado no clipboard depois de colar (ligado por omissão; desligado, o clipboard volta ao que lá tinhas), guardar a última gravação |
+| Início | ditados, palavras e custo do mês, e o histórico dos últimos ditados com um botão "Copiar" em cada um. Um ditado que não chegou a ser colado também fica lá |
+| Métricas | latência p50/p90, custo e ditados por mês, últimos ditados, RAM da app e das janelas |
+
+### Definições
+
+No botão **Definições** da barra lateral. Cada alteração é guardada logo, sem botão "Guardar".
+
+| Separador | O que tem |
+| - | - |
+| Geral | atalho (com deteção de conflitos com outras apps), idioma, arranque com o sistema, mostrar a barra com a mascote, deixar o ditado no clipboard depois de colar (ligado por omissão; desligado, o clipboard volta ao que lá tinhas) |
 | Transcrição | chave do OpenRouter (guardar / testar / apagar), modelo de transcrição com pesquisa e preço, formato de envio (multipart ou JSON) |
 | Limpeza com IA | corrige pontuação e remove hesitações com um modelo de texto (desligada por omissão; se falhar ou demorar mais de 6 s, cola o texto original) |
-| Histórico | texto dos últimos ditados, com um botão "Copiar" em cada um, só neste computador (desligado por omissão). Um ditado que não chegou a ser colado também fica lá |
-| Métricas e custos | latência p50/p90, custo e ditados do mês, últimos ditados, RAM da app e das janelas |
+| Dados e privacidade | histórico (ligado por omissão, só neste computador), guardar a última gravação |
+
+### Atualizações
+
+O Ditok procura versões novas nas [Releases do GitHub](https://github.com/ManuelBrito661/ditok/releases) 10 s depois de arrancar e depois a cada 6 h. Quando há uma, mostra uma notificação e um cartão **Nova versão** na janela; o botão **Atualizar** descarrega, instala e reinicia a app. As atualizações são assinadas e verificadas antes de instalar.
 
 ### Chave de API
 A chave do [OpenRouter](https://openrouter.ai/settings/keys) fica no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros, e a janela nunca a mostra: só indica se está configurada. Ao guardar, a chave é validada no OpenRouter antes de ficar no cofre.
@@ -72,7 +85,7 @@ cargo run --bin set-key --features cli
 - Windows: `%LOCALAPPDATA%\com.manuelbrito.ditok\logs` (um ficheiro por dia, 7 dias)
 - macOS: `~/Library/Logs/com.manuelbrito.ditok`
 
-Cada ditado regista uma linha `ditado` com a duração do áudio enviado e do silêncio cortado, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado) e o custo. Uma gravação sem voz regista uma linha `sem voz na gravação` com o ruído de fundo, o pico e o limiar em dBFS, que servem para afinar a deteção se o teu microfone a enganar. A memória é registada no arranque, com a janela de definições aberta e depois de a fechar.
+Cada ditado regista uma linha `ditado` com a duração do áudio enviado e do silêncio cortado, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado) e o custo. Uma gravação sem voz regista uma linha `sem voz na gravação` com o ruído de fundo, o pico e o limiar em dBFS, que servem para afinar a deteção se o teu microfone a enganar. A memória é registada no arranque, com a janela aberta e depois de a fechar.
 
 ## Desempenho
 
@@ -110,6 +123,28 @@ pnpm icons
 pnpm tauri icon src-tauri/icons/app-icon.png
 ```
 
+### Publicar uma versão
+
+O workflow [release.yml](.github/workflows/release.yml) compila para Windows e macOS (universal) quando é feito push de uma tag `v*`, e publica os instaladores e o `latest.json` usado pelas atualizações.
+
+1. Subir a versão em `package.json`, `src-tauri/tauri.conf.json` e `src-tauri/Cargo.toml` (e correr `cargo check` para atualizar o `Cargo.lock`).
+2. Commit `chore: release X.Y.Z`.
+3. Criar e enviar a tag:
+
+```bash
+git tag vX.Y.Z && git push origin main vX.Y.Z
+```
+
+Secrets necessários no GitHub:
+
+| Secret | Para quê |
+| - | - |
+| `TAURI_SIGNING_PRIVATE_KEY` | assina as atualizações (chave em `~/.tauri/ditok.key`; a pública está no `tauri.conf.json`) |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` | certificado autoassinado "Ditok Self-Signed" (`~/.tauri/ditok-codesign.p12`, em base64) para assinar a app no macOS |
+| `KEYCHAIN_PASSWORD` | password do keychain temporário criado no CI do macOS |
+
+**Não substituas o certificado do macOS.** O macOS associa a permissão do microfone à identidade de assinatura: com um certificado novo, volta a pedir a permissão a todos. Guarda uma cópia de `~/.tauri`.
+
 ### Estrutura
 
 ```
@@ -121,12 +156,16 @@ src-tauri/src/
   cleanup.rs          limpeza opcional com LLM
   paste.rs            clipboard + Ctrl/Cmd+V (+ reposição do clipboard, se pedida), copiar sem colar
   hotkey.rs           atalho global, troca com deteção de conflitos
-  overlay.rs          barra flutuante com a mascote
-  settings_window.rs  janela de definições criada/destruída a pedido
+  overlay.rs          barra flutuante com a mascote (hover e cliques)
+  settings_window.rs  janela principal criada/destruída a pedido
+  updater.rs          procura e instala atualizações
   commands.rs         comandos Tauri chamados pela UI
   config.rs, secrets.rs, metrics.rs, history.rs, sysmem.rs, tray.rs, logging.rs
+src-tauri/Info.plist, Entitlements.plist   permissões do macOS (microfone)
 src/
-  main.ts, api.ts     janela de definições (api.ts tem os tipos dos comandos)
+  main.ts             janela principal: navegação e cartão de atualização
+  home.ts, metrics-page.ts, settings-dialog.ts   Início, Métricas e definições
+  api.ts, store.ts    tipos dos comandos e estado partilhado
   overlay.ts          barra com a mascote
 design/mascot/        poses da mascote em SVG
 ```
@@ -139,11 +178,11 @@ O Windows impede que um processo normal envie teclas a uma janela com privilégi
 ### Esc durante a gravação
 Enquanto gravas, o Esc fica reservado ao Ditok para cancelar e não chega às outras apps. Fora da gravação não é intercetado.
 
-### macOS ainda não testado
-O código para o macOS (Cmd+V, Keychain, permissão do microfone, barra transparente) está escrito mas ainda não foi compilado nem testado num Mac. Também falta uma verificação explícita da permissão de Acessibilidade com uma mensagem clara.
+### macOS: permissão de Acessibilidade
+Ainda falta uma verificação explícita da permissão de Acessibilidade com uma mensagem clara. Sem ela, a colagem falha.
 
-### Builds sem assinatura
-A app não é assinada (é para uso pessoal), por isso o sistema avisa na primeira execução.
+### Builds sem assinatura reconhecida
+A app é para uso pessoal, por isso não tem uma assinatura reconhecida pelo sistema e há um aviso na primeira execução. No Windows não é assinada. No macOS é assinada com um certificado autoassinado: chega para a permissão do microfone ficar guardada entre atualizações, mas a app não é notarizada pela Apple.
 
 - **Windows (SmartScreen)**: em "O Windows protegeu o computador", clica em **Mais informações → Executar mesmo assim**.
 - **macOS (Gatekeeper)**: clica com o botão direito na app → **Abrir** → **Abrir**. Em alternativa:
