@@ -6,7 +6,7 @@ import listeningMascotUrl from "../design/mascot/a-ouvir.svg?inline";
 import thinkingMascotUrl from "../design/mascot/a-processar.svg?inline";
 import readyMascotUrl from "../design/mascot/pronto.svg?inline";
 import { api, errorText, type HistoryEntry, type Stats } from "./api";
-import { countWords, dayLabel, ms, renderKeys, timeOfDay, usd } from "./format";
+import { budgetLevel, countWords, dayLabel, ms, renderKeys, timeOfDay, usd } from "./format";
 import { openSettings } from "./settings-dialog";
 import { $, app, onViewChange, save, toast } from "./store";
 
@@ -16,7 +16,16 @@ let stats: Stats | null = null;
 function renderStats() {
   const month = stats?.months[stats.current_month];
   $("s-count").textContent = stats ? String(month?.dictations ?? 0) : "—";
-  $("s-cost").textContent = stats ? usd(month?.cost_usd ?? 0, 2) : "—";
+  const spent = month?.cost_usd ?? 0;
+  $("s-cost").textContent = stats ? usd(spent, 2) : "—";
+  // Com orçamento: "$4.20 de $10 este mês", âmbar aos 80 % e vermelho aos 100 %.
+  const budget = app.view.config.monthly_budget_usd;
+  $("s-cost-of").textContent = budget ? `de ${usd(budget, 2)} ` : "";
+  $("s-cost-item").className = budgetLevel(spent, budget);
+  // O que resta na chave só aparece se a chave tiver um limite de gasto.
+  const remaining = app.key?.limit_remaining;
+  $("s-key-item").hidden = remaining == null;
+  $("s-key").textContent = usd(remaining, 2);
   $("s-speed").textContent = stats?.total ? ms(stats.total.p50) : "—";
   // As palavras só se sabem pelo histórico (as métricas não guardam o texto).
   const now = new Date();

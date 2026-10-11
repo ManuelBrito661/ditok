@@ -147,6 +147,7 @@ function setupKey() {
       const result = await api.setApiKey(input.value);
       input.value = ""; // a chave não fica no DOM
       app.view.api_key_set = true;
+      app.key = result;
       notifyViewChange();
       info.textContent = describeKey(result);
       toast("Chave guardada");
@@ -170,6 +171,7 @@ function setupKey() {
     try {
       await api.deleteApiKey();
       app.view.api_key_set = false;
+      app.key = null;
       info.textContent = "";
       notifyViewChange();
       toast("Chave apagada");
@@ -255,6 +257,10 @@ function renderControls() {
   $<HTMLInputElement>("save-last-recording").checked = c.save_last_recording;
   $<HTMLInputElement>("show-overlay").checked = c.show_overlay;
   $<HTMLInputElement>("keep-in-clipboard").checked = c.keep_in_clipboard;
+  $<HTMLInputElement>("sounds").checked = c.sounds;
+  // Não mexer no campo enquanto o estás a escrever (a vista muda depois de cada ditado).
+  const budget = $<HTMLInputElement>("budget");
+  if (document.activeElement !== budget) budget.value = c.monthly_budget_usd == null ? "" : String(c.monthly_budget_usd);
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) r.checked = r.value === c.transport;
   $<HTMLInputElement>("cleanup-enabled").checked = c.cleanup_enabled;
   $<HTMLInputElement>("history-enabled").checked = c.history_enabled;
@@ -271,6 +277,7 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   checkbox("save-last-recording", "save_last_recording");
   checkbox("show-overlay", "show_overlay");
   checkbox("keep-in-clipboard", "keep_in_clipboard");
+  checkbox("sounds", "sounds");
   checkbox("cleanup-enabled", "cleanup_enabled");
   checkbox("history-enabled", "history_enabled");
 
@@ -278,6 +285,11 @@ function bindSimpleControls(onHistoryCleared: () => void) {
     save({ language: (e.target as HTMLSelectElement).value || null }));
   $<HTMLInputElement>("history-limit").addEventListener("change", (e) =>
     save({ history_limit: Number((e.target as HTMLInputElement).value) }));
+  $<HTMLInputElement>("budget").addEventListener("change", (e) => {
+    const raw = (e.target as HTMLInputElement).value.trim();
+    // Vazio = sem orçamento. O backend recusa 0 e negativos com uma mensagem.
+    void save({ monthly_budget_usd: raw === "" ? null : Number(raw) });
+  });
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) {
     r.addEventListener("change", () => r.checked && save({ transport: r.value as Config["transport"] }));
   }

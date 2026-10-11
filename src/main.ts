@@ -6,9 +6,9 @@ import mascotUrl from "../design/mascot/parado.svg?inline";
 import { api, errorText, onDictationRecorded } from "./api";
 import { setupDictionary } from "./dictionary-page";
 import { clearHomeHistory, refreshHome, setupHome } from "./home";
-import { renderMemory, renderStats } from "./metrics-page";
+import { renderMemory, renderStats, setupMetrics } from "./metrics-page";
 import { openSettings, setupSettings } from "./settings-dialog";
-import { $, app, onViewChange, toast } from "./store";
+import { $, app, onViewChange, refreshKey, toast } from "./store";
 
 type Page = "inicio" | "dicionario" | "metricas";
 
@@ -69,16 +69,18 @@ async function main() {
   setupSettings(clearHomeHistory);
   setupHome();
   setupDictionary();
+  setupMetrics();
   onViewChange(renderStatus);
   renderStatus();
 
   // Em paralelo: nenhuma destas chamadas depende das outras.
-  await Promise.allSettled([refreshHome(), renderStats(), renderMemory(), checkUpdate()]);
+  await Promise.allSettled([refreshHome(), renderStats(), renderMemory(), refreshKey(), checkUpdate()]);
 
   // Atualiza o Início e as métricas quando acaba um ditado, sem polling.
   await onDictationRecorded(() => {
     void refreshHome();
     void renderStats();
+    void refreshKey(); // o gasto da chave mudou
   });
 }
 

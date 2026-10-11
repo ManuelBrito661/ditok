@@ -89,3 +89,10 @@ export function shortcutFromEvent(e: KeyboardEvent): string | null {
   if (e.metaKey) mods.push("Super");
   return [...mods, e.code].join("+");
 }
+
+/** Gasto em relação ao orçamento, como classe CSS: "warn" a partir de 80 % e
+ *  "over" a partir de 100 % (os mesmos limites do aviso em metrics.rs). */
+export function budgetLevel(spent: number, budget: number | null): "" | "warn" | "over" {
+  if (!budget) return "";
+  return spent >= budget ? "over" : spent >= budget * 0.8 ? "warn" : "";
+}

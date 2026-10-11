@@ -58,7 +58,8 @@
               <li><span class="stat-icon" aria-hidden="true">🎙️</span><b id="s-count">—</b> ditados</li>
               <li><span class="stat-icon" aria-hidden="true">✍️</span><b id="s-words">—</b> palavras</li>
               <li><span class="stat-icon" aria-hidden="true">⚡</span><b id="s-speed">—</b> típico</li>
-              <li><span class="stat-icon" aria-hidden="true">💸</span><b id="s-cost">—</b> este mês</li>
+              <li id="s-cost-item"><span class="stat-icon" aria-hidden="true">💸</span><b id="s-cost">—</b> <span id="s-cost-of"></span>este mês</li>
+              <li id="s-key-item" hidden><span class="stat-icon" aria-hidden="true">🔑</span><b id="s-key">—</b> na chave</li>
             </ul>
           </header>
 
@@ -152,6 +153,17 @@
 
           <div class="cards">
             <div class="card dark"><span class="card-label">Custo este mês</span><span id="m-cost" class="card-value">—</span></div>
+            <div class="card">
+              <span class="card-label">Orçamento do mês</span>
+              <span id="m-budget" class="card-value">—</span>
+              <div id="m-budget-meter" class="meter" hidden><span id="m-budget-bar"></span></div>
+              <span id="m-budget-sub" class="card-sub"></span>
+            </div>
+            <div class="card">
+              <span class="card-label">Restante na chave</span>
+              <span id="m-key" class="card-value">—</span>
+              <span id="m-key-sub" class="card-sub"></span>
+            </div>
             <div class="card"><span class="card-label">Ditados este mês</span><span id="m-count" class="card-value">—</span></div>
             <div class="card"><span class="card-label">Soltar → colado (p50 / p90)</span><span id="m-total" class="card-value">—</span></div>
             <div class="card"><span class="card-label">Transcrição (p50 / p90)</span><span id="m-stt" class="card-value">—</span></div>
@@ -245,6 +257,14 @@
 
               <label class="row switch">
                 <span class="row-text">
+                  <span class="row-title">Sons ao começar e ao acabar</span>
+                  <span class="row-desc">Duas notas curtas a subir quando começo a ouvir, a descer quando paro. Assim sabes que estou a gravar sem olhar para a barra.</span>
+                </span>
+                <input id="sounds" type="checkbox" role="switch" />
+              </label>
+
+              <label class="row switch">
+                <span class="row-text">
                   <span class="row-title">Deixar o ditado no clipboard</span>
                   <span class="row-desc">Depois de colar, podes voltar a colá-lo com Ctrl+V. Desligado, repõe o que lá estava.</span>
                 </span>
@@ -286,6 +306,19 @@
                   <button id="key-test" type="button" class="secondary">Testar</button>
                   <button id="key-delete" type="button" class="ghost danger">Apagar</button>
                 </form>
+              </div>
+
+              <div class="row">
+                <label class="row-text" for="budget">
+                  <span class="row-title">Orçamento mensal</span>
+                  <span class="row-desc">Aviso quando chegares a 80 % e aos 100 %. Conta a transcrição e a limpeza deste mês, como o OpenRouter as cobra. Vazio = sem orçamento.</span>
+                </label>
+                <div class="row-control">
+                  <span class="input-unit">
+                    <span aria-hidden="true">$</span>
+                    <input id="budget" type="number" min="0" step="0.5" inputmode="decimal" placeholder="sem" />
+                  </span>
+                </div>
               </div>
 
               <div class="row">

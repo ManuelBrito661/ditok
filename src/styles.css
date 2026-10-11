@@ -331,6 +331,36 @@ main { overflow-y: auto; padding: 0 48px 64px; }
 .card.dark { background: var(--promo); color: var(--on-promo); box-shadow: none; }
 .card.dark .card-label { color: rgb(247 244 238 / 0.7); }
 .card-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.card-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.card-sub:empty { display: none; }
+
+/* Barra do orçamento: verde, âmbar aos 80 %, vermelha aos 100 %. */
+.meter { height: 6px; border-radius: 999px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); overflow: hidden; }
+.meter span { display: block; height: 100%; border-radius: inherit; background: var(--green); transition: width 0.4s var(--ease); }
+.meter.warn span { background: var(--amber); }
+.meter.over span { background: var(--red); }
+
+/* No Início, o gasto do mês muda de cor como a barra. */
+.stats li.warn { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 45%, var(--border)); }
+.stats li.warn b { color: var(--amber); }
+.stats li.over { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 45%, var(--border)); }
+.stats li.over b { color: var(--red); }
+
+button.link {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Campo numérico com a unidade à frente ("$ 10"). */
+.input-unit { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 600; }
 .card-value { font-family: var(--serif); font-size: 30px; line-height: 1.1; font-variant-numeric: tabular-nums; }
 
 .table-wrap {

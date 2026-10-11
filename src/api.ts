@@ -23,6 +23,8 @@ export interface Config {
   voice_commands: boolean;
   dictionary: Replacement[];
   snippets: Snippet[];
+  sounds: boolean;
+  monthly_budget_usd: number | null;
 }
 
 /** Uma palavra do dicionário. `from`: formas separadas por vírgulas; vazio = a própria palavra. */
@@ -121,6 +123,7 @@ export const api = {
   saveSettings: (config: Config) => invoke<SettingsView>("save_settings", { config }),
   setApiKey: (key: string) => invoke<KeyInfo | null>("set_api_key", { key }),
   deleteApiKey: () => invoke<void>("delete_api_key"),
+  /** Valida a chave e devolve o gasto e o limite dela (GET /key, gratuito). */
   testApiKey: () => invoke<KeyInfo>("test_api_key"),
   listModels: (kind: ModelKind, refresh = false) => invoke<ModelList>("list_models", { kind, refresh }),
   getStats: () => invoke<Stats>("get_stats"),
