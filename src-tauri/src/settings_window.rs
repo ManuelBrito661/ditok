@@ -1,4 +1,4 @@
-//! Janela de definições, criada a pedido a partir do tray e destruída ao fechar,
+//! Janela principal (Início, Métricas e o modal de definições), criada a pedido a partir do tray e destruída ao fechar,
 //! para que o WebView (de longe o que mais RAM gasta) só exista enquanto a usas.
 
 use std::time::{Duration, Instant};
@@ -20,11 +20,10 @@ pub fn open(app: &AppHandle) {
 
     let started = Instant::now();
     let built = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html".into()))
-        .title("Ditok — Definições")
-        .inner_size(820.0, 660.0)
-        // Tamanho fixo: o layout foi desenhado para 820×660.
-        .resizable(false)
-        .maximizable(false)
+        .title("Ditok")
+        .inner_size(1040.0, 720.0)
+        // Abaixo disto a barra lateral e o modal de definições já não cabem.
+        .min_inner_size(860.0, 600.0)
         .center()
         .additional_browser_args(crate::overlay::BROWSER_ARGS)
         .build();

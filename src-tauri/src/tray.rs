@@ -61,7 +61,7 @@ impl Tray {
         let processing = Image::from_bytes(include_bytes!("../icons/tray/processing.png"))?;
         let done = Image::from_bytes(include_bytes!("../icons/tray/done.png"))?;
 
-        let open = MenuItemBuilder::with_id(MENU_OPEN_SETTINGS, "Abrir definições").build(app)?;
+        let open = MenuItemBuilder::with_id(MENU_OPEN_SETTINGS, "Abrir o Ditok").build(app)?;
         let quit = MenuItemBuilder::with_id(MENU_QUIT, "Sair").build(app)?;
         let menu = MenuBuilder::new(app)
             .item(&open)

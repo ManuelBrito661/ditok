@@ -11,6 +11,7 @@
     "icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
+    "@fontsource/instrument-serif": "^5.3.0",
     "@tauri-apps/api": "^2"
   },
   "devDependencies": {
