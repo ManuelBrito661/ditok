@@ -125,7 +125,9 @@ pub async fn clean(openrouter: &OpenRouter, model: &str, text: &str) -> Result<C
         // Dizer porquê poupa uma tarde a adivinhar (foi assim que se descobriu o
         // problema do raciocínio: finish_reason=length).
         let reason = choice.finish_reason.as_deref().unwrap_or("?");
-        return Err(SttError::Decode(format!("resposta sem texto (finish_reason={reason})")));
+        return Err(SttError::Decode(format!(
+            "resposta sem texto (finish_reason={reason})"
+        )));
     }
     let cleaned = sanitize(&cleaned, text)?;
     Ok(Cleaned {
@@ -191,7 +193,12 @@ mod tests {
         let or = OpenRouter::new(client, key, crate::stt::openrouter::Transport::Multipart);
         let raw = "ééé olá tudo bem hmm hoje vou vou testar a limpeza do ditok";
         let c = clean(&or, &model, raw).await.unwrap();
-        println!("{model}: {:?} ({} ms, custo {:?})", c.text, c.elapsed.as_millis(), c.cost);
+        println!(
+            "{model}: {:?} ({} ms, custo {:?})",
+            c.text,
+            c.elapsed.as_millis(),
+            c.cost
+        );
     }
 
     #[test]

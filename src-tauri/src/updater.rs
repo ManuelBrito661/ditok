@@ -41,7 +41,9 @@ pub async fn install(app: &AppHandle) -> anyhow::Result<()> {
         anyhow::bail!("Já tens a versão mais recente.");
     };
     tracing::info!(version = %update.version, "a instalar atualização");
-    update.download_and_install(|_chunk, _total| {}, || {}).await?;
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await?;
     tracing::info!("atualização instalada, a reiniciar");
     app.restart();
 }

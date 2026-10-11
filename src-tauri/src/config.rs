@@ -148,7 +148,10 @@ mod tests {
         assert_eq!(c.stt_model, "google/chirp-3");
         assert_eq!(c.shortcut, DEFAULT_SHORTCUT);
         assert!(!c.cleanup_enabled, "limpeza desligada por omissão");
-        assert!(c.history_enabled, "histórico ligado por omissão (o Início mostra os ditados)");
+        assert!(
+            c.history_enabled,
+            "histórico ligado por omissão (o Início mostra os ditados)"
+        );
         assert!(
             c.keep_in_clipboard,
             "um config.json antigo passa a deixar o ditado no clipboard"
