@@ -34,13 +34,22 @@ fn run() -> Result<String, Box<dyn std::error::Error>> {
         return Ok(format!("Chave do {provider} apagada do cofre do sistema."));
     }
 
-    let key = rpassword::prompt_password(format!(
-        "Cola a chave do {provider} (não aparece enquanto escreves) e carrega Enter: "
-    ))?;
-    let key = key.trim();
+    // Uma linha vazia logo no início é quase sempre um Enter que ficou no buffer do
+    // terminal, não uma resposta: voltamos a perguntar algumas vezes.
+    let mut key = String::new();
+    for _ in 0..3 {
+        // O prompt vai pelo `eprint!` (o Rust converte para UTF-16 na consola do
+        // Windows; o `rpassword` escreveria bytes UTF-8 e os acentos sairiam mal).
+        eprint!("Cola a chave do {provider} (não aparece enquanto escreves) e carrega Enter: ");
+        key = rpassword::read_password()?.trim().to_owned();
+        if !key.is_empty() {
+            break;
+        }
+    }
     if key.is_empty() {
         return Err("chave vazia; nada foi guardado".into());
     }
+    let key = key.as_str();
     secrets::set(provider, key)?;
     // Confirma lendo de volta, sem mostrar a chave.
     let stored = secrets::get(provider)?.is_some_and(|k| k == key);
