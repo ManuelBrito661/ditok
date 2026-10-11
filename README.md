@@ -61,6 +61,7 @@ Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. 
 | - | - |
 | Início | ditados, palavras e custo do mês, e o histórico dos últimos ditados com um botão "Copiar" em cada um. Um ditado que não chegou a ser colado também fica lá |
 | Dicionário | palavras, expansões e comandos falados (ver abaixo) |
+| Ficheiros | transcrever a gravação de uma aula ou um vídeo, arrastado para a janela (ver abaixo) |
 | Métricas | latência p50/p90, custo e ditados por mês, orçamento, o que resta na chave, últimos ditados, RAM da app e das janelas |
 
 ### Dicionário e expansões
@@ -82,6 +83,19 @@ No botão **Definições** da barra lateral. Cada alteração é guardada logo, 
 | Transcrição | chave do OpenRouter (guardar / testar / apagar), orçamento mensal, modelo de transcrição com pesquisa e preço, formato de envio (multipart ou JSON) |
 | Limpeza com IA | corrige pontuação, remove hesitações e, quando te corriges a meio da frase ("às duas, não, às três"), fica só a correção, com um modelo de texto (desligada por omissão; se falhar ou demorar mais de 6 s, cola o texto sem limpeza) |
 | Dados e privacidade | histórico (ligado por omissão, só neste computador), guardar a última gravação |
+
+### Transcrever ficheiros
+
+Arrasta a gravação de uma aula, de uma reunião ou um vídeo para a janela (ou usa **Ficheiros → Escolher ficheiro…**). Funciona com mp3, m4a, aac, wav, flac, ogg (vorbis), mp4, mov e mkv. Opus (notas de voz do WhatsApp, webm) ainda não.
+
+1. Antes de começar aparece a duração e o custo estimado, ao preço dos teus últimos pedidos com o modelo atual (ou ao da lista de modelos, se ainda não houver nenhum), com um aviso se passar o orçamento do mês ou o que resta na chave.
+2. O ficheiro é lido aos bocados e partido em pedaços de ~2,5 min, cortados na pausa mais silenciosa perto desse ponto, para não partir palavras. Vão até 3 pedaços ao mesmo tempo para o modelo de transcrição atual; um pedaço que falhe por um problema passageiro (rede, servidor ocupado) é repetido duas vezes. Os pedaços só com silêncio (um intervalo) não são enviados.
+3. Uma barra mostra o progresso e o tempo que falta. Podes fechar a janela: o trabalho continua e há uma notificação no fim.
+4. O texto fica na janela, com **Copiar** e **Guardar ao lado do original** (`aula.txt`, sem substituir nenhum ficheiro), e é guardada sempre uma cópia em `transcricoes\` na pasta de dados.
+
+Os pedaços são juntos pela ordem do ficheiro, com um parágrafo novo quando o anterior acaba numa frase completa. Um pedaço que falhe de vez fica assinalado no texto (`[não foi possível transcrever 25:00–27:30]`). Ao parar a meio fica o que já estava transcrito. Só o dicionário é aplicado ao texto: comandos falados e expansões são para os teus ditados, e a limpeza com IA não é usada. O custo conta para o mês e para o orçamento.
+
+Uma aula de 1 h com o `elevenlabs/scribe-v2` custa ~$2; com o `openai/whisper-large-v3-turbo`, uns cêntimos.
 
 ### Orçamento e chave
 
@@ -110,6 +124,7 @@ cargo run --bin set-key --features cli
 | `metrics.jsonl` | `%APPDATA%\com.manuelbrito.ditok\` | uma linha por ditado: tempos, modelo e custo, **sem o texto** |
 | `costs.json` | `%APPDATA%\com.manuelbrito.ditok\` | custo e número de ditados por mês |
 | `history.json` | `%APPDATA%\com.manuelbrito.ditok\` | texto dos últimos ditados (só se o histórico estiver ligado) |
+| `transcricoes\` | `%APPDATA%\com.manuelbrito.ditok\` | uma cópia do texto de cada ficheiro transcrito |
 | `debug\last.wav` | `%APPDATA%\com.manuelbrito.ditok\` | a última gravação (só se a opção estiver ligada) |
 | `models-*.json` | `%LOCALAPPDATA%\com.manuelbrito.ditok\` | lista de modelos do OpenRouter, guardada durante 24 h |
 
@@ -184,9 +199,11 @@ Secrets necessários no GitHub:
 src-tauri/src/
   lib.rs              arranque: plugins, tray, atalho, barra, estado partilhado
   dictation/          orquestrador (actor), máquina de estados do atalho, pipeline do ditado
-  audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV, nível do microfone
+  audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV, nível do microfone,
+                      leitura de ficheiros (symphonia) e cortes nas pausas
   stt/                trait SttProvider, OpenRouter, cache da lista de modelos
   text.rs             comandos falados, dicionário e expansões (no computador)
+  files.rs            transcrever um ficheiro: pedaços em paralelo, progresso, texto final
   cleanup.rs          limpeza opcional com LLM
   paste.rs            clipboard + Ctrl/Cmd+V (+ reposição do clipboard, se pedida), copiar sem colar
   sound.rs            sons de início e fim, gerados na app
@@ -199,7 +216,8 @@ src-tauri/src/
 src-tauri/Info.plist, Entitlements.plist   permissões do macOS (microfone)
 src/
   main.ts             janela principal: navegação e cartão de atualização
-  home.ts, dictionary-page.ts, metrics-page.ts, settings-dialog.ts   Início, Dicionário, Métricas e definições
+  home.ts, dictionary-page.ts, files-page.ts, metrics-page.ts, settings-dialog.ts
+                      Início, Dicionário, Ficheiros, Métricas e definições
   api.ts, store.ts    tipos dos comandos e estado partilhado
   overlay.ts          barra com a mascote
 design/mascot/        poses da mascote em SVG
