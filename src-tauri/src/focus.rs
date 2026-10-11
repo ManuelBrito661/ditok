@@ -27,6 +27,19 @@ pub fn foreground_for_retry() -> Option<Window> {
     foreground().filter(|w| !imp::is_ours_or_shell(*w))
 }
 
+/// Bloqueante. Volta a pôr `w` em primeiro plano (ex.: depois de usares o menu do
+/// tray ou da barra, que "roubam" o foco) e diz se conseguiu. O Windows só deixa
+/// fazê-lo a quem recebeu o último clique, que é o caso logo a seguir ao menu.
+pub fn activate(w: Window) -> bool {
+    if foreground() == Some(w) {
+        return true;
+    }
+    imp::activate(w);
+    // A troca de janela não é instantânea: dou-lhe um instante antes de confirmar.
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    foreground() == Some(w)
+}
+
 /// Decide se ainda se pode colar. Sem janela de destino (`start` = `None`) ou sem
 /// janela agora, não se cola: o texto fica no clipboard e o utilizador cola onde
 /// quiser.
@@ -38,8 +51,14 @@ pub fn should_paste(start: Option<Window>, now: Option<Window>) -> bool {
 mod imp {
     use super::Window;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId,
+        GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
     };
+
+    pub fn activate(w: Window) {
+        // SAFETY: um `hwnd` que entretanto fechou não é perigoso; a função só
+        // devolve 0 (falhou), e quem chama confirma com `foreground()`.
+        unsafe { SetForegroundWindow(w.0 as windows_sys::Win32::Foundation::HWND) };
+    }
 
     pub fn foreground() -> Option<Window> {
         // SAFETY: não recebe argumentos e só lê estado do sistema; devolve NULL se
@@ -80,6 +99,8 @@ mod imp {
     pub fn is_ours_or_shell(_: Window) -> bool {
         false
     }
+
+    pub fn activate(_: Window) {}
 }
 
 #[cfg(test)]

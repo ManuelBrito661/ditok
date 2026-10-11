@@ -76,6 +76,31 @@ body {
 }
 #pill.hover[data-state="idle"] #mascot { width: 22px; height: 22px; }
 
+/* ---------- aviso persistente em repouso: "Falta a chave", "Atalho ocupado"
+   Âmbar e um pouco maior, mas ainda discreto. Clicar abre a janela. */
+#pill[data-state="idle"][data-notice="key"],
+#pill[data-state="idle"][data-notice="shortcut"] {
+  height: 26px;
+  opacity: 1;
+  border-color: rgb(255 184 107 / 0.5);
+}
+#pill[data-state="idle"][data-notice="key"] { width: 124px; }
+#pill[data-state="idle"][data-notice="shortcut"] { width: 140px; }
+#pill[data-state="idle"][data-notice="key"] #label,
+#pill[data-state="idle"][data-notice="shortcut"] #label {
+  display: block;
+  color: var(--amber);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+#pill.hover[data-state="idle"][data-notice="key"],
+#pill.hover[data-state="idle"][data-notice="shortcut"] {
+  height: 30px;
+  border-color: rgb(255 184 107 / 0.8);
+}
+#pill.hover[data-state="idle"][data-notice="key"] { width: 134px; }
+#pill.hover[data-state="idle"][data-notice="shortcut"] { width: 150px; }
+
 #tip {
   padding: 7px 12px;
   border-radius: 10px;

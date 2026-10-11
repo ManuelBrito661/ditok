@@ -9,7 +9,7 @@
 //! - é transparente, sem moldura, por cima de tudo e fora da barra de tarefas.
 //!
 //! O backend envia-lhe eventos (`overlay:state`, `overlay:level`, `overlay:latched`,
-//! `overlay:failure`, `overlay:busy`, `overlay:hover`) e recebe os cliques pelos
+//! `overlay:failure`, `overlay:busy`, `overlay:hover`, `overlay:notice`) e recebe os cliques pelos
 //! comandos `overlay_*` em commands.rs.
 //! Toda a animação é CSS na página `overlay.html`.
 
@@ -227,4 +227,24 @@ pub fn emit_failure(app: &AppHandle, label: &str, retry: bool) {
 /// Premiste o atalho a meio do processamento: a pílula abana.
 pub fn emit_busy(app: &AppHandle) {
     let _ = app.emit_to(LABEL, "overlay:busy", ());
+}
+
+/// Aviso persistente da pílula em repouso ("Falta a chave", "Atalho ocupado").
+/// A barra também o pede ao carregar (`overlay_status`): pode ainda não existir
+/// quando isto é enviado.
+pub fn emit_notice(app: &AppHandle, status: &crate::state::Status) {
+    let _ = app.emit_to(LABEL, "overlay:notice", status);
+}
+
+/// Clique direito na pílula: o mesmo menu do tray, por cima dela.
+pub fn popup_menu(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(LABEL) else {
+        return;
+    };
+    let Some(menu) = crate::tray::menu(app) else {
+        return;
+    };
+    if let Err(e) = window.popup_menu(&menu) {
+        tracing::warn!(error = %e, "não foi possível abrir o menu da barra");
+    }
 }

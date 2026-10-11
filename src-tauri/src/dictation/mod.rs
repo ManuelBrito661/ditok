@@ -66,6 +66,15 @@ pub enum DictationEvent {
     /// A chave ou o modo de envio mudaram nas definições: o cliente do OpenRouter
     /// tem de ser recriado no próximo ditado.
     ProviderChanged,
+    /// O texto final de um ditado (colado ou só copiado), para o "Colar o último
+    /// ditado". Enviado pelo processamento, antes de `ProcessingFinished`.
+    LastText(String),
+    /// "Colar o último ditado" no menu do tray ou da barra.
+    PasteLast,
+    /// A colagem pedida por `PasteLast` acabou.
+    PastedAgain(Outcome),
+    /// O histórico foi apagado: o último ditado também é esquecido.
+    HistoryCleared,
 }
 
 /// O que o orquestrador recebe do resto da app. Agrupar num struct evita funções
@@ -120,6 +129,10 @@ struct Orchestrator {
     /// antigo não apaga um mais recente.
     shown: u64,
     last_busy: Option<Instant>,
+    /// O texto do último ditado, para o "Colar o último ditado". Vem do histórico
+    /// no arranque e fica em memória mesmo com o histórico desligado (só nesta
+    /// sessão, nunca em disco).
+    last_text: Option<String>,
 }
 
 pub fn spawn(
@@ -137,6 +150,19 @@ async fn run(
     mut rx: UnboundedReceiver<DictationEvent>,
 ) {
     let openrouter = load_openrouter(&deps.state);
+    // O ditado mais recente do histórico (ler o ficheiro é disco: `spawn_blocking`).
+    let state = Arc::clone(&deps.state);
+    let last_text = tauri::async_runtime::spawn_blocking(move || {
+        state
+            .config()
+            .history_enabled
+            .then(|| state.history.list().into_iter().next().map(|h| h.text))
+            .flatten()
+    })
+    .await
+    .ok()
+    .flatten();
+    deps.tray.set_paste_last_available(last_text.is_some());
     let mut o = Orchestrator {
         deps,
         tx,
@@ -149,6 +175,7 @@ async fn run(
         retry_offered: false,
         shown: 0,
         last_busy: None,
+        last_text,
     };
     while let Some(event) = rx.recv().await {
         o.handle(event);
@@ -198,6 +225,33 @@ impl Orchestrator {
                 // Um ditado em curso já tem o seu `Arc` e termina com o cliente antigo;
                 // o próximo cria um novo.
                 self.openrouter = None;
+                return;
+            }
+            DictationEvent::LastText(text) => {
+                self.last_text = Some(text);
+                self.deps.tray.set_paste_last_available(true);
+                return;
+            }
+            DictationEvent::HistoryCleared => {
+                self.last_text = None;
+                self.deps.tray.set_paste_last_available(false);
+                return;
+            }
+            DictationEvent::PasteLast => {
+                self.paste_last();
+                return;
+            }
+            DictationEvent::PastedAgain(outcome) => {
+                // Se entretanto começaste a ditar, a barra mostra o ditado novo.
+                if self.machine.phase() != Phase::Idle {
+                    return;
+                }
+                match outcome {
+                    Outcome::Pasted => self.show_result(TrayState::Done, DONE_FOR),
+                    Outcome::Copied => self.show_result(TrayState::Copied, COPIED_FOR),
+                    Outcome::Failed { reason, .. } => self.show_failure(reason, false),
+                    Outcome::Nothing => {}
+                }
                 return;
             }
             DictationEvent::ProcessingFinished { job, outcome } => {
@@ -284,8 +338,10 @@ impl Orchestrator {
         self.target = focus::foreground();
         // Primeiro o microfone (é o que tem latência), depois o som, a
         // ligação HTTP (corre enquanto falas) e o resto.
-        let sounds = self.deps.state.config().sounds;
-        self.deps.recorder.start(at, sounds);
+        let config = self.deps.state.config();
+        self.deps
+            .recorder
+            .start(at, config.sounds, config.input_device.clone());
         self.deps.cue(Cue::Start);
         // A barra segue o monitor onde está o cursor (como no Wispr Flow).
         crate::overlay::reposition_for(&app);
@@ -349,6 +405,27 @@ impl Orchestrator {
         let commit = Commit::default();
         self.spawn_job(commit.clone(), true, async move {
             pipeline::retry(state, provider, rec, target, commit).await
+        });
+    }
+
+    /// "Colar o último ditado": cola-o na janela onde estavas antes de abrir o
+    /// menu; se não houver nenhuma (ex.: o menu foi aberto pelo teclado), fica só
+    /// no clipboard e a barra diz "Copiado".
+    fn paste_last(&mut self) {
+        if self.machine.phase() != Phase::Idle {
+            tracing::info!("colar o último ditado pedido a meio de um ditado; ignorado");
+            return;
+        }
+        let Some(text) = self.last_text.clone() else {
+            tracing::debug!("colar o último ditado pedido sem ditado guardado");
+            return;
+        };
+        let target = crate::tray::take_menu_target().or_else(focus::foreground_for_retry);
+        let state = Arc::clone(&self.deps.state);
+        let tx = self.tx.clone();
+        tauri::async_runtime::spawn(async move {
+            let outcome = pipeline::paste_again(state, text, target).await;
+            let _ = tx.send(DictationEvent::PastedAgain(outcome));
         });
     }
 

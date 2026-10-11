@@ -339,6 +339,10 @@ async fn transcribe_and_paste(
                     tracing::info!("cancelado antes de colar; nada foi colado");
                     return Outcome::Nothing;
                 }
+                // Para o "Colar o último ditado" (só falha se a app estiver a sair).
+                let _ = state
+                    .events
+                    .send(super::DictationEvent::LastText(text.clone()));
                 let restore_clipboard = !config.keep_in_clipboard;
                 let outcome = paste_text(
                     &state,
@@ -452,34 +456,7 @@ async fn paste_text(
 ) -> Outcome {
     // `move` passa a posse do `text` para a thread de bloqueio. A janela é
     // verificada lá dentro, o mais perto possível do Ctrl+V.
-    let job = move || -> Result<Pasting, paste::PasteError> {
-        let now = focus::foreground();
-        if focus::should_paste(target, now) {
-            let (took, restore) = paste::paste(&text)?;
-            // A reposição do clipboard é agendada aqui dentro, numa thread própria:
-            // uma vez colado, nada (nem um cancelamento) a pode impedir de correr.
-            if restore_clipboard {
-                let spawned = std::thread::Builder::new()
-                    .name("ditok-clipboard".into())
-                    .spawn(move || {
-                        std::thread::sleep(paste::RESTORE_AFTER);
-                        restore.run();
-                    });
-                if let Err(e) = spawned {
-                    tracing::warn!(error = %e, "não foi possível agendar a reposição do clipboard");
-                }
-            }
-            // Senão, o `restore` é largado aqui sem correr e o ditado fica no clipboard.
-            Ok(Pasting::Pasted(took))
-        } else {
-            tracing::info!(
-                ?target,
-                ?now,
-                "a janela em foco mudou durante o ditado; texto só copiado"
-            );
-            paste::copy(&text).map(|()| Pasting::Copied)
-        }
-    };
+    let job = move || paste_or_copy(&text, restore_clipboard, target);
     match tauri::async_runtime::spawn_blocking(job).await {
         Ok(Ok(Pasting::Copied)) => {
             m.total_ms = Some(ms(released_at.elapsed()));
@@ -508,6 +485,77 @@ async fn paste_text(
         Err(e) => {
             tracing::error!(error = %e, "tarefa de colagem falhou");
             m.error = Some(e.to_string());
+            Outcome::failed(FailReason::Generic)
+        }
+    }
+}
+
+/// Bloqueante. Cola se a janela em primeiro plano for `target`; senão deixa o
+/// texto só no clipboard.
+fn paste_or_copy(
+    text: &str,
+    restore_clipboard: bool,
+    target: Option<focus::Window>,
+) -> Result<Pasting, paste::PasteError> {
+    let now = focus::foreground();
+    if focus::should_paste(target, now) {
+        let (took, restore) = paste::paste(text)?;
+        // A reposição do clipboard é agendada aqui dentro, numa thread própria:
+        // uma vez colado, nada (nem um cancelamento) a pode impedir de correr.
+        if restore_clipboard {
+            let spawned = std::thread::Builder::new()
+                .name("ditok-clipboard".into())
+                .spawn(move || {
+                    std::thread::sleep(paste::RESTORE_AFTER);
+                    restore.run();
+                });
+            if let Err(e) = spawned {
+                tracing::warn!(error = %e, "não foi possível agendar a reposição do clipboard");
+            }
+        }
+        // Senão, o `restore` é largado aqui sem correr e o ditado fica no clipboard.
+        Ok(Pasting::Pasted(took))
+    } else {
+        tracing::info!(
+            ?target,
+            ?now,
+            "a janela em foco não é a de destino; texto só copiado"
+        );
+        paste::copy(text).map(|()| Pasting::Copied)
+    }
+}
+
+/// "Colar o último ditado" (menu do tray ou da barra). `target`: a janela onde
+/// estavas antes de abrir o menu; volto a pô-la à frente antes de colar.
+pub async fn paste_again(
+    state: Arc<AppState>,
+    text: String,
+    target: Option<focus::Window>,
+) -> Outcome {
+    let restore_clipboard = !state.config().keep_in_clipboard;
+    let job = move || {
+        if let Some(w) = target
+            && !focus::activate(w)
+        {
+            tracing::info!("não consegui voltar à janela de destino");
+        }
+        paste_or_copy(&text, restore_clipboard, target)
+    };
+    match tauri::async_runtime::spawn_blocking(job).await {
+        Ok(Ok(Pasting::Pasted(_))) => Outcome::Pasted,
+        Ok(Ok(Pasting::Copied)) => Outcome::Copied,
+        Ok(Err(e @ paste::PasteError::Input(_))) => {
+            tracing::error!(error = %e, "colagem falhou; o texto ficou no clipboard");
+            state.notify(&e.to_string());
+            Outcome::Copied
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "colagem falhou");
+            state.notify(&e.to_string());
+            Outcome::failed(FailReason::Generic)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "tarefa de colagem falhou");
             Outcome::failed(FailReason::Generic)
         }
     }

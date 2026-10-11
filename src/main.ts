@@ -3,13 +3,14 @@
 
 import "@fontsource/instrument-serif/latin-400.css";
 import mascotUrl from "../design/mascot/parado.svg?inline";
-import { api, errorText, onDictationRecorded } from "./api";
+import { api, errorText, onDictationRecorded, onOpenRequest, onSettingsChanged, type OpenTarget } from "./api";
 import { setupDictionary } from "./dictionary-page";
 import { setupFiles } from "./files-page";
 import { clearHomeHistory, refreshHome, setupHome } from "./home";
 import { renderMemory, renderStats, setupMetrics } from "./metrics-page";
-import { openSettings, setupSettings } from "./settings-dialog";
-import { $, app, onViewChange, refreshKey, toast } from "./store";
+import { isOnboardingOpen, openOnboarding, setupOnboarding } from "./onboarding";
+import { openKeySettings, openSettings, openShortcutSettings, setupSettings } from "./settings-dialog";
+import { $, app, notifyViewChange, onViewChange, refreshKey, toast } from "./store";
 
 type Page = "inicio" | "dicionario" | "ficheiros" | "metricas";
 
@@ -35,9 +36,26 @@ function setupNav() {
 
 /** Ponto verde/âmbar na barra lateral: o ditado está pronto a usar? */
 function renderStatus() {
-  const ok = app.view.api_key_set;
-  $("status-dot").className = `dot ${ok ? "ok" : "warn"}`;
-  $("status-text").textContent = ok ? "Pronto a ditar" : "Falta a chave";
+  const { api_key_set: key, shortcut_ok: shortcut } = app.view;
+  $("status-dot").className = `dot ${key && shortcut ? "ok" : "warn"}`;
+  $("status-text").textContent = !key ? "Falta a chave" : !shortcut ? "Atalho ocupado" : "Pronto a ditar";
+}
+
+/** A pílula (ou outro sítio fora da janela) pediu para mostrar algo. */
+function openTarget(target: OpenTarget) {
+  if (target === "shortcut") {
+    openShortcutSettings();
+  } else if (isOnboardingOpen() || !app.view.config.onboarding_done) {
+    openOnboarding("key");
+  } else {
+    openKeySettings();
+  }
+}
+
+/** Vai buscar o sítio pendente (se houver) e mostra-o. */
+async function takeOpenRequest() {
+  const target = await api.takeOpen().catch(() => null);
+  if (target) openTarget(target);
 }
 
 /// Mostra o cartão "Nova versão" se o GitHub tiver uma versão mais recente.
@@ -64,6 +82,7 @@ async function checkUpdate() {
 /// Tira o menu do WebView2 (Anterior, Atualizar, Imprimir…), que denuncia que é
 /// uma página web. Fica nas caixas de texto, onde Copiar/Colar dá jeito, e em
 /// `npm run tauri dev` para continuar a haver "Inspecionar".
+/// (Na barra flutuante, o clique direito abre o menu do Ditok: ver overlay.ts.)
 function blockContextMenu() {
   if (import.meta.env.DEV) return;
   document.addEventListener("contextmenu", (e) => {
@@ -112,8 +131,23 @@ async function main() {
   setupHome();
   setupDictionary();
   setupMetrics();
+  setupOnboarding();
   onViewChange(renderStatus);
   renderStatus();
+
+  // Primeira execução: o guia por cima de tudo. Depois, se a janela foi aberta
+  // por um clique num aviso da pílula, vai a esse sítio.
+  if (!app.view.config.onboarding_done) openOnboarding();
+  await takeOpenRequest();
+  void onOpenRequest(() => void takeOpenRequest());
+  // Mudaram por fora (ex.: "Silenciar sons" no tray): sem isto, a próxima
+  // alteração aqui gravava por cima com o valor antigo.
+  void onSettingsChanged(async () => {
+    const view = await api.getSettings().catch(() => null);
+    if (!view) return;
+    app.view = view;
+    notifyViewChange();
+  });
 
   // Em paralelo: nenhuma destas chamadas depende das outras.
   await Promise.allSettled([

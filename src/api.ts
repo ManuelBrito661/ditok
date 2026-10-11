@@ -25,6 +25,10 @@ export interface Config {
   snippets: Snippet[];
   sounds: boolean;
   monthly_budget_usd: number | null;
+  /** Nome do microfone; `null` = o predefinido do sistema. */
+  input_device: string | null;
+  /** O guia de primeira execução já foi concluído (ou saltado). */
+  onboarding_done: boolean;
 }
 
 /** Uma palavra do dicionário. `from`: formas separadas por vírgulas; vazio = a própria palavra. */
@@ -43,6 +47,8 @@ export interface SettingsView {
   config: Config;
   defaults: Config;
   api_key_set: boolean;
+  /** `false`: outra app ocupou o atalho de ditado e ele não funciona. */
+  shortcut_ok: boolean;
   autostart: boolean;
   paths: { config: string; data: string; logs: string };
 }
@@ -120,6 +126,29 @@ export interface UpdateInfo {
   notes: string | null;
 }
 
+/** Um microfone (audio/capture.rs, InputDevice). */
+export interface InputDevice {
+  name: string;
+  is_default: boolean;
+}
+
+/** O que o medidor do microfone conta (audio/capture.rs, MicEvent). */
+export type MicEvent =
+  | { kind: "opened"; value: string }
+  | { kind: "level"; value: number }
+  | { kind: "failed"; value: string };
+
+/** O que impede o ditado de funcionar (state.rs, Status). */
+export interface Status {
+  key_missing: boolean;
+  shortcut_ok: boolean;
+  shortcut: string;
+  shortcut_label: string;
+}
+
+/** Sítios para onde a janela pode ser levada de fora (settings_window.rs, open_at). */
+export type OpenTarget = "key" | "shortcut";
+
 export const api = {
   getSettings: () => invoke<SettingsView>("get_settings"),
   saveSettings: (config: Config) => invoke<SettingsView>("save_settings", { config }),
@@ -136,16 +165,40 @@ export const api = {
   getMemory: () => invoke<MemoryReport | null>("get_memory"),
   checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
+  listInputDevices: () => invoke<InputDevice[]>("list_input_devices"),
+  /** Liga (ou renova) o medidor do microfone; desliga-se sozinho sem renovação. */
+  micMonitor: (on: boolean) => invoke<void>("mic_monitor", { on }),
+  openOpenRouterKeys: () => invoke<void>("open_openrouter_keys"),
+  /** Para onde a janela foi chamada (ex.: clique na pílula); uma só vez. */
+  takeOpen: () => invoke<OpenTarget | null>("main_take_open"),
   // Barra flutuante (overlay.ts)
   overlayClick: () => invoke<void>("overlay_click"),
   overlayCancel: () => invoke<void>("overlay_cancel"),
   overlayHitRect: (rect: { x: number; y: number; width: number; height: number }) =>
     invoke<void>("overlay_hit_rect", { rect }),
+  overlayStatus: () => invoke<Status>("overlay_status"),
+  overlayOpen: (target: OpenTarget) => invoke<void>("overlay_open", { target }),
+  overlayMenu: () => invoke<void>("overlay_menu"),
 };
 
 /// Emitido pelo backend depois de cada ditado (pipeline.rs, EVENT_DICTATION_RECORDED).
 export function onDictationRecorded(handler: () => void): Promise<UnlistenFn> {
   return listen("dictation-recorded", handler);
+}
+
+/// As definições mudaram fora da janela (ex.: "Silenciar sons" no tray; state.rs).
+export function onSettingsChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("settings-changed", handler);
+}
+
+/// Alguém (a pílula) pediu para a janela ir a um sítio; vai buscá-lo com `api.takeOpen`.
+export function onOpenRequest(handler: () => void): Promise<UnlistenFn> {
+  return listen("main:open", handler);
+}
+
+/// Medidor do microfone fora de um ditado (lib.rs, "mic:level").
+export function onMic(handler: (e: MicEvent) => void): Promise<UnlistenFn> {
+  return listen<MicEvent>("mic:level", (e) => handler(e.payload));
 }
 
 /// Os comandos rejeitam com o texto do erro (CommandError em commands.rs).

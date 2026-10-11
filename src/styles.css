@@ -759,6 +759,79 @@ dialog[open] { animation: dlg-in 0.2s var(--ease); }
 .model-id { grid-column: 1; color: var(--muted); }
 .model-price { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 
+/* ---------------------------------------------------------------- guia de primeira execução */
+dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); }
+.ob { display: flex; flex-direction: column; max-height: calc(100vh - 48px); }
+.ob-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 18px 16px 22px;
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--border);
+}
+.ob-mascot { flex: none; }
+.ob-head-text { flex: 1; display: grid; gap: 8px; min-width: 0; }
+.ob-kicker { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.ob-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ob-steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 11px 3px 4px;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+.ob-step-num {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ob-steps li[aria-current] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border); }
+.ob-steps li[aria-current] .ob-step-num { background: var(--primary); color: var(--on-primary); box-shadow: none; }
+.ob-steps li.done { color: var(--text); }
+.ob-steps li.done .ob-step-num { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green-text); box-shadow: none; }
+
+.ob-body { overflow-y: auto; padding: 26px 32px 6px; }
+.ob-step { display: grid; gap: 14px; }
+.ob-step h2 { width: fit-content; margin: 0; font-size: 30px; line-height: 1.15; }
+.ob-step h2:focus-visible { outline-offset: 6px; border-radius: 4px; }
+.ob-step > p.muted { max-width: 520px; }
+.ob-howto { display: grid; gap: 6px; margin: 0; padding-left: 20px; }
+.ob-howto li::marker { color: var(--muted); font-weight: 600; }
+.ob-key-form { display: flex; flex-wrap: wrap; gap: 8px; }
+/* A mensagem ocupa sempre uma linha: o resto do passo não salta quando aparece. */
+.ob-msg { min-height: 1.5em; color: var(--muted); font-size: var(--fs-sm); }
+.ob-msg.ok { color: var(--green-text); }
+.ob-msg.error { color: var(--red-text); }
+.ob-field { display: grid; justify-items: start; gap: 6px; }
+.ob-field select { width: min(100%, 420px); }
+.ob-meter { height: 12px; }
+/* O nível chega ~20 vezes por segundo: transição curta, senão a barra fica atrasada. */
+.ob-meter span { width: 0; transition: width 0.08s linear; }
+.ob-try {
+  width: 100%;
+  min-height: 112px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.ob-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px 20px; }
+
 /* ---------------------------------------------------------------- aviso flutuante */
 #toast {
   position: fixed;

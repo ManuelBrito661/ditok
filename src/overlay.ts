@@ -6,7 +6,10 @@
 // - "overlay:level": nível do microfone entre 0 e 1, ~20 vezes por segundo
 // - "overlay:latched": o ditado está em modo alternar (mostra ✕ e ■)
 // - "overlay:hover": o rato entrou/saiu da pílula (o Rust vigia o cursor)
-// e responde com os comandos overlay_click / overlay_cancel / overlay_hit_rect.
+// - "overlay:notice": falta a chave / o atalho está ocupado (aviso persistente em
+//   repouso); também pedido com overlay_status quando a página carrega
+// e responde com os comandos overlay_click / overlay_cancel / overlay_hit_rect /
+// overlay_open (clique num aviso) / overlay_menu (clique direito).
 // Não há polling nem temporizadores a correr em repouso: as animações são CSS, e
 // o único temporizador (o "a demorar…") só existe enquanto se processa.
 
@@ -15,7 +18,7 @@ import parado from "../design/mascot/parado.svg?inline";
 import aOuvir from "../design/mascot/a-ouvir.svg?inline";
 import aProcessar from "../design/mascot/a-processar.svg?inline";
 import pronto from "../design/mascot/pronto.svg?inline";
-import { api } from "./api";
+import { api, type OpenTarget, type Status } from "./api";
 import { renderKeys } from "./format";
 
 type State =
@@ -67,6 +70,20 @@ const ANNOUNCE: Record<State, string> = {
 };
 const BAR_COUNT = 14;
 
+/** Texto curto na pílula e dica por cima dela, para cada aviso persistente. */
+const NOTICE: Record<OpenTarget, { label: string; tip: string; spoken: string }> = {
+  key: {
+    label: "Falta a chave",
+    tip: "Falta a chave do OpenRouter · clica para a colar",
+    spoken: "Falta a chave do OpenRouter. Clica na barra para a colar.",
+  },
+  shortcut: {
+    label: "Atalho ocupado",
+    tip: "Outra app está a usar o atalho · clica para escolher outro",
+    spoken: "O atalho de ditado está ocupado por outra app. Clica na barra para escolher outro.",
+  },
+};
+
 const pill = document.getElementById("pill")!;
 const mascot = document.getElementById("mascot") as HTMLImageElement;
 const label = document.getElementById("label")!;
@@ -95,6 +112,38 @@ let recordingSince = 0;
 /** A última falha recebida; usada quando o estado passa a "failed". */
 let failure: Failure | null = null;
 let slowTimer: number | undefined;
+/** O que o backend diz que impede o ditado (null até a primeira resposta). */
+let status: Status | null = null;
+
+/** A chave vem primeiro: sem ela, um atalho a funcionar não serve de nada. */
+function currentNotice(): OpenTarget | null {
+  if (!status) return null;
+  if (status.key_missing) return "key";
+  if (!status.shortcut_ok) return "shortcut";
+  return null;
+}
+
+/** Mostra (ou tira) o aviso persistente. Só se vê em repouso; nos outros estados
+ *  o ditado tem prioridade e o aviso volta quando a pílula voltar a repousar. */
+function renderNotice() {
+  const notice = currentNotice();
+  const before = pill.dataset.notice ?? "";
+  pill.dataset.notice = notice ?? "";
+  const tipNotice = document.getElementById("tip-notice")!;
+  document.getElementById("tip-dictate")!.hidden = notice !== null;
+  tipNotice.hidden = notice === null;
+  tipNotice.textContent = notice ? NOTICE[notice].tip : "";
+  // A dica normal nunca anuncia um atalho que não funciona.
+  if (status && !notice) renderKeys(document.getElementById("tip-keys")!, status.shortcut);
+  if (pill.dataset.state !== "idle") return;
+  label.textContent = notice ? NOTICE[notice].label : "";
+  if (notice && notice !== before) announce.textContent = NOTICE[notice].spoken;
+}
+
+function onStatus(s: Status) {
+  status = s;
+  renderNotice();
+}
 
 function setState(state: State) {
   pill.dataset.state = state;
@@ -125,6 +174,7 @@ function setState(state: State) {
   }
   if (state !== "failed") failure = null;
   announce.textContent = spoken;
+  if (state === "idle") renderNotice();
 }
 
 function onFailure(f: Failure) {
@@ -177,13 +227,8 @@ function reportHitRect() {
 }
 new ResizeObserver(reportHitRect).observe(pill);
 
-async function onHover(inside: boolean) {
+function onHover(inside: boolean) {
   pill.classList.toggle("hover", inside);
-  if (inside && pill.dataset.state === "idle") {
-    // Lido a cada entrada: o atalho pode ter mudado nas definições.
-    const view = await api.getSettings().catch(() => null);
-    if (view) renderKeys(document.getElementById("tip-keys")!, view.config.shortcut);
-  }
 }
 
 pill.addEventListener("click", (e) => {
@@ -191,9 +236,19 @@ pill.addEventListener("click", (e) => {
   // que oferece "Tentar de novo" (o backend decide qual dos dois é).
   if ((e.target as Element).closest(".pill-button")) return;
   const state = pill.dataset.state;
-  if (state === "idle" || (state === "failed" && pill.classList.contains("retry"))) {
+  const notice = currentNotice();
+  if (state === "idle" && notice) {
+    // Com um aviso, o clique leva-te a resolvê-lo (ditar não funcionaria).
+    void api.overlayOpen(notice);
+  } else if (state === "idle" || (state === "failed" && pill.classList.contains("retry"))) {
     void api.overlayClick();
   }
+});
+// Clique direito: o mesmo menu do tray (abrir, colar o último ditado, sons…), em
+// vez do menu do WebView. O Rust só deixa o rato chegar aqui por cima da pílula.
+document.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  void api.overlayMenu();
 });
 document.getElementById("stop")!.addEventListener("click", () => void api.overlayClick());
 document.getElementById("cancel")!.addEventListener("click", () => void api.overlayCancel());
@@ -205,4 +260,7 @@ void listen<Failure>("overlay:failure", (e) => onFailure(e.payload));
 void listen("overlay:busy", () => onBusy());
 void listen<number>("overlay:level", (e) => onLevel(e.payload));
 void listen("overlay:latched", () => pill.classList.add("latched"));
-void listen<boolean>("overlay:hover", (e) => void onHover(e.payload));
+void listen<boolean>("overlay:hover", (e) => onHover(e.payload));
+void listen<Status>("overlay:notice", (e) => onStatus(e.payload));
+// A barra pode nascer depois do último aviso: pede o estado atual.
+void api.overlayStatus().then(onStatus, () => {});

@@ -139,6 +139,51 @@ pub fn change_dictation<R: Runtime>(
     Ok(())
 }
 
+/// Larga o atalho de ditado (só usado para desfazer um registo quando gravar as
+/// definições falha).
+pub fn unregister_dictation<R: Runtime>(app: &AppHandle<R>, shortcut: &str) {
+    if let Ok(parsed) = shortcut.parse::<Shortcut>()
+        && let Err(e) = app.global_shortcut().unregister(parsed)
+    {
+        tracing::warn!(error = %e, shortcut, "não foi possível largar o atalho");
+    }
+}
+
+/// "CommandOrControl+Shift+Space" → "Ctrl+Shift+Espaço" (no macOS, "Cmd+…"). Para
+/// o menu do tray e as notificações; a janela tem a sua versão em `format.ts`.
+pub fn pretty(shortcut: &str) -> String {
+    // Os nomes das teclas de comando, de sistema e Alt mudam com a plataforma.
+    let (cmd_or_ctrl, sup, alt) = if cfg!(target_os = "macos") {
+        ("Cmd", "Cmd", "Option")
+    } else {
+        ("Ctrl", "Win", "Alt")
+    };
+    shortcut
+        .split('+')
+        .filter(|p| !p.is_empty())
+        .map(|part| {
+            let label = match part.to_ascii_lowercase().as_str() {
+                "commandorcontrol" | "cmdorctrl" | "commandorctrl" | "cmdorcontrol" => cmd_or_ctrl,
+                "control" | "ctrl" => "Ctrl",
+                "super" | "command" | "cmd" | "meta" => sup,
+                "alt" | "option" => alt,
+                "shift" => "Shift",
+                "space" => "Espaço",
+                // `strip_prefix` devolve `Some(resto)` só se o prefixo estiver lá.
+                _ => {
+                    return part
+                        .strip_prefix("Key")
+                        .or_else(|| part.strip_prefix("Digit"))
+                        .unwrap_or(part)
+                        .to_owned();
+                }
+            };
+            label.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// O Esc só fica registado enquanto se grava: um atalho global "rouba" a tecla às
 /// outras apps, e não queremos isso no resto do tempo.
 pub fn set_cancel_enabled<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
@@ -169,6 +214,22 @@ mod tests {
         assert!(parse("CommandOrControl+Shift+Space").is_ok());
         assert!(parse("Control+Alt+KeyD").is_ok());
         assert!(parse("F13").is_ok());
+    }
+
+    #[test]
+    fn pretty_names_for_the_tray() {
+        let ctrl = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+        assert_eq!(
+            pretty("CommandOrControl+Shift+Space"),
+            format!("{ctrl}+Shift+Espaço")
+        );
+        assert_eq!(pretty("Control+Shift+KeyD"), "Ctrl+Shift+D");
+        assert_eq!(pretty("Control+Digit5"), "Ctrl+5");
+        assert_eq!(pretty("F13"), "F13");
     }
 
     #[test]

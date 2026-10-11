@@ -10,6 +10,7 @@ import {
   type ModelKind,
   type ModelList,
 } from "./api";
+import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
 import { ago, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
 
@@ -21,7 +22,11 @@ let models: Array<{ load: (refresh: boolean) => Promise<void>; loaded: boolean }
 /** Abre o modal (opcionalmente num separador) e carrega as listas de modelos na primeira vez. */
 export function openSettings(tab: Tab = "geral") {
   selectTab(tab);
-  if (!dialog().open) dialog().showModal();
+  if (!dialog().open) {
+    dialog().showModal();
+    // A cada abertura: entretanto podes ter ligado ou desligado um headset.
+    void loadDevices($<HTMLSelectElement>("input-device"));
+  }
   for (const m of models) {
     if (!m.loaded) {
       m.loaded = true;
@@ -37,6 +42,19 @@ function selectTab(tab: Tab) {
     t.tabIndex = selected ? 0 : -1;
     $(t.getAttribute("aria-controls")!).hidden = !selected;
   }
+}
+
+/** Abre no separador Geral com o foco no botão "Mudar" do atalho (ex.: o atalho
+ *  está ocupado e clicaste no aviso da pílula). */
+export function openShortcutSettings() {
+  openSettings("geral");
+  $("shortcut-record").focus();
+}
+
+/** Abre no separador Transcrição com o foco no campo da chave. */
+export function openKeySettings() {
+  openSettings("transcricao");
+  $("key-input").focus();
 }
 
 function setupTabs() {
@@ -283,6 +301,9 @@ function modelPicker(kind: ModelKind, prefix: "stt" | "cleanup", field: "stt_mod
 function renderControls() {
   const c = app.view.config;
   if (!recordingShortcut) renderKeys($("shortcut-display"), c.shortcut);
+  // Outra app ocupou o atalho: diz porquê ele não funciona até escolheres outro.
+  $("shortcut-busy").hidden = app.view.shortcut_ok;
+  syncDeviceSelect($<HTMLSelectElement>("input-device"));
   $<HTMLSelectElement>("language").value = c.language ?? "";
   $<HTMLInputElement>("autostart").checked = app.view.autostart;
   $<HTMLInputElement>("save-last-recording").checked = c.save_last_recording;
@@ -311,6 +332,7 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   checkbox("sounds", "sounds");
   checkbox("cleanup-enabled", "cleanup_enabled");
   checkbox("history-enabled", "history_enabled");
+  bindDeviceSelect($<HTMLSelectElement>("input-device"));
 
   $<HTMLSelectElement>("language").addEventListener("change", (e) =>
     save({ language: (e.target as HTMLSelectElement).value || null }));

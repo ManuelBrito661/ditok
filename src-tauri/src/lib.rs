@@ -26,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
 
 pub fn run() {
     let started = Instant::now();
@@ -37,8 +37,11 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         // Tem de ser o primeiro plugin: uma segunda instância lutaria pelo atalho.
-        .plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {
-            tracing::info!(?argv, "segunda instância ignorada");
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Abrir o Ditok outra vez (atalho do menu Iniciar, ícone…) com ele já a
+            // correr: em vez de não acontecer nada, mostro a janela principal.
+            tracing::info!(?argv, "segunda instância: a abrir a janela");
+            settings_window::open(app);
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -57,14 +60,37 @@ pub fn run() {
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "Ditok a arrancar");
 
             let config_dir = paths.app_config_dir()?;
-            let config = config::Config::load_or_create(&config_dir);
+            // Tem de ser lido antes de `load_or_create`, que pode criar o ficheiro.
+            let predates_onboarding = config::Config::predates_onboarding(&config_dir);
+            let mut config = config::Config::load_or_create(&config_dir);
             tracing::info!(path = %config::Config::path(&config_dir).display(), ?config, "configuração");
 
-            let tray = tray::Tray::new(app.handle(), tx.clone())?;
-            if let Err(e) = hotkey::register_dictation(app.handle(), &config.shortcut) {
-                tracing::error!(error = %e, "sem atalho de ditado");
-                tray.set_tooltip("Ditok: atalho indisponível (ver log)");
+            let key_set = match secrets::get() {
+                Ok(key) => key.is_some(),
+                Err(e) => {
+                    tracing::error!(error = %e, "não foi possível ler a chave do cofre");
+                    false
+                }
+            };
+            // Quem já usava o Ditok (config.json de antes do guia e chave guardada)
+            // não precisa do guia de primeira execução.
+            if predates_onboarding && key_set && !config.onboarding_done {
+                config.onboarding_done = true;
+                if let Err(e) = config.save(&config_dir) {
+                    tracing::warn!(error = %e, "não foi possível marcar o guia como feito");
+                }
             }
+            let show_window = !config.onboarding_done || !key_set;
+
+            let tray = tray::Tray::new(app.handle(), tx.clone(), &config)?;
+            let shortcut_ok = match hotkey::register_dictation(app.handle(), &config.shortcut) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::error!(error = %e, "sem atalho de ditado");
+                    tray.set_tooltip("Ditok: atalho ocupado por outra app");
+                    false
+                }
+            };
 
             let dirs = state::Dirs {
                 config: config_dir,
@@ -81,6 +107,16 @@ pub fn run() {
             ));
             // Os comandos da janela recebem o mesmo `Arc` via `State<Arc<AppState>>`.
             app.manage(Arc::clone(&state));
+            // O menu do tray nasce com a linha do atalho certa; isto só a marca
+            // "ocupado" se for o caso (a barra pede o estado quando carregar).
+            state.set_key_set(key_set);
+            state.set_shortcut_ok(shortcut_ok);
+            if !shortcut_ok {
+                state.notify(&format!(
+                    "Não consegui usar o atalho {}: outra app já o ocupa. Clica na barra ou abre o Ditok para escolher outro.",
+                    hotkey::pretty(&state.config().shortcut)
+                ));
+            }
             if state.config().show_overlay {
                 // Criar um WebView demora ~300 ms. Fazemo-lo numa thread à parte,
                 // depois de o tray e o atalho estarem prontos: o arranque continua
@@ -91,7 +127,14 @@ pub fn run() {
             // O nível do microfone vai diretamente da thread de áudio para a barra.
             let handle = app.handle().clone();
             let level_sink: audio::LevelSink = Box::new(move |level| overlay::emit_level(&handle, level));
-            let recorder = audio::Recorder::spawn(tx.clone(), level_sink)?;
+            // O medidor do guia (fora de um ditado) vai para a janela principal.
+            let handle = app.handle().clone();
+            let mic_sink: audio::MicSink = Box::new(move |event| {
+                let _ = handle.emit_to(settings_window::LABEL, "mic:level", event);
+            });
+            let recorder = audio::Recorder::spawn(tx.clone(), level_sink, mic_sink)?;
+            // Uma cópia para os comandos do medidor (`State<Recorder>`).
+            app.manage(recorder.clone());
             let sounds = sound::Sounds::spawn()?;
             updater::spawn_background_checks(app.handle().clone(), Arc::clone(&state));
             let deps = dictation::Deps {
@@ -101,6 +144,12 @@ pub fn run() {
                 state,
             };
             dictation::spawn(deps, tx, rx);
+
+            // Primeira execução (ou sem chave): sem a janela, ninguém saberia o que
+            // fazer a seguir. Abre já no guia ou no aviso da chave.
+            if show_window {
+                settings_window::open(app.handle());
+            }
 
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "pronto");
             sysmem::log_after(Duration::from_secs(5), "em repouso, sem janela");
@@ -131,6 +180,13 @@ pub fn run() {
             commands::file_status,
             commands::file_clear,
             commands::file_save_beside,
+            commands::overlay_status,
+            commands::overlay_open,
+            commands::overlay_menu,
+            commands::main_take_open,
+            commands::open_openrouter_keys,
+            commands::list_input_devices,
+            commands::mic_monitor,
         ])
         .build(tauri::generate_context!());
 

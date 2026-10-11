@@ -57,6 +57,13 @@ pub struct Config {
     /// Orçamento mensal em USD; `None` = sem orçamento. Há um aviso aos 80 % e
     /// outro aos 100 % (ver `metrics::BudgetAlert`).
     pub monthly_budget_usd: Option<f64>,
+    /// Microfone escolhido, pelo nome que o sistema lhe dá; `None` = o
+    /// predefinido do sistema. Se deixar de existir, uso o predefinido (ver
+    /// `audio/capture.rs`).
+    pub input_device: Option<String>,
+    /// O guia de primeira execução já foi concluído (ou saltado). Um config.json
+    /// sem este campo é de uma versão anterior ao guia: ver `predates_onboarding`.
+    pub onboarding_done: bool,
 }
 
 impl Default for Config {
@@ -78,6 +85,8 @@ impl Default for Config {
             snippets: Vec::new(),
             sounds: true,
             monthly_budget_usd: None,
+            input_device: None,
+            onboarding_done: false,
         }
     }
 }
@@ -102,6 +111,8 @@ pub enum ConfigError {
     EntryTooLong,
     #[error("o orçamento tem de ser um valor em USD maior do que 0 (ou vazio para não ter)")]
     Budget,
+    #[error("o nome do microfone é demasiado longo")]
+    InputDevice,
 }
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
@@ -133,6 +144,13 @@ impl Config {
             && !(budget.is_finite() && budget > 0.0 && budget <= 100_000.0)
         {
             return Err(ConfigError::Budget);
+        }
+        if self
+            .input_device
+            .as_deref()
+            .is_some_and(|d| d.chars().count() > MAX_PHRASE_CHARS)
+        {
+            return Err(ConfigError::InputDevice);
         }
         if self.dictionary.len() > MAX_ENTRIES || self.snippets.len() > MAX_ENTRIES {
             return Err(ConfigError::TooManyEntries);
@@ -184,6 +202,20 @@ impl Config {
         }
     }
 
+    /// `true` se o config.json existe mas foi escrito por uma versão anterior ao
+    /// guia de primeira execução (não tem o campo `onboarding_done`). Quem já
+    /// usava o Ditok com a chave guardada não precisa do guia (ver lib.rs).
+    ///
+    /// Porquê ler o ficheiro outra vez: depois de o `serde` preencher os campos em
+    /// falta com o `Default`, um `false` "em falta" e um `false` escrito são iguais.
+    pub fn predates_onboarding(config_dir: &Path) -> bool {
+        let Ok(bytes) = std::fs::read(Self::path(config_dir)) else {
+            return false;
+        };
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .is_ok_and(|v| v.is_object() && v.get("onboarding_done").is_none())
+    }
+
     /// Escreve num ficheiro temporário e renomeia: se a app morrer a meio, o
     /// config.json antigo fica intacto em vez de meio escrito.
     pub fn save(&self, config_dir: &Path) -> std::io::Result<()> {
@@ -221,6 +253,30 @@ mod tests {
         assert!(c.dictionary.is_empty() && c.snippets.is_empty());
         assert!(c.sounds, "sons ligados por omissão");
         assert_eq!(c.monthly_budget_usd, None);
+        assert_eq!(c.input_device, None, "microfone predefinido do sistema");
+        assert!(!c.onboarding_done);
+    }
+
+    #[test]
+    fn detects_configs_from_before_the_onboarding() {
+        let dir =
+            std::env::temp_dir().join(format!("ditok-onboarding-test-{}", std::process::id()));
+        assert!(
+            !Config::predates_onboarding(&dir),
+            "sem ficheiro: instalação nova"
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(Config::path(&dir), r#"{"sounds": false}"#).unwrap();
+        assert!(
+            Config::predates_onboarding(&dir),
+            "versão antiga, sem o campo"
+        );
+        Config::default().save(&dir).unwrap();
+        assert!(
+            !Config::predates_onboarding(&dir),
+            "versão nova, com o campo"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -292,8 +348,17 @@ mod tests {
         }
         let ok = Config {
             monthly_budget_usd: Some(10.0),
+            input_device: Some("Microfone (Realtek Audio)".into()),
             ..Config::default()
         };
         assert!(ok.validate().is_ok());
+        let long_device = Config {
+            input_device: Some("x".repeat(500)),
+            ..Config::default()
+        };
+        assert!(matches!(
+            long_device.validate(),
+            Err(ConfigError::InputDevice)
+        ));
     }
 }

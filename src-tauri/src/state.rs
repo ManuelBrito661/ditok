@@ -3,17 +3,38 @@
 
 use std::{
     path::PathBuf,
-    sync::{Arc, PoisonError, RwLock},
+    sync::{
+        Arc, PoisonError, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::Config, dictation::DictationEvent, files::FileJobs, history::HistoryStore,
-    metrics::MetricsStore, secrets, stt::openrouter::OpenRouter, text::TextRules,
+    config::Config, dictation::DictationEvent, files::FileJobs, history::HistoryStore, hotkey,
+    metrics::MetricsStore, overlay, secrets, stt::openrouter::OpenRouter, text::TextRules, tray,
 };
+
+/// Emitido para a janela principal quando as definições mudam por fora dela (ex.:
+/// "Silenciar sons" no menu do tray), para não gravar por cima com valores velhos.
+pub const EVENT_SETTINGS_CHANGED: &str = "settings-changed";
+
+/// O que impede o ditado de funcionar, para os avisos persistentes da barra e a
+/// linha do atalho no menu do tray.
+#[derive(Debug, Clone, Serialize)]
+pub struct Status {
+    pub key_missing: bool,
+    /// O atalho de ditado está registado (outra app pode tê-lo ocupado).
+    pub shortcut_ok: bool,
+    /// O atalho como está no config.json ("CommandOrControl+Shift+Space").
+    pub shortcut: String,
+    /// O mesmo, legível ("Ctrl+Shift+Espaço").
+    pub shortcut_label: String,
+}
 
 pub struct AppState {
     pub app: AppHandle,
@@ -33,6 +54,10 @@ pub struct AppState {
     pub files: FileJobs,
     /// Para avisar o orquestrador (ex.: a chave mudou).
     pub events: UnboundedSender<DictationEvent>,
+    /// Há chave no cofre? Guardado aqui para a barra não ter de ir ao cofre.
+    /// `AtomicBool`: escrito pelos comandos, lido por quem quiser, sem `Mutex`.
+    key_set: AtomicBool,
+    shortcut_ok: AtomicBool,
 }
 
 /// A configuração e as regras de texto compiladas a partir dela. Andam juntas
@@ -78,7 +103,41 @@ impl AppState {
             log_dir: dirs.log,
             http,
             events,
+            key_set: AtomicBool::new(false),
+            shortcut_ok: AtomicBool::new(true),
         }
+    }
+
+    pub fn status(&self) -> Status {
+        let shortcut = self.config().shortcut.clone();
+        Status {
+            key_missing: !self.key_set.load(Ordering::Relaxed),
+            shortcut_ok: self.shortcut_ok(),
+            shortcut_label: hotkey::pretty(&shortcut),
+            shortcut,
+        }
+    }
+
+    pub fn shortcut_ok(&self) -> bool {
+        self.shortcut_ok.load(Ordering::Relaxed)
+    }
+
+    pub fn set_key_set(&self, set: bool) {
+        self.key_set.store(set, Ordering::Relaxed);
+        self.publish();
+    }
+
+    pub fn set_shortcut_ok(&self, ok: bool) {
+        self.shortcut_ok.store(ok, Ordering::Relaxed);
+        self.publish();
+    }
+
+    /// Conta à barra e ao menu do tray o estado atual (chave, atalho, sons).
+    /// Barato: um evento e duas mudanças de texto no menu.
+    pub fn publish(&self) {
+        let status = self.status();
+        overlay::emit_notice(&self.app, &status);
+        tray::sync_menu(&self.app, &status, self.config().sounds);
     }
 
     pub fn config(&self) -> Arc<Config> {

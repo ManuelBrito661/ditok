@@ -8,8 +8,12 @@
     <script type="module" src="/src/overlay.ts" defer></script>
   </head>
   <body>
-    <!-- Dica que aparece por cima da pílula quando o rato lhe passa por cima (em repouso). -->
-    <div id="tip" role="tooltip">Clica ou segura <span id="tip-keys" class="keys"></span> para ditar</div>
+    <!-- Dica que aparece por cima da pílula quando o rato lhe passa por cima (em repouso).
+         Com um aviso (sem chave, atalho ocupado), diz o que falta em vez do atalho. -->
+    <div id="tip" role="tooltip">
+      <span id="tip-dictate">Clica ou segura <span id="tip-keys" class="keys"></span> para ditar</span>
+      <span id="tip-notice" hidden></span>
+    </div>
 
     <!-- Só as mudanças de estado são anunciadas aos leitores de ecrã. O cronómetro
          (que muda a cada segundo) fica fora desta região, senão seria lido sem parar. -->
@@ -19,7 +23,8 @@
          (vem do backend). class "latched": modo alternar, mostra ✕ e ■. class "hover":
          o rato está por cima. class "slow": a processar há mais de 5 s. class "retry":
          a falha oferece "Tentar de novo". class "busy": abanão quando o atalho é premido
-         a meio do processamento. -->
+         a meio do processamento. data-notice: "key" | "shortcut" | "" (aviso persistente
+         em repouso: falta a chave, o atalho está ocupado). Clique direito: o menu do Ditok. -->
     <div id="pill" data-state="idle">
       <button id="cancel" class="pill-button" type="button" aria-label="Cancelar o ditado">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>

@@ -330,12 +330,25 @@
                 <div class="row-text">
                   <span id="shortcut-label" class="row-title">Atalho de ditado</span>
                   <span class="row-desc">Segura para falar; toca rapidamente para o modo alternar. Esc cancela.</span>
+                  <p id="shortcut-busy" class="error" hidden>Outra app está a usar este atalho, por isso não funciona. Escolhe outro em "Mudar".</p>
                   <p id="shortcut-error" class="error" hidden></p>
                 </div>
                 <div class="row-control">
                   <span id="shortcut-display" class="keys" aria-labelledby="shortcut-label"></span>
                   <button id="shortcut-record" type="button" class="secondary">Mudar</button>
                   <button id="shortcut-reset" type="button" class="ghost">Repor</button>
+                </div>
+              </div>
+
+              <div class="row">
+                <label class="row-text" for="input-device">
+                  <span class="row-title">Microfone</span>
+                  <span class="row-desc">Se o escolhido não estiver ligado quando ditares, uso o predefinido do sistema.</span>
+                </label>
+                <div class="row-control">
+                  <select id="input-device">
+                    <option value="">Predefinido do sistema</option>
+                  </select>
                 </div>
               </div>
 
@@ -518,6 +531,80 @@
             <p class="row-desc paths" id="paths"></p>
           </section>
         </div>
+      </div>
+    </dialog>
+
+    <!-- ============================================================ Guia de primeira execução
+         Três passos (chave, microfone, experimentar) por cima da janela. Só um passo
+         está visível de cada vez; ao mudar, o foco vai para o título do passo. -->
+    <dialog id="onboarding" class="onboarding" aria-labelledby="ob-title">
+      <div class="ob">
+        <header class="ob-head">
+          <img id="ob-mascot" class="ob-mascot" alt="" width="48" height="44" />
+          <div class="ob-head-text">
+            <p id="ob-title" class="ob-kicker">Primeiros passos com o Ditok</p>
+            <ol class="ob-steps" aria-label="Passos">
+              <li data-step="key"><span class="ob-step-num" aria-hidden="true">1</span>Chave</li>
+              <li data-step="mic"><span class="ob-step-num" aria-hidden="true">2</span>Microfone</li>
+              <li data-step="try"><span class="ob-step-num" aria-hidden="true">3</span>Experimentar</li>
+            </ol>
+          </div>
+          <button id="ob-skip" type="button" class="ghost small">Saltar</button>
+        </header>
+
+        <div class="ob-body">
+          <section id="ob-step-key" class="ob-step" aria-labelledby="ob-key-title">
+            <h2 id="ob-key-title" class="serif" tabindex="-1">Primeiro, a tua chave do OpenRouter</h2>
+            <p class="muted">
+              Transcrevo através do OpenRouter, com a tua conta: pagas só o que usas, normalmente cêntimos por hora de
+              ditado. Guardo a chave no cofre do sistema; nunca a mostro nem a gravo em ficheiros.
+            </p>
+            <ol class="ob-howto">
+              <li>Abre a <button id="ob-key-link" type="button" class="link">página das chaves do OpenRouter</button> (openrouter.ai/keys) e cria uma chave.</li>
+              <li>Copia-a e cola-a aqui. Valido-a antes de a guardar.</li>
+            </ol>
+            <form id="ob-key-form" class="ob-key-form">
+              <input id="ob-key-input" type="password" autocomplete="off" spellcheck="false"
+                     placeholder="sk-or-v1-…" aria-label="Chave do OpenRouter" aria-describedby="ob-key-msg" />
+              <button id="ob-key-save" type="submit" class="primary">Validar e guardar</button>
+            </form>
+            <p id="ob-key-msg" class="ob-msg" role="status"></p>
+          </section>
+
+          <section id="ob-step-mic" class="ob-step" aria-labelledby="ob-mic-title" hidden>
+            <h2 id="ob-mic-title" class="serif" tabindex="-1">Agora, o microfone</h2>
+            <p class="muted">Diz qualquer coisa: a barra deve mexer-se enquanto falas. Se ficar parada, escolhe outro microfone.</p>
+            <div class="ob-field">
+              <label for="ob-device" class="row-title">Microfone</label>
+              <select id="ob-device">
+                <option value="">Predefinido do sistema</option>
+              </select>
+            </div>
+            <div id="ob-meter" class="meter ob-meter" aria-hidden="true"><span id="ob-meter-bar"></span></div>
+            <p id="ob-mic-msg" class="ob-msg" role="status"></p>
+          </section>
+
+          <section id="ob-step-try" class="ob-step" aria-labelledby="ob-try-title" hidden>
+            <h2 id="ob-try-title" class="serif" tabindex="-1">Experimenta ditar</h2>
+            <p class="muted">
+              Clica na caixa, segura <span id="ob-keys" class="keys"></span>, diz uma frase e larga. Escrevo onde estiver o
+              cursor: aqui ou em qualquer outra app.
+            </p>
+            <p id="ob-shortcut-busy" class="file-warning" hidden>
+              Outra app está a usar este atalho, por isso não funciona.
+              <button id="ob-shortcut-change" type="button" class="link">Escolher outro</button>
+            </p>
+            <textarea id="ob-try" class="ob-try" rows="4" spellcheck="false"
+                      placeholder="O teu primeiro ditado aparece aqui…" aria-label="Caixa para experimentar o ditado"
+                      aria-describedby="ob-try-msg"></textarea>
+            <p id="ob-try-msg" class="ob-msg" role="status"></p>
+          </section>
+        </div>
+
+        <footer class="ob-foot">
+          <button id="ob-back" type="button" class="ghost">Voltar</button>
+          <button id="ob-next" type="button" class="primary">Continuar</button>
+        </footer>
       </div>
     </dialog>
 

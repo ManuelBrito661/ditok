@@ -6,4 +6,6 @@ pub mod resample;
 pub mod vad;
 pub mod wav;
 
-pub use capture::{AudioError, LevelSink, Recorder, Recording};
+pub use capture::{
+    AudioError, InputDevice, LevelSink, MicSink, Recorder, Recording, input_devices,
+};

@@ -15,7 +15,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    audio::decode,
+    audio::{self, InputDevice, Recorder, decode},
     config::Config,
     dictation::DictationEvent,
     files::{self, JobView},
@@ -23,7 +23,7 @@ use crate::{
     hotkey,
     metrics::Stats,
     overlay, paste, secrets, settings_window,
-    state::{AppState, MISSING_KEY},
+    state::{AppState, MISSING_KEY, Status},
     stt::{
         SttError,
         models::{self, ModelKind, ModelList},
@@ -72,6 +72,8 @@ pub struct SettingsView {
     config: Config,
     defaults: Config,
     api_key_set: bool,
+    /// O atalho de ditado está registado (`false`: outra app ocupou-o).
+    shortcut_ok: bool,
     autostart: bool,
     paths: Paths,
 }
@@ -82,6 +84,7 @@ async fn settings_view(app: &AppHandle, state: &Arc<AppState>) -> CmdResult<Sett
         config: (*state.config()).clone(),
         defaults: Config::default(),
         api_key_set,
+        shortcut_ok: state.shortcut_ok(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         paths: Paths {
             config: Config::path(&state.config_dir).display().to_string(),
@@ -104,8 +107,22 @@ pub async fn save_settings(
 ) -> CmdResult<SettingsView> {
     config.validate()?;
     let current = state.config();
-    if config.shortcut != current.shortcut {
-        hotkey::change_dictation(&app, &current.shortcut, &config.shortcut)?;
+    // O atalho estava a funcionar antes desta gravação? (Se não, o antigo não
+    // está registado e não há nada para largar nem para repor.)
+    let was_ok = state.shortcut_ok();
+    let shortcut_changed = config.shortcut != current.shortcut;
+    let mut now_ok = was_ok;
+    if shortcut_changed {
+        if was_ok {
+            hotkey::change_dictation(&app, &current.shortcut, &config.shortcut)?;
+        } else {
+            hotkey::register_dictation(&app, &config.shortcut)?;
+        }
+        now_ok = true;
+    } else if !was_ok && hotkey::register_dictation(&app, &config.shortcut).is_ok() {
+        // O atalho estava ocupado e a outra app largou-o entretanto: aproveito
+        // qualquer gravação para voltar a tentar, sem incomodar se falhar.
+        now_ok = true;
     }
     let transport_changed = config.transport != current.transport;
     let overlay_changed = config.show_overlay != current.show_overlay;
@@ -116,8 +133,25 @@ pub async fn save_settings(
     if let Err(e) = saved {
         // Não conseguimos gravar: repõe o atalho antigo para que o que está ativo
         // continue igual ao que está no disco.
-        let _ = hotkey::change_dictation(&app, &new_shortcut, &current.shortcut);
+        if shortcut_changed {
+            if was_ok {
+                let _ = hotkey::change_dictation(&app, &new_shortcut, &current.shortcut);
+            } else {
+                hotkey::unregister_dictation(&app, &new_shortcut);
+                now_ok = false;
+            }
+        }
+        if now_ok != was_ok {
+            state.set_shortcut_ok(now_ok);
+        }
         return Err(e.into());
+    }
+    // Avisa a barra e o tray (atalho novo, sons) mesmo que o estado do atalho
+    // não tenha mudado.
+    if now_ok != was_ok {
+        state.set_shortcut_ok(now_ok);
+    } else {
+        state.publish();
     }
     if transport_changed {
         let _ = state.events.send(DictationEvent::ProviderChanged);
@@ -153,6 +187,7 @@ pub async fn set_api_key(state: AppStateRef<'_>, key: String) -> CmdResult<Optio
     };
     blocking(move || secrets::set(&key)).await??;
     let _ = state.events.send(DictationEvent::ProviderChanged);
+    state.set_key_set(true); // a barra deixa de mostrar "Falta a chave"
     tracing::info!("chave do OpenRouter guardada");
     Ok(info)
 }
@@ -161,6 +196,7 @@ pub async fn set_api_key(state: AppStateRef<'_>, key: String) -> CmdResult<Optio
 pub async fn delete_api_key(state: AppStateRef<'_>) -> CmdResult<()> {
     blocking(secrets::delete).await??;
     let _ = state.events.send(DictationEvent::ProviderChanged);
+    state.set_key_set(false);
     tracing::info!("chave do OpenRouter apagada");
     Ok(())
 }
@@ -233,8 +269,10 @@ pub async fn get_history(state: AppStateRef<'_>) -> CmdResult<Vec<HistoryEntry>>
 
 #[tauri::command]
 pub async fn clear_history(state: AppStateRef<'_>) -> CmdResult<()> {
-    let state = Arc::clone(&state);
-    blocking(move || state.history.clear()).await??;
+    let state_ = Arc::clone(&state);
+    blocking(move || state_.history.clear()).await??;
+    // O "Colar o último ditado" também deixa de o ter.
+    let _ = state.events.send(DictationEvent::HistoryCleared);
     tracing::info!("histórico apagado");
     Ok(())
 }
@@ -295,6 +333,76 @@ pub fn overlay_cancel(state: AppStateRef<'_>) {
 #[tauri::command]
 pub fn overlay_hit_rect(rect: overlay::HitRect) {
     overlay::set_hit_rect(rect);
+}
+
+/// O que a pílula em repouso tem de avisar (chave em falta, atalho ocupado) e o
+/// atalho para a dica. Pedido quando a barra carrega; depois chega por evento.
+#[tauri::command]
+pub fn overlay_status(state: AppStateRef<'_>) -> Status {
+    state.status()
+}
+
+/// Clique na pílula com um aviso: abre a janela no sítio certo ("key" ou "shortcut").
+#[tauri::command]
+pub fn overlay_open(app: AppHandle, target: String) -> CmdResult<()> {
+    if !matches!(target.as_str(), "key" | "shortcut") {
+        return Err(format!("sítio desconhecido: {target}").into());
+    }
+    settings_window::open_at(&app, &target);
+    Ok(())
+}
+
+/// Clique direito na pílula: o menu do tray. `async` para o comando não correr
+/// na thread principal, que é onde o menu fica aberto à espera de escolha.
+#[tauri::command]
+pub async fn overlay_menu(app: AppHandle) {
+    // A pílula nunca recebe o foco: a janela em primeiro plano ainda é a tua.
+    crate::tray::remember_menu_target();
+    overlay::popup_menu(&app);
+}
+
+// ---------------------------------------------------------------- janela principal
+
+/// Para onde a janela deve ir ao abrir (ver `settings_window::open_at`).
+#[tauri::command]
+pub fn main_take_open() -> Option<String> {
+    settings_window::take_pending()
+}
+
+/// Abre a página das chaves do OpenRouter no browser. O endereço é fixo: a
+/// janela não consegue pedir para abrir outra coisa qualquer.
+#[tauri::command]
+pub fn open_openrouter_keys() -> CmdResult<()> {
+    const URL: &str = "https://openrouter.ai/keys";
+    #[cfg(windows)]
+    let mut command = std::process::Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    // O `explorer` devolve um código de saída diferente de 0 mesmo quando abre:
+    // só conta se nem sequer arrancou.
+    command.arg(URL).spawn()?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------- microfone
+
+#[tauri::command]
+pub async fn list_input_devices() -> CmdResult<Vec<InputDevice>> {
+    Ok(blocking(audio::input_devices).await??)
+}
+
+/// Liga (ou renova) o medidor de nível do microfone escolhido, para o guia. O
+/// nível chega à janela pelo evento `mic:level`. A janela renova-o a cada 2 s;
+/// sem renovação, desliga-se sozinho.
+#[tauri::command]
+pub fn mic_monitor(state: AppStateRef<'_>, recorder: State<'_, Recorder>, on: bool) {
+    if on {
+        recorder.monitor_start(state.config().input_device.clone());
+    } else {
+        recorder.monitor_stop();
+    }
 }
 
 // ---------------------------------------------------------------- ficheiros

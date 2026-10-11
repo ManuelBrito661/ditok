@@ -118,18 +118,33 @@ pub struct Recording {
     pub dropped_samples: usize,
 }
 
+/// Quanto tempo o medidor fica ligado sem ser renovado. A janela renova-o a cada
+/// 2 s enquanto o passo do microfone está à vista; se a janela fechar sem o
+/// desligar, o microfone fecha sozinho ao fim disto.
+const MONITOR_KEEPALIVE: Duration = Duration::from_secs(6);
+
 enum Command {
     Start {
         pressed_at: Instant,
         /// O som de início vai tocar: a deteção de voz ignora-o (ver `vad.rs`).
         start_cue: bool,
+        /// O microfone escolhido nas definições (`None` = o predefinido).
+        device: Option<String>,
     },
     Stop {
         reply: oneshot::Sender<Result<Recording, AudioError>>,
     },
     Cancel,
+    /// Liga (ou renova) o medidor de nível fora de um ditado.
+    MonitorStart {
+        device: Option<String>,
+    },
+    MonitorStop,
 }
 
+/// `Clone` só copia o `Sender`: o orquestrador e os comandos da janela (o medidor
+/// do microfone) falam com a mesma thread de áudio.
+#[derive(Clone)]
 pub struct Recorder {
     tx: mpsc::Sender<Command>,
 }
@@ -140,29 +155,55 @@ pub struct Recorder {
 /// outra thread (`Send`).
 pub type LevelSink = Box<dyn Fn(f32) + Send>;
 
+/// O que o medidor do microfone (fora de um ditado) conta à janela.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum MicEvent {
+    /// O microfone que abriu de facto (pode ser o predefinido, se o escolhido falhou).
+    Opened(String),
+    /// Nível entre 0 e 1, ~20 vezes por segundo.
+    Level(f32),
+    /// Não abriu; a mensagem já vem pronta a mostrar.
+    Failed(String),
+}
+
+pub type MicSink = Box<dyn Fn(MicEvent) + Send>;
+
 impl Recorder {
     /// Lança a thread de áudio. O microfone só é aberto no `start`, não aqui.
     pub fn spawn(
         events: UnboundedSender<DictationEvent>,
         level: LevelSink,
+        mic: MicSink,
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         thread::Builder::new()
             .name("ditok-audio".into())
-            .spawn(move || audio_thread(rx, events, level))?;
+            .spawn(move || audio_thread(rx, events, level, mic))?;
         Ok(Self { tx })
     }
 
     /// Não espera que o microfone abra: o orquestrador continua livre. Se falhar, a
     /// thread envia `DictationEvent::AudioFailed`.
-    pub fn start(&self, pressed_at: Instant, start_cue: bool) {
+    pub fn start(&self, pressed_at: Instant, start_cue: bool, device: Option<String>) {
         let cmd = Command::Start {
             pressed_at,
             start_cue,
+            device,
         };
         if self.tx.send(cmd).is_err() {
             tracing::error!("thread de áudio indisponível");
         }
+    }
+
+    /// Liga o medidor de nível (ou renova-o, se já estiver ligado). Ignorado
+    /// durante um ditado: a gravação tem prioridade.
+    pub fn monitor_start(&self, device: Option<String>) {
+        let _ = self.tx.send(Command::MonitorStart { device });
+    }
+
+    pub fn monitor_stop(&self) {
+        let _ = self.tx.send(Command::MonitorStop);
     }
 
     /// Pede para parar e devolve um recetor que entrega a gravação quando estiver
@@ -179,45 +220,75 @@ impl Recorder {
     }
 }
 
+/// O medidor do microfone fora de um ditado: uma `Session` cujas amostras deito
+/// fora depois de medir o nível.
+struct Monitor {
+    session: Session,
+    /// O que foi pedido (para saber se mudou), não o que abriu de facto.
+    wanted: Option<String>,
+    until: Instant,
+}
+
 fn audio_thread(
     rx: mpsc::Receiver<Command>,
     events: UnboundedSender<DictationEvent>,
     level: LevelSink,
+    mic: MicSink,
 ) {
     let mut session: Option<Session> = None;
+    let mut monitor: Option<Monitor> = None;
     let mut to16k = To16k::default();
 
     loop {
-        let cmd = match session.as_mut() {
+        let cmd = if session.is_none() && monitor.is_none() {
             // Parado: bloqueia até chegar um comando (zero CPU).
-            None => match rx.recv() {
+            match rx.recv() {
                 Ok(cmd) => cmd,
                 Err(_) => break,
-            },
-            // A gravar: acorda no próximo comando ou ao fim de DRAIN_EVERY para
-            // esvaziar o ring buffer, o que vier primeiro.
-            Some(s) => match rx.recv_timeout(DRAIN_EVERY) {
+            }
+        } else {
+            // A gravar (ou a medir): acorda no próximo comando ou ao fim de
+            // DRAIN_EVERY para esvaziar o ring buffer, o que vier primeiro.
+            match rx.recv_timeout(DRAIN_EVERY) {
                 Ok(cmd) => cmd,
                 Err(RecvTimeoutError::Timeout) => {
-                    let new_from = s.drain();
-                    // Só as amostras que acabaram de chegar: o nível "de agora".
-                    level(resample::level(&s.samples[new_from..]));
+                    if let Some(s) = session.as_mut() {
+                        let new_from = s.drain();
+                        // Só as amostras que acabaram de chegar: o nível "de agora".
+                        level(resample::level(&s.samples[new_from..]));
+                    } else if let Some(m) = monitor.as_mut() {
+                        if Instant::now() >= m.until {
+                            tracing::debug!("medidor do microfone parado (não foi renovado)");
+                            monitor = None; // largar a sessão fecha o microfone
+                        } else {
+                            m.session.drain();
+                            mic(MicEvent::Level(resample::level(&m.session.samples)));
+                            // Só queremos o nível: não acumular minutos de áudio.
+                            m.session.samples.clear();
+                        }
+                    }
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
-            },
+            }
         };
 
         match cmd {
             Command::Start {
                 pressed_at,
                 start_cue,
+                device,
             } => {
                 if session.is_some() {
                     tracing::warn!("início pedido com uma gravação em curso; ignorado");
                     continue;
                 }
-                match Session::open(pressed_at, start_cue, events.clone()) {
+                // Um ditado durante o guia: o medidor dá lugar à gravação (dois
+                // streams no mesmo microfone nem sempre são permitidos).
+                if monitor.take().is_some() {
+                    tracing::debug!("medidor do microfone parado para gravar");
+                }
+                match Session::open(pressed_at, start_cue, events.clone(), device.as_deref()) {
                     Ok(s) => session = Some(s),
                     Err(e) => {
                         tracing::error!(error = %e, "não foi possível abrir o microfone");
@@ -239,6 +310,40 @@ fn audio_thread(
                     tracing::debug!("gravação descartada");
                 }
             }
+            Command::MonitorStart { device } => {
+                if session.is_some() {
+                    continue; // a meio de um ditado: a janela volta a pedir daqui a 2 s
+                }
+                let until = Instant::now() + MONITOR_KEEPALIVE;
+                // `if let ... && ...` (let chains): renova só se for o mesmo microfone.
+                if let Some(m) = monitor.as_mut()
+                    && m.wanted == device
+                {
+                    m.until = until;
+                    continue;
+                }
+                monitor = None; // outro microfone: fecha o anterior antes de abrir
+                match Session::open(Instant::now(), false, events.clone(), device.as_deref()) {
+                    Ok(s) => {
+                        tracing::debug!(device = %s.device, "medidor do microfone ligado");
+                        mic(MicEvent::Opened(s.device.clone()));
+                        monitor = Some(Monitor {
+                            session: s,
+                            wanted: device,
+                            until,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "medidor: não foi possível abrir o microfone");
+                        mic(MicEvent::Failed(e.to_string()));
+                    }
+                }
+            }
+            Command::MonitorStop => {
+                if monitor.take().is_some() {
+                    tracing::debug!("medidor do microfone desligado");
+                }
+            }
         }
     }
     tracing::debug!("thread de áudio terminada");
@@ -258,20 +363,45 @@ struct Session {
 }
 
 impl Session {
+    /// Abre o microfone `wanted` (pelo nome) ou, sem escolha, o predefinido. Se o
+    /// escolhido já não existir ou não abrir, volto ao predefinido: um ditado
+    /// nunca falha só porque desligaste o headset que estava escolhido.
     fn open(
         pressed_at: Instant,
         start_cue: bool,
         events: UnboundedSender<DictationEvent>,
+        wanted: Option<&str>,
     ) -> Result<Self, AudioError> {
-        // Pedimos sempre o dispositivo por omissão no momento: se trocares de
+        // Pedimos o dispositivo no momento (e não no arranque): se trocares de
         // headset, a próxima gravação já usa o novo.
-        let device = cpal::default_host()
-            .default_input_device()
-            .ok_or(AudioError::NoDevice)?;
-        let name = device
-            .description()
-            .map(|d| d.name().to_owned())
-            .unwrap_or_else(|_| "desconhecido".to_owned());
+        let host = cpal::default_host();
+        if let Some(name) = wanted {
+            match find_input(&host, name) {
+                Some(device) => {
+                    match Self::open_device(&device, pressed_at, start_cue, events.clone()) {
+                        Ok(s) => return Ok(s),
+                        Err(e) => {
+                            tracing::warn!(error = %e, device = name, "o microfone escolhido não abriu; a usar o predefinido")
+                        }
+                    }
+                }
+                None => tracing::warn!(
+                    device = name,
+                    "o microfone escolhido não existe; a usar o predefinido"
+                ),
+            }
+        }
+        let device = host.default_input_device().ok_or(AudioError::NoDevice)?;
+        Self::open_device(&device, pressed_at, start_cue, events)
+    }
+
+    fn open_device(
+        device: &cpal::Device,
+        pressed_at: Instant,
+        start_cue: bool,
+        events: UnboundedSender<DictationEvent>,
+    ) -> Result<Self, AudioError> {
+        let name = device_name(device).unwrap_or_else(|| "desconhecido".to_owned());
         let supported = device.default_input_config()?;
         let format = supported.sample_format();
         let config = supported.config();
@@ -293,11 +423,11 @@ impl Session {
         // O formato só é conhecido em tempo de execução, mas o callback é genérico em
         // `T`: o `match` escolhe qual versão monomorfizada do callback compilar e usar.
         let stream = match format {
-            SampleFormat::F32 => build::<f32>(&device, config, shared),
-            SampleFormat::I16 => build::<i16>(&device, config, shared),
-            SampleFormat::I32 => build::<i32>(&device, config, shared),
-            SampleFormat::U16 => build::<u16>(&device, config, shared),
-            SampleFormat::F64 => build::<f64>(&device, config, shared),
+            SampleFormat::F32 => build::<f32>(device, config, shared),
+            SampleFormat::I16 => build::<i16>(device, config, shared),
+            SampleFormat::I32 => build::<i32>(device, config, shared),
+            SampleFormat::U16 => build::<u16>(device, config, shared),
+            SampleFormat::F64 => build::<f64>(device, config, shared),
             other => return Err(AudioError::UnsupportedFormat(other)),
         }?;
         stream.play()?;
@@ -371,6 +501,47 @@ impl Session {
         })
         // Aqui `self.stream` sai de âmbito e o microfone é fechado.
     }
+}
+
+/// O nome que o sistema dá ao microfone ("Microfone (Realtek Audio)").
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_owned())
+}
+
+fn find_input(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
+    host.input_devices()
+        .ok()?
+        .find(|d| device_name(d).as_deref() == Some(name))
+}
+
+/// Um microfone, para o seletor das definições e do guia.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InputDevice {
+    pub name: String,
+    pub is_default: bool,
+}
+
+/// Bloqueante (o sistema pode demorar dezenas de ms a enumerar). O predefinido
+/// vem primeiro; nomes repetidos aparecem uma só vez (escolhemos pelo nome).
+pub fn input_devices() -> Result<Vec<InputDevice>, AudioError> {
+    let host = cpal::default_host();
+    let default = host.default_input_device().as_ref().and_then(device_name);
+    let mut list: Vec<InputDevice> = Vec::new();
+    for device in host.input_devices()? {
+        let Some(name) = device_name(&device) else {
+            continue;
+        };
+        if list.iter().any(|d| d.name == name) {
+            continue;
+        }
+        list.push(InputDevice {
+            is_default: default.as_deref() == Some(name.as_str()),
+            name,
+        });
+    }
+    // `sort_by_key` é estável: o resto fica pela ordem do sistema.
+    list.sort_by_key(|d| !d.is_default);
+    Ok(list)
 }
 
 /// O que o callback leva consigo para a thread de áudio.
