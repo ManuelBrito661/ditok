@@ -31,6 +31,7 @@ use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 use super::{
     resample::{self, TARGET_RATE, To16k},
+    vad::{self, Voice},
     wav,
 };
 use crate::dictation::DictationEvent;
@@ -76,10 +77,15 @@ impl From<cpal::Error> for AudioError {
 /// Resultado de uma gravação, já pronto a enviar.
 #[derive(Debug)]
 pub struct Recording {
-    /// WAV 16 kHz mono PCM16.
+    /// WAV 16 kHz mono PCM16, sem o silêncio do início e do fim. Sem fala, fica a
+    /// gravação inteira: não vai ser enviada, mas o WAV de diagnóstico mostra-a.
     pub wav: Bytes,
-    /// Duração do áudio gravado.
+    /// Duração do áudio no WAV.
     pub audio: Duration,
+    /// Silêncio cortado nas pontas.
+    pub trimmed: Duration,
+    /// Se há fala, e os níveis usados para o decidir.
+    pub voice: Voice,
     pub device: String,
     pub device_rate: u32,
     pub device_channels: u16,
@@ -306,12 +312,20 @@ impl Session {
         self.drain();
 
         let mono16k = to16k.convert(&self.samples, self.rate)?;
-        let audio = Duration::from_secs_f64(mono16k.len() as f64 / f64::from(TARGET_RATE));
-        let wav = wav::encode_pcm16_mono(&mono16k, TARGET_RATE);
+        let voice = vad::detect(&mono16k, TARGET_RATE);
+        let kept = voice.speech.clone().unwrap_or(0..mono16k.len());
+        let duration =
+            |samples: usize| Duration::from_secs_f64(samples as f64 / f64::from(TARGET_RATE));
+        let audio = duration(kept.len());
+        let trimmed = duration(mono16k.len() - kept.len());
+        // `&mono16k[kept]` é uma fatia: corta sem copiar as amostras.
+        let wav = wav::encode_pcm16_mono(&mono16k[kept], TARGET_RATE);
 
         Ok(Recording {
             wav,
             audio,
+            trimmed,
+            voice,
             device: self.device,
             device_rate: self.rate,
             device_channels: self.channels,

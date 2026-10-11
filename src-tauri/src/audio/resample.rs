@@ -45,12 +45,7 @@ pub fn downmix<T: Copy>(
 /// -60 dB (silêncio, 0.0) a 0 dB (máximo, 1.0). A escala logarítmica acompanha a
 /// forma como ouvimos: com uma escala linear, a fala normal mal mexia as barras.
 pub fn level(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let mean_square = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
-    let db = 10.0 * mean_square.max(1e-10).log10(); // 10·log10(x²) = 20·log10(x)
-    ((db + 60.0) / 60.0).clamp(0.0, 1.0)
+    ((super::vad::dbfs(samples) + 60.0) / 60.0).clamp(0.0, 1.0)
 }
 
 /// Converte gravações completas para 16 kHz. Criar um resampler FFT é caro (planeia

@@ -14,9 +14,10 @@ use tauri::{
 const MENU_OPEN_SETTINGS: &str = "open_settings";
 const MENU_QUIT: &str = "quit";
 
-/// Serializado em minúsculas ("recording", …) porque é o que a barra recebe.
+/// Serializado em minúsculas ("recording", "nothing-heard", …) porque é o que a
+/// barra recebe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum TrayState {
     Idle,
     Recording,
@@ -24,6 +25,8 @@ pub enum TrayState {
     Done,
     /// A transcrição ou a colagem falhou (a notificação explica porquê).
     Failed,
+    /// Não havia voz na gravação (ou o modelo não ouviu nada): nada foi colado.
+    NothingHeard,
 }
 
 impl TrayState {
@@ -34,6 +37,7 @@ impl TrayState {
             Self::Processing => "Ditok: a transcrever…",
             Self::Done => "Ditok: texto colado",
             Self::Failed => "Ditok: o último ditado falhou",
+            Self::NothingHeard => "Ditok: não ouvi nada",
         }
     }
 }
@@ -106,7 +110,7 @@ impl Tray {
             return;
         }
         let image = match state {
-            TrayState::Idle | TrayState::Failed => &self.idle,
+            TrayState::Idle | TrayState::Failed | TrayState::NothingHeard => &self.idle,
             TrayState::Recording => &self.recording,
             TrayState::Processing => &self.processing,
             TrayState::Done => &self.done,

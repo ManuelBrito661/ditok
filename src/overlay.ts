@@ -1,5 +1,5 @@
 // Barra flutuante com a mascote. Só reage a eventos do backend (overlay.rs):
-// - "overlay:state": idle | recording | processing | done | failed
+// - "overlay:state": idle | recording | processing | done | failed | nothing-heard
 // - "overlay:level": nível do microfone entre 0 e 1, ~20 vezes por segundo
 // Não há polling nem temporizadores a correr em repouso: as animações são CSS.
 
@@ -9,7 +9,7 @@ import aOuvir from "../design/mascot/a-ouvir.svg?inline";
 import aProcessar from "../design/mascot/a-processar.svg?inline";
 import pronto from "../design/mascot/pronto.svg?inline";
 
-type State = "idle" | "recording" | "processing" | "done" | "failed";
+type State = "idle" | "recording" | "processing" | "done" | "failed" | "nothing-heard";
 
 const MASCOT: Record<State, string> = {
   idle: parado,
@@ -17,6 +17,7 @@ const MASCOT: Record<State, string> = {
   processing: aProcessar,
   done: pronto,
   failed: parado,
+  "nothing-heard": parado,
 };
 const LABEL: Record<State, string> = {
   idle: "",
@@ -24,6 +25,7 @@ const LABEL: Record<State, string> = {
   processing: "",
   done: "Colado",
   failed: "Falhou",
+  "nothing-heard": "Não ouvi nada",
 };
 const BAR_COUNT = 14;
 

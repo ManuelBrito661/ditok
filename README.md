@@ -25,10 +25,15 @@ Em baixo ao centro do ecrã (no monitor onde está o cursor) há uma pílula peq
 | A processar | três pontos animados |
 | Colado | contorno verde durante ~1 s |
 | Falhou | contorno vermelho; uma notificação explica o motivo |
+| Não ouvi nada | durante ~1 s, quando a gravação só tinha silêncio ou ruído: não foi enviada nem colada |
 
 A barra nunca recebe o foco, por isso o texto é sempre colado na app em que estavas, e os cliques passam através dela. Pode ser escondida nas definições.
 
 O ícone do tray mostra o mesmo estado: parado, a ouvir (vermelho), a processar (laranja), pronto (verde).
+
+### Silêncio
+
+Antes de enviar, o Ditok procura a voz na gravação. O silêncio do início e do fim é cortado (com uma margem de 0,3 s antes e 0,4 s depois), porque os modelos são cobrados ao segundo. Se não houver voz nenhuma, nada é enviado: quando só recebem silêncio, os modelos de transcrição costumam inventar frases ("Obrigado por assistir.").
 
 ## Configurar
 
@@ -67,7 +72,7 @@ cargo run --bin set-key --features cli
 - Windows: `%LOCALAPPDATA%\com.manuelbrito.ditok\logs` (um ficheiro por dia, 7 dias)
 - macOS: `~/Library/Logs/com.manuelbrito.ditok`
 
-Cada ditado regista uma linha `ditado` com a duração do áudio, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado) e o custo. A memória é registada no arranque, com a janela de definições aberta e depois de a fechar.
+Cada ditado regista uma linha `ditado` com a duração do áudio enviado e do silêncio cortado, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado) e o custo. Uma gravação sem voz regista uma linha `sem voz na gravação` com o ruído de fundo, o pico e o limiar em dBFS, que servem para afinar a deteção se o teu microfone a enganar. A memória é registada no arranque, com a janela de definições aberta e depois de a fechar.
 
 ## Desempenho
 
@@ -111,7 +116,7 @@ pnpm tauri icon src-tauri/icons/app-icon.png
 src-tauri/src/
   lib.rs              arranque: plugins, tray, atalho, barra, estado partilhado
   dictation/          orquestrador (actor), máquina de estados do atalho, pipeline do ditado
-  audio/              captura (cpal + ring buffer), mono 16 kHz, WAV, nível do microfone
+  audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV, nível do microfone
   stt/                trait SttProvider, OpenRouter, cache da lista de modelos
   cleanup.rs          limpeza opcional com LLM
   paste.rs            clipboard + Ctrl/Cmd+V + reposição do clipboard

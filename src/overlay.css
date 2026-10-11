@@ -131,6 +131,18 @@ body {
 }
 #pill[data-state="done"] #label { color: var(--green); }
 #pill[data-state="failed"] #label { color: var(--red); }
+
+/* ---------- não ouvi nada: neutro, não é um erro */
+#pill[data-state="nothing-heard"] {
+  width: 154px;
+  height: 46px;
+  opacity: 1;
+}
+#pill[data-state="nothing-heard"] #label {
+  display: block;
+  white-space: nowrap; /* não partir a linha enquanto a pílula ainda está a crescer */
+  opacity: 0.8;
+}
 @keyframes shake {
   25% { transform: translateX(-3px); }
   75% { transform: translateX(3px); }

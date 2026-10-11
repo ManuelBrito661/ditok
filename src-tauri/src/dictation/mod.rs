@@ -106,7 +106,10 @@ async fn run(
             }
             DictationEvent::DoneIconElapsed => {
                 // Só volta a "parado" se entretanto não começou outro ditado.
-                if matches!(deps.tray.state(), TrayState::Done | TrayState::Failed) {
+                if matches!(
+                    deps.tray.state(),
+                    TrayState::Done | TrayState::Failed | TrayState::NothingHeard
+                ) {
                     deps.tray.set(TrayState::Idle);
                 }
                 continue;
@@ -195,12 +198,10 @@ fn finish_processing(tray: &mut Tray, tx: &UnboundedSender<DictationEvent>, outc
     let shown = match outcome {
         Outcome::Pasted => TrayState::Done,
         Outcome::Failed => TrayState::Failed,
-        Outcome::Nothing => {
-            tray.set(TrayState::Idle);
-            return;
-        }
+        // Sem isto, um ditado sem voz acabava sem dizer nada e parecia avariado.
+        Outcome::Nothing => TrayState::NothingHeard,
     };
-    // "Pronto" ou "falhou" ficam visíveis um instante e depois voltam a "parado".
+    // O resultado fica visível um instante e depois volta a "parado".
     tray.set(shown);
     let tx = tx.clone();
     tauri::async_runtime::spawn(async move {

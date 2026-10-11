@@ -1,5 +1,5 @@
 //! O caminho crítico de um ditado, depois de largar a tecla:
-//! WAV pronto → pedido STT → (limpeza com LLM, se ligada) → colar →
+//! WAV pronto (sem voz, pára aqui) → pedido STT → (limpeza com LLM, se ligada) → colar →
 //! (fora do caminho crítico) métricas, histórico, WAV de teste e reposição do
 //! clipboard.
 
@@ -66,6 +66,21 @@ pub async fn process(
             audio_ms = ms(rec.audio),
             "gravação demasiado curta; ignorada"
         );
+        return Outcome::Nothing;
+    }
+    if !rec.voice.has_speech() {
+        // Só silêncio ou ruído: o Whisper inventaria uma frase, por isso nem se envia.
+        tracing::info!(
+            audio_ms = ms(rec.audio),
+            noise_db = rec.voice.noise_db,
+            peak_db = rec.voice.peak_db,
+            threshold_db = rec.voice.threshold_db,
+            "sem voz na gravação; não enviada"
+        );
+        // O WAV de diagnóstico é o que permite perceber um falso negativo.
+        if config.save_last_recording {
+            tauri::async_runtime::spawn_blocking(move || save_debug_wav(&state.debug_dir(), &rec));
+        }
         return Outcome::Nothing;
     }
 
@@ -152,6 +167,7 @@ pub async fn process(
         model = %m.model,
         transport = m.transport,
         audio_ms = m.audio_ms,
+        trimmed_ms = ms(rec.trimmed),
         release_to_wav_ms = m.release_to_wav_ms,
         stt_ms = m.stt_ms,
         cleanup_ms = m.cleanup_ms,
@@ -220,6 +236,11 @@ fn ms(d: Duration) -> u64 {
 fn log_recording(rec: &Recording, release_to_wav: Duration) {
     tracing::debug!(
         audio_ms = ms(rec.audio),
+        trimmed_ms = ms(rec.trimmed),
+        voiced_ms = rec.voice.voiced_ms,
+        noise_db = rec.voice.noise_db,
+        peak_db = rec.voice.peak_db,
+        threshold_db = rec.voice.threshold_db,
         device = %rec.device,
         device_rate = rec.device_rate,
         device_channels = rec.device_channels,
