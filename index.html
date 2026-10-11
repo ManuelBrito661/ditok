@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt">
+<html lang="pt-PT">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -58,13 +58,13 @@
         <!-- ============================================================ Início -->
         <section id="page-inicio" class="page" aria-labelledby="home-title">
           <header class="page-head">
-            <h1 id="home-title" class="serif">Bem-vindo de volta</h1>
+            <h1 id="home-title" class="serif" tabindex="-1">Olá</h1>
             <ul class="stats" aria-label="Este mês">
-              <li><span class="stat-icon" aria-hidden="true">🎙️</span><b id="s-count">—</b> ditados</li>
-              <li><span class="stat-icon" aria-hidden="true">✍️</span><b id="s-words">—</b> palavras</li>
-              <li><span class="stat-icon" aria-hidden="true">⚡</span><b id="s-speed">—</b> típico</li>
-              <li id="s-cost-item"><span class="stat-icon" aria-hidden="true">💸</span><b id="s-cost">—</b> <span id="s-cost-of"></span>este mês</li>
-              <li id="s-key-item" hidden><span class="stat-icon" aria-hidden="true">🔑</span><b id="s-key">—</b> na chave</li>
+              <li><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><b id="s-count">—</b> ditados</li>
+              <li><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg><b id="s-words">—</b> palavras</li>
+              <li title="Tempo normal desde que largas o atalho até o texto aparecer"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg><b id="s-speed">—</b> até colar</li>
+              <li id="s-cost-item"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.4-1-1.6-1.7-3-1.7-1.7 0-3 .9-3 2.1 0 2.9 6 1.4 6 4.3 0 1.2-1.3 2.1-3 2.1-1.4 0-2.6-.7-3-1.7M12 6.3v1.5m0 8.4v1.5"/></svg><b id="s-cost">—</b> <span id="s-cost-of"></span>este mês</li>
+              <li id="s-key-item" hidden><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M16 7l3 3M18.5 4.5l2 2"/></svg><b id="s-key">—</b> na chave</li>
             </ul>
           </header>
 
@@ -87,6 +87,11 @@
             <p class="muted">Liga-o para veres aqui os teus ditados. Fica guardado só neste computador.</p>
             <button id="history-enable" type="button" class="primary">Ligar histórico</button>
           </div>
+          <div id="history-error" class="empty" role="alert" hidden>
+            <p><strong>Não consegui ler o histórico.</strong></p>
+            <p id="history-error-text" class="muted"></p>
+            <button id="history-retry" type="button" class="secondary">Tentar de novo</button>
+          </div>
           <div id="history-empty" class="empty" hidden>
             <img class="empty-mascot" alt="" width="88" height="80" />
             <p><strong>Ainda não há ditados.</strong></p>
@@ -98,10 +103,10 @@
         <!-- ============================================================ Dicionário -->
         <section id="page-dicionario" class="page" aria-labelledby="dict-title" hidden>
           <header class="page-head">
-            <h1 id="dict-title" class="serif">Dicionário</h1>
+            <h1 id="dict-title" class="serif" tabindex="-1">Dicionário</h1>
             <p class="muted">
-              Aplicado neste computador logo a seguir à transcrição: não custa nada nem atrasa o ditado.
-              Com a limpeza com IA ligada, as palavras também vão no pedido ao modelo, para as escrever bem.
+              Aplico-o neste computador logo a seguir à transcrição: não custa nada nem atrasa o ditado.
+              Com a limpeza com IA ligada, também envio as palavras ao modelo, para as escrever bem.
             </p>
           </header>
 
@@ -111,26 +116,29 @@
             por vírgulas: <i>tauri, tori</i>); vazio quer dizer a própria palavra, e serve para acertar as maiúsculas.
           </p>
           <div class="list-card">
-            <form id="dict-add" class="pair add-row">
+            <form id="dict-add" class="pair add-row" novalidate>
               <input id="dict-a" placeholder="Como sai (opcional)" aria-label="Como o modelo escreve" spellcheck="false" />
               <span class="arrow" aria-hidden="true">→</span>
               <input id="dict-b" placeholder="Como deve ficar" aria-label="Como deve ficar escrito" spellcheck="false" />
               <button type="submit" class="primary small">Adicionar</button>
             </form>
+            <p id="dict-error" class="error field-error" hidden></p>
             <ul id="dict-list" class="pairs"></ul>
           </div>
 
           <h2 class="section-title">Expansões <span id="snippet-count" class="count"></span></h2>
           <p class="section-desc muted">
-            Dizes a frase e é colado o texto: <i>o meu email</i> → o teu endereço. O texto nunca é enviado ao modelo de limpeza.
+            Dizes a frase e eu colo o texto: <i>o meu email</i> → o teu endereço. Nunca envio o texto ao modelo de limpeza.
+            No campo do texto, Enter muda de linha e <kbd>Ctrl</kbd> + <kbd>Enter</kbd> acrescenta.
           </p>
           <div class="list-card">
-            <form id="snippet-add" class="pair add-row">
+            <form id="snippet-add" class="pair add-row" novalidate>
               <input id="snippet-a" placeholder="Frase que dizes" aria-label="Frase que dizes" spellcheck="false" />
               <span class="arrow" aria-hidden="true">→</span>
-              <textarea id="snippet-b" rows="1" placeholder="Texto colado (Ctrl+Enter acrescenta)" aria-label="Texto que é colado" spellcheck="false"></textarea>
+              <textarea id="snippet-b" rows="1" placeholder="Texto a colar" aria-label="Texto a colar" spellcheck="false"></textarea>
               <button type="submit" class="primary small">Adicionar</button>
             </form>
+            <p id="snippet-error" class="error field-error" hidden></p>
             <ul id="snippet-list" class="pairs"></ul>
           </div>
 
@@ -152,7 +160,7 @@
         <!-- ============================================================ Ficheiros -->
         <section id="page-ficheiros" class="page" aria-labelledby="files-title" hidden>
           <header class="page-head">
-            <h1 id="files-title" class="serif">Transcrever um ficheiro</h1>
+            <h1 id="files-title" class="serif" tabindex="-1">Transcrever um ficheiro</h1>
             <p class="muted">
               A gravação de uma aula, uma reunião ou um vídeo. É partida nas pausas e enviada aos bocados ao teu modelo
               de transcrição, vários ao mesmo tempo. Podes fechar a janela enquanto trabalha: aviso quando acabar.
@@ -182,7 +190,7 @@
           <div id="file-job" class="file-card" hidden>
             <div class="file-head">
               <strong id="fj-name" class="file-name"></strong>
-              <span id="fj-status" class="pill"></span>
+              <span id="fj-status" class="pill" role="status"></span>
             </div>
             <div id="fj-meter" class="meter big" role="progressbar" aria-labelledby="fj-name" aria-valuemin="0" aria-valuemax="100"><span id="fj-bar"></span></div>
             <p id="fj-detail" class="muted"></p>
@@ -201,8 +209,11 @@
         <!-- ============================================================ Métricas -->
         <section id="page-metricas" class="page" aria-labelledby="metrics-title" hidden>
           <header class="page-head">
-            <h1 id="metrics-title" class="serif">Métricas e custos</h1>
-            <p class="muted">Percentis dos últimos 50 ditados bem-sucedidos. Custos em USD, tal como reportados pelo OpenRouter.</p>
+            <h1 id="metrics-title" class="serif" tabindex="-1">Métricas e custos</h1>
+            <p class="muted">
+              Tempos dos últimos 50 ditados que correram bem: o normal e o máximo que 9 em cada 10 não passam.
+              Custos em dólares (US$), tal como o OpenRouter os cobra.
+            </p>
           </header>
 
           <div class="cards">
@@ -219,10 +230,21 @@
               <span id="m-key-sub" class="card-sub"></span>
             </div>
             <div class="card"><span class="card-label">Ditados este mês</span><span id="m-count" class="card-value">—</span></div>
-            <div class="card"><span class="card-label">Soltar → colado (p50 / p90)</span><span id="m-total" class="card-value">—</span></div>
-            <div class="card"><span class="card-label">Transcrição (p50 / p90)</span><span id="m-stt" class="card-value">—</span></div>
-            <div class="card"><span class="card-label">Limpeza (p50 / p90)</span><span id="m-cleanup" class="card-value">—</span></div>
-            <div class="card"><span class="card-label">RAM: app / janela</span><span id="m-memory" class="card-value">—</span></div>
+            <div class="card">
+              <span class="card-label">Do largar ao colar</span>
+              <span id="m-total" class="card-value">—</span>
+              <span id="m-total-sub" class="card-sub"></span>
+            </div>
+            <div class="card">
+              <span class="card-label">Transcrição</span>
+              <span id="m-stt" class="card-value">—</span>
+              <span id="m-stt-sub" class="card-sub"></span>
+            </div>
+            <div class="card">
+              <span class="card-label">Limpeza</span>
+              <span id="m-cleanup" class="card-value">—</span>
+              <span id="m-cleanup-sub" class="card-sub"></span>
+            </div>
           </div>
 
           <h2 class="section-title">Últimos ditados</h2>
@@ -233,7 +255,7 @@
                   <th scope="col">Quando</th>
                   <th scope="col">Modelo</th>
                   <th scope="col" class="num">Áudio</th>
-                  <th scope="col" class="num">STT</th>
+                  <th scope="col" class="num">Transcrição</th>
                   <th scope="col" class="num">Limpeza</th>
                   <th scope="col" class="num">Total</th>
                   <th scope="col" class="num">Custo</th>
@@ -252,6 +274,24 @@
               <tbody id="months"></tbody>
             </table>
           </div>
+
+          <h2 class="section-title">Avançado</h2>
+          <div class="cards">
+            <div class="card">
+              <span class="card-label">Memória: app / janela</span>
+              <span id="m-memory" class="card-value">—</span>
+              <span class="card-sub">RAM usada agora pelo Ditok e pela janela que estás a ver.</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Se as definições não chegarem no arranque, nada mais funciona: diz porquê. -->
+        <section id="boot-error" class="page empty boot-error" aria-labelledby="boot-error-title" hidden>
+          <img class="empty-mascot" alt="" width="88" height="80" />
+          <h1 id="boot-error-title" class="serif" tabindex="-1">Não consegui arrancar</h1>
+          <p class="muted">Não consegui ler as definições.</p>
+          <p id="boot-error-text" class="muted"></p>
+          <button id="boot-retry" type="button" class="primary">Tentar de novo</button>
         </section>
       </main>
     </div>
@@ -327,7 +367,7 @@
 
               <label class="row switch">
                 <span class="row-text">
-                  <span class="row-title">Deixar o ditado no clipboard</span>
+                  <span class="row-title">Deixar o ditado na área de transferência</span>
                   <span class="row-desc">Depois de colar, podes voltar a colá-lo com Ctrl+V. Desligado, repõe o que lá estava.</span>
                 </span>
                 <input id="keep-in-clipboard" type="checkbox" role="switch" />
@@ -336,7 +376,7 @@
               <label class="row switch">
                 <span class="row-text">
                   <span class="row-title">Arrancar com o sistema</span>
-                  <span class="row-desc">O Ditok fica no tray sem abrir nenhuma janela.</span>
+                  <span class="row-desc">Fico na área de notificação, sem abrir nenhuma janela.</span>
                 </span>
                 <input id="autostart" type="checkbox" role="switch" />
               </label>
@@ -358,7 +398,7 @@
               <div class="row stacked">
                 <div class="row-text">
                   <span class="row-title">Chave do OpenRouter <span id="key-status" class="pill"></span></span>
-                  <span class="row-desc">Guardada no cofre do sistema. Nunca é mostrada nem gravada em ficheiros.</span>
+                  <span class="row-desc">Guardo-a no cofre do sistema. Nunca a mostro nem a gravo em ficheiros.</span>
                   <span id="key-info" class="row-desc"></span>
                 </div>
                 <form id="key-form" class="row-control">
@@ -377,20 +417,9 @@
                 </label>
                 <div class="row-control">
                   <span class="input-unit">
-                    <span aria-hidden="true">$</span>
-                    <input id="budget" type="number" min="0" step="0.5" inputmode="decimal" placeholder="sem" />
+                    <input id="budget" type="number" min="0" step="0.5" inputmode="decimal" placeholder="sem" aria-describedby="budget-unit" />
+                    <span id="budget-unit">US$</span>
                   </span>
-                </div>
-              </div>
-
-              <div class="row">
-                <div class="row-text">
-                  <span class="row-title">Formato de envio</span>
-                  <span class="row-desc">Multipart envia o áudio em bruto; JSON usa base64 (~33% maior).</span>
-                </div>
-                <div class="segmented" role="radiogroup" aria-label="Formato de envio">
-                  <label><input type="radio" name="transport" value="multipart" /><span>Multipart</span></label>
-                  <label><input type="radio" name="transport" value="json" /><span>JSON</span></label>
                 </div>
               </div>
 
@@ -407,6 +436,20 @@
                 <p class="row-desc" id="stt-meta"></p>
               </div>
             </div>
+
+            <h4 class="section-title">Avançado</h4>
+            <div class="rows">
+              <div class="row">
+                <div class="row-text">
+                  <span id="transport-label" class="row-title">Formato de envio</span>
+                  <span class="row-desc">Multipart envia o áudio em bruto; JSON usa base64 (~33 % maior). Só vale a pena mudar se um modelo recusar o envio.</span>
+                </div>
+                <div class="segmented" role="radiogroup" aria-labelledby="transport-label">
+                  <label><input type="radio" name="transport" value="multipart" /><span>Multipart</span></label>
+                  <label><input type="radio" name="transport" value="json" /><span>JSON</span></label>
+                </div>
+              </div>
+            </div>
           </section>
 
           <!-- Limpeza -->
@@ -416,7 +459,7 @@
               Depois da transcrição, um modelo de texto corrige a pontuação, remove hesitações ("ééé", "hmm") e, quando
               te corriges a meio da frase ("às duas, não, às três"), fica só a correção. Recebe também as palavras do
               dicionário, mas nunca o texto das expansões.
-              Acrescenta uma ida à rede a cada ditado. Se falhar ou demorar mais de 6 s, é colado o texto sem limpeza.
+              Acrescenta uma ida à rede a cada ditado. Se falhar ou demorar mais de 6 s, colo o texto sem limpeza.
             </p>
             <div class="rows">
               <label class="row switch">
@@ -476,6 +519,18 @@
           </section>
         </div>
       </div>
+    </dialog>
+
+    <!-- ============================================================ Confirmação (ações destrutivas) -->
+    <dialog id="confirm" class="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+      <form method="dialog" class="confirm-box">
+        <h2 id="confirm-title"></h2>
+        <p id="confirm-text"></p>
+        <div class="confirm-actions">
+          <button type="submit" value="cancel" class="ghost" autofocus>Cancelar</button>
+          <button id="confirm-ok" type="submit" value="ok" class="primary danger"></button>
+        </div>
+      </form>
     </dialog>
   </body>
 </html>

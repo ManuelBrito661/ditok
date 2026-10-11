@@ -11,7 +11,7 @@ import {
   type ModelList,
 } from "./api";
 import { ago, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
-import { $, app, notifyViewChange, onViewChange, save, toast } from "./store";
+import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
 
 export type Tab = "geral" | "transcricao" | "limpeza" | "dados";
 
@@ -119,7 +119,7 @@ function setupShortcut() {
 // ---------------------------------------------------------------- chave
 
 function describeKey(info: KeyInfo | null): string {
-  if (!info) return "Guardada, mas não foi possível validar (sem rede?).";
+  if (!info) return "Guardada, mas não a consegui validar (sem rede?).";
   const parts = [];
   if (info.label) parts.push(info.label);
   if (info.usage != null) parts.push(`gasto ${usd(info.usage, 2)}`);
@@ -167,7 +167,12 @@ function setupKey() {
   });
 
   $("key-delete").addEventListener("click", async () => {
-    if (!confirm("Apagar a chave do OpenRouter do cofre do sistema? O ditado deixa de funcionar até guardares outra.")) return;
+    const ok = await confirmDanger(
+      "Apagar a chave do OpenRouter?",
+      "Tiro-a do cofre do sistema. Não consigo transcrever até guardares outra.",
+      "Apagar chave",
+    );
+    if (!ok) return;
     try {
       await api.deleteApiKey();
       app.view.api_key_set = false;
@@ -187,7 +192,7 @@ function price(m: ModelInfo, kind: ModelKind): string {
   if (m.prompt_price == null) return "preço variável";
   // Transcrição cobrada à duração: "prompt" é USD por segundo de áudio.
   if (kind === "transcription" && !m.completion_price) return `${usd(m.prompt_price * 60, 5)}/min`;
-  const perM = (v: number | null) => (v == null ? "?" : `$${(v * 1e6).toFixed(2)}`);
+  const perM = (v: number | null) => (v == null ? "?" : usd(v * 1e6, 2));
   return `${perM(m.prompt_price)} / ${perM(m.completion_price)} por M tokens`;
 }
 
@@ -207,23 +212,49 @@ function modelPicker(kind: ModelKind, prefix: "stt" | "cleanup", field: "stt_mod
     const matches = data.models.filter((m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
     // O modelo selecionado aparece sempre primeiro.
     matches.sort((a, b) => Number(b.id === current) - Number(a.id === current));
+    // Se o foco estava na lista, volta para a opção selecionada depois de a redesenhar.
+    const hadFocus = list.contains(document.activeElement);
+    const shown = matches.slice(0, MAX_SHOWN);
+    // Tabindex rotativo: só uma opção entra na ordem do Tab (a selecionada, ou a
+    // primeira); as setas, Home e End andam entre as outras.
+    const tabStop = Math.max(0, shown.findIndex((m) => m.id === current));
     list.replaceChildren(
-      ...matches.slice(0, MAX_SHOWN).map((m) => {
+      ...shown.map((m, i) => {
         const li = document.createElement("li");
         const selected = m.id === current;
         li.setAttribute("role", "option");
         li.setAttribute("aria-selected", String(selected));
-        li.tabIndex = 0;
+        li.tabIndex = i === tabStop ? 0 : -1;
         li.innerHTML = `<span class="model-name"></span><code class="model-id"></code><span class="model-price"></span>`;
         (li.children[0] as HTMLElement).textContent = m.name;
         (li.children[1] as HTMLElement).textContent = m.id;
         (li.children[2] as HTMLElement).textContent = price(m, kind);
         const choose = () => !selected && save({ [field]: m.id } as Partial<Config>);
         li.addEventListener("click", choose);
-        li.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), choose()));
+        li.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            void choose();
+            return;
+          }
+          const items = [...list.children] as HTMLElement[];
+          const at = items.indexOf(li);
+          const to =
+            e.key === "ArrowDown" ? Math.min(at + 1, items.length - 1)
+            : e.key === "ArrowUp" ? Math.max(at - 1, 0)
+            : e.key === "Home" ? 0
+            : e.key === "End" ? items.length - 1
+            : -1;
+          if (to < 0) return;
+          e.preventDefault();
+          li.tabIndex = -1;
+          items[to].tabIndex = 0;
+          items[to].focus();
+        });
         return li;
       }),
     );
+    if (hadFocus) (list.children[tabStop] as HTMLElement | undefined)?.focus();
     const more = matches.length > MAX_SHOWN ? ` (a mostrar ${MAX_SHOWN}; pesquisa para filtrar)` : "";
     meta.textContent =
       `${matches.length} de ${data.models.length} modelos · lista de ${ago(data.fetched_at)}` +
@@ -236,7 +267,7 @@ function modelPicker(kind: ModelKind, prefix: "stt" | "cleanup", field: "stt_mod
       data = await api.listModels(kind, refresh);
       render();
     } catch (e) {
-      meta.textContent = `Não foi possível obter a lista: ${errorText(e)}`;
+      meta.textContent = `Não consegui obter a lista: ${errorText(e)}`;
     }
   };
 
@@ -297,8 +328,8 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   $<HTMLInputElement>("autostart").addEventListener("change", async (e) => {
     const input = e.target as HTMLInputElement;
     try {
+      // Sem aviso quando corre bem: o interruptor já mostra o novo estado.
       app.view.autostart = await api.setAutostart(input.checked);
-      toast(app.view.autostart ? "Arranque automático ativado" : "Arranque automático desativado");
     } catch (err) {
       toast(errorText(err), "error");
     }
@@ -306,7 +337,12 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   });
 
   $("history-clear").addEventListener("click", async () => {
-    if (!confirm("Apagar todo o histórico de ditados deste computador?")) return;
+    const ok = await confirmDanger(
+      "Apagar todo o histórico?",
+      "Removo todos os ditados guardados neste computador. Não dá para desfazer.",
+      "Apagar histórico",
+    );
+    if (!ok) return;
     try {
       await api.clearHistory();
       onHistoryCleared();

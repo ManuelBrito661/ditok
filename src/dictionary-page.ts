@@ -19,6 +19,8 @@ interface ListSpec {
   empty: string;
   /** Mensagem quando falta um campo obrigatório. */
   missing: string;
+  /** Nome de uma entrada no aviso "Apagada". */
+  noun: string;
 }
 
 const SPECS: ListSpec[] = [
@@ -26,21 +28,24 @@ const SPECS: ListSpec[] = [
     id: "dict",
     get: () => app.view.config.dictionary.map((r) => [r.from, r.to]),
     patch: (pairs) => ({ dictionary: pairs.map(([from, to]) => ({ from, to })) }),
-    placeholders: ["a própria palavra", "Escrito"],
+    // Os mesmos textos no formulário de cima (index.html) e em cada linha.
+    placeholders: ["Como sai (opcional)", "Como deve ficar"],
     labels: ["Como o modelo escreve", "Como deve ficar escrito"],
     multiline: false,
     empty: "Ainda não há palavras.",
     missing: "Escreve como a palavra deve ficar.",
+    noun: "Palavra apagada",
   },
   {
     id: "snippet",
     get: () => app.view.config.snippets.map((s) => [s.trigger, s.text]),
     patch: (pairs) => ({ snippets: pairs.map(([trigger, text]) => ({ trigger, text })) }),
-    placeholders: ["Frase", "Texto"],
-    labels: ["Frase que dizes", "Texto que é colado"],
+    placeholders: ["Frase que dizes", "Texto a colar"],
+    labels: ["Frase que dizes", "Texto a colar"],
     multiline: true,
     empty: "Ainda não há expansões.",
     missing: "Uma expansão precisa da frase e do texto.",
+    noun: "Expansão apagada",
   },
 ];
 
@@ -95,7 +100,28 @@ function row(spec: ListSpec, pair: Pair, index: number): HTMLLIElement {
   remove.className = "icon-button remove";
   remove.setAttribute("aria-label", `Apagar "${pair[0] || pair[1]}"`);
   remove.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`;
-  remove.addEventListener("click", () => void save(spec.patch(spec.get().filter((_, i) => i !== index))));
+  remove.addEventListener("click", async () => {
+    const removed = spec.get()[index];
+    // A entrada que vinha a seguir: o "Desfazer" repõe antes dela, mesmo que entretanto
+    // se tenha acrescentado outra no topo (só o índice ficaria desviado).
+    const next = spec.get()[index + 1];
+    if (!(await save(spec.patch(spec.get().filter((_, i) => i !== index))))) return;
+    // Sem confirmação, mas com "Desfazer" (só da última entrada apagada).
+    const undo = toast(spec.noun, "ok", {
+      label: "Desfazer",
+      run: async () => {
+        const pairs = spec.get().slice();
+        const at = next ? pairs.findIndex((p) => p[0] === next[0] && p[1] === next[1]) : -1;
+        const pos = at >= 0 ? at : Math.min(index, pairs.length);
+        pairs.splice(pos, 0, removed);
+        if (!(await save(spec.patch(pairs)))) return;
+        // O "Desfazer" escondeu-se: o foco vai para a entrada reposta.
+        $(`${spec.id}-list`).children[pos]?.querySelector<HTMLElement>("input, textarea")?.focus();
+      },
+    });
+    // O botão "Apagar" desapareceu com a linha: o foco vai para o "Desfazer".
+    undo?.focus();
+  });
 
   li.append(a, arrow(), b, remove);
   return li;
@@ -123,20 +149,35 @@ function setupAdd(spec: ListSpec) {
   const form = $<HTMLFormElement>(`${spec.id}-add`);
   const a = $<HTMLInputElement>(`${spec.id}-a`);
   const b = $<HTMLInputElement | HTMLTextAreaElement>(`${spec.id}-b`);
+  const error = $(`${spec.id}-error`);
+
+  /** A mensagem fica por baixo do formulário, o campo em causa fica marcado e com o foco. */
+  const invalid = (field: HTMLElement, message: string) => {
+    error.textContent = message;
+    error.hidden = false;
+    field.setAttribute("aria-invalid", "true");
+    field.setAttribute("aria-describedby", error.id);
+    field.focus();
+  };
+  const clear = () => {
+    error.hidden = true;
+    for (const f of [a, b]) {
+      f.removeAttribute("aria-invalid");
+      f.removeAttribute("aria-describedby");
+    }
+  };
+  a.addEventListener("input", clear);
+  b.addEventListener("input", clear);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    clear();
     const pair: Pair = [a.value.trim(), b.value.trim()];
-    if (!pair[1] || (spec.multiline && !pair[0])) {
-      toast(spec.missing, "error");
-      return;
-    }
+    if (spec.multiline && !pair[0]) return invalid(a, spec.missing);
+    if (!pair[1]) return invalid(b, spec.missing);
     const taken = new Set(spec.get().flatMap((p) => variants(spec, p)));
     const repeated = variants(spec, pair).find((v) => taken.has(v));
-    if (repeated) {
-      toast(`"${repeated}" já está na lista.`, "error");
-      return;
-    }
+    if (repeated) return invalid(pair[0] ? a : b, `"${repeated}" já está na lista.`);
     // As novas ficam no topo, logo por baixo do formulário, onde se vêem.
     if (await save(spec.patch([pair, ...spec.get()]))) {
       a.value = "";
@@ -144,7 +185,7 @@ function setupAdd(spec: ListSpec) {
       a.focus();
     }
   });
-  // Numa caixa de várias linhas o Enter muda de linha; Ctrl+Enter acrescenta.
+  // Numa caixa de várias linhas o Enter muda de linha; Ctrl+Enter acrescenta (dito na descrição da secção).
   b.addEventListener("keydown", (e) => {
     if (e instanceof KeyboardEvent && e.key === "Enter" && (e.ctrlKey || e.metaKey)) form.requestSubmit();
   });

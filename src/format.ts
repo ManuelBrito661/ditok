@@ -4,17 +4,44 @@ import type { MetricsRow } from "./api";
 
 export const isMac = navigator.userAgent.includes("Mac");
 
-/** Valores pequenos em decimal com 2 algarismos significativos ($0.000087), nunca em notação científica. */
+const money = (options: Intl.NumberFormatOptions) =>
+  new Intl.NumberFormat("pt-PT", { style: "currency", currency: "USD", ...options });
+const USD_WHOLE = money({ maximumFractionDigits: 0 });
+const USD_2 = money({ minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const USD_SMALL = money({ maximumSignificantDigits: 2 });
+const usdFixed = new Map<number, Intl.NumberFormat>();
+
+/** Dólares à portuguesa ("1,23 US$"). Valores pequenos ficam em decimal com 2
+ *  algarismos significativos ("0,000087 US$"), nunca em notação científica. */
 export const usd = (v: number | null | undefined, digits = 4) => {
   if (v == null) return "—";
-  if (v === 0) return "$0";
-  if (Math.abs(v) >= 1) return `$${v.toFixed(2)}`;
-  if (Math.abs(v) >= 0.01) return `$${v.toFixed(digits)}`;
-  return `$${v.toLocaleString("en-US", { maximumSignificantDigits: 2, maximumFractionDigits: 12 })}`;
+  if (v === 0) return USD_WHOLE.format(0);
+  if (Math.abs(v) >= 1) return USD_2.format(v);
+  if (Math.abs(v) >= 0.01) {
+    if (!usdFixed.has(digits)) usdFixed.set(digits, money({ minimumFractionDigits: digits, maximumFractionDigits: digits }));
+    return usdFixed.get(digits)!.format(v);
+  }
+  return USD_SMALL.format(v);
 };
 
+const SECONDS = new Intl.NumberFormat("pt-PT", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+/** "850 ms" ou "1,2 s". */
 export const ms = (v: number | null | undefined) =>
-  v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v} ms`;
+  v == null ? "—" : v >= 1000 ? `${SECONDS.format(v / 1000)} s` : `${Math.round(v)} ms`;
+
+/** "2026-10" → "outubro de 2026". */
+export function monthLabel(key: string): string {
+  const [y, m] = key.split("-").map(Number);
+  if (!y || !m) return key;
+  return new Date(y, m - 1, 1).toLocaleDateString("pt-PT", { month: "long", year: "numeric" });
+}
+
+/** "Bom dia", "Boa tarde" ou "Boa noite", pela hora do computador. */
+export function greeting(now = new Date()): string {
+  const h = now.getHours();
+  return h >= 6 && h < 12 ? "Bom dia" : h >= 12 && h < 20 ? "Boa tarde" : "Boa noite";
+}
 
 export function ago(iso: string): string {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -121,4 +148,5 @@ export function duration(seconds: number): string {
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
 }
 
-export const megabytes = (bytes: number) => `${(bytes / 1_048_576).toFixed(bytes < 10_485_760 ? 1 : 0)} MB`;
+export const megabytes = (bytes: number) =>
+  `${(bytes / 1_048_576).toLocaleString("pt-PT", { maximumFractionDigits: bytes < 10_485_760 ? 1 : 0 })} MB`;

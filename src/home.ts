@@ -6,19 +6,21 @@ import listeningMascotUrl from "../design/mascot/a-ouvir.svg?inline";
 import thinkingMascotUrl from "../design/mascot/a-processar.svg?inline";
 import readyMascotUrl from "../design/mascot/pronto.svg?inline";
 import { api, errorText, type HistoryEntry, type Stats } from "./api";
-import { budgetLevel, countWords, dayLabel, ms, renderKeys, timeOfDay, usd } from "./format";
+import { budgetLevel, countWords, dayLabel, greeting, ms, renderKeys, timeOfDay, usd } from "./format";
 import { openSettings } from "./settings-dialog";
 import { $, app, onViewChange, save, toast } from "./store";
 
 let history: HistoryEntry[] = [];
 let stats: Stats | null = null;
+/** Até o primeiro `getHistory` responder não se sabe se há ditados: nada de "Ainda não há". */
+let historyState: "loading" | "ready" | "failed" = "loading";
 
 function renderStats() {
   const month = stats?.months[stats.current_month];
   $("s-count").textContent = stats ? String(month?.dictations ?? 0) : "—";
   const spent = month?.cost_usd ?? 0;
   $("s-cost").textContent = stats ? usd(spent, 2) : "—";
-  // Com orçamento: "$4.20 de $10 este mês", âmbar aos 80 % e vermelho aos 100 %.
+  // Com orçamento: "4,20 US$ de 10,00 US$ este mês", âmbar aos 80 % e vermelho aos 100 %.
   const budget = app.view.config.monthly_budget_usd;
   $("s-cost-of").textContent = budget ? `de ${usd(budget, 2)} ` : "";
   $("s-cost-item").className = budgetLevel(spent, budget);
@@ -35,7 +37,7 @@ function renderStats() {
       return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
     })
     .reduce((sum, h) => sum + countWords(h.text), 0);
-  $("s-words").textContent = app.view.config.history_enabled ? words.toLocaleString("pt-PT") : "—";
+  $("s-words").textContent = app.view.config.history_enabled && historyState === "ready" ? words.toLocaleString("pt-PT") : "—";
 }
 
 async function copy(text: string, button: HTMLButtonElement) {
@@ -61,6 +63,13 @@ function entryRow(h: HistoryEntry): HTMLLIElement {
   const text = document.createElement("p");
   text.textContent = h.text; // textContent: o texto ditado nunca é interpretado como HTML
   body.append(text);
+  // Discreto, mas à vista: quanto tempo demorou e com que modelo.
+  const meta = document.createElement("p");
+  meta.className = "entry-meta";
+  const shortModel = h.model.slice(h.model.lastIndexOf("/") + 1);
+  meta.textContent = h.total_ms != null ? `${ms(h.total_ms)} · ${shortModel}` : shortModel;
+  meta.title = h.model;
+  body.append(meta);
   if (h.raw_text) {
     const raw = document.createElement("details");
     const summary = document.createElement("summary");
@@ -77,7 +86,6 @@ function entryRow(h: HistoryEntry): HTMLLIElement {
   button.type = "button";
   button.className = "secondary small";
   button.textContent = "Copiar";
-  button.title = `${ms(h.total_ms)} · ${h.model}`;
   button.addEventListener("click", () => copy(h.text, button));
   actions.append(button);
 
@@ -88,7 +96,8 @@ function entryRow(h: HistoryEntry): HTMLLIElement {
 function renderHistory() {
   const enabled = app.view.config.history_enabled;
   $("history-off").hidden = enabled;
-  $("history-empty").hidden = !enabled || history.length > 0;
+  $("history-error").hidden = !enabled || historyState !== "failed";
+  $("history-empty").hidden = !enabled || historyState !== "ready" || history.length > 0;
 
   // O backend devolve do mais recente para o mais antigo: basta cortar por dia.
   const groups = new Map<string, HistoryEntry[]>();
@@ -123,7 +132,14 @@ function renderView() {
 /** Volta a pedir histórico e métricas ao backend (no arranque e depois de cada ditado). */
 export async function refreshHome() {
   const [h, s] = await Promise.allSettled([api.getHistory(), api.getStats()]);
-  if (h.status === "fulfilled") history = h.value;
+  if (h.status === "fulfilled") {
+    history = h.value;
+    historyState = "ready";
+  } else if (historyState !== "ready") {
+    // Se já havia uma lista, fica a que estava; senão, diz o que falhou.
+    historyState = "failed";
+    $("history-error-text").textContent = errorText(h.reason);
+  }
   if (s.status === "fulfilled") stats = s.value;
   renderHistory();
   renderStats();
@@ -148,6 +164,8 @@ function cycleMascot() {
 }
 
 export function setupHome() {
+  $("home-title").textContent = greeting();
+  $("history-retry").addEventListener("click", () => void refreshHome());
   for (const img of document.querySelectorAll<HTMLImageElement>(".empty-mascot")) img.src = mascotUrl;
   cycleMascot();
   $("key-banner-open").addEventListener("click", () => openSettings("transcricao"));
@@ -160,6 +178,7 @@ export function setupHome() {
 
 export function clearHomeHistory() {
   history = [];
+  historyState = "ready";
   renderHistory();
   renderStats();
 }

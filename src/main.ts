@@ -13,19 +13,22 @@ import { $, app, onViewChange, refreshKey, toast } from "./store";
 
 type Page = "inicio" | "dicionario" | "ficheiros" | "metricas";
 
-function showPage(page: Page) {
+/** Muda de página. `focus`: leva o foco para o título da nova página, para quem
+ *  usa teclado ou leitor de ecrã saber que mudou (não quando a mudança é automática). */
+function showPage(page: Page, focus = false) {
   for (const link of document.querySelectorAll<HTMLButtonElement>(".nav-link[data-page]")) {
     if (link.dataset.page === page) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
   for (const p of document.querySelectorAll<HTMLElement>(".page")) p.hidden = p.id !== `page-${page}`;
   document.querySelector("main")!.scrollTop = 0;
+  if (focus) document.querySelector<HTMLElement>(`#page-${page} h1`)?.focus({ preventScroll: true });
   if (page === "metricas") void renderMemory().catch(() => {});
 }
 
 function setupNav() {
   for (const link of document.querySelectorAll<HTMLButtonElement>(".nav-link[data-page]")) {
-    link.addEventListener("click", () => showPage(link.dataset.page as Page));
+    link.addEventListener("click", () => showPage(link.dataset.page as Page, true));
   }
   $("open-settings").addEventListener("click", () => openSettings());
 }
@@ -70,15 +73,40 @@ function blockContextMenu() {
   });
 }
 
+/** Sem definições nada funciona: em vez das páginas vazias, um ecrã de erro com
+ *  o motivo e "Tentar de novo". Resolve quando as definições chegam. */
+async function loadSettings(): Promise<void> {
+  const error = $("boot-error");
+  for (;;) {
+    try {
+      app.view = await api.getSettings();
+      break;
+    } catch (e) {
+      for (const p of document.querySelectorAll<HTMLElement>(".page")) p.hidden = p !== error;
+      $("boot-error-text").textContent = errorText(e);
+      $("status-dot").className = "dot warn";
+      $("status-text").textContent = "Sem definições";
+      error.hidden = false;
+      const retry = $<HTMLButtonElement>("boot-retry");
+      retry.disabled = false;
+      $("boot-error-title").focus();
+      await new Promise((resolve) => retry.addEventListener("click", resolve, { once: true }));
+      retry.disabled = true;
+      $("status-text").textContent = "A carregar…";
+      $("status-dot").className = "dot";
+    }
+  }
+  if (!error.hidden) {
+    error.hidden = true;
+    showPage("inicio");
+  }
+}
+
 async function main() {
   blockContextMenu();
   $<HTMLImageElement>("brand-mascot").src = mascotUrl;
-  try {
-    app.view = await api.getSettings();
-  } catch (e) {
-    toast(`Não foi possível ler as definições: ${errorText(e)}`, "error");
-    return;
-  }
+  for (const img of document.querySelectorAll<HTMLImageElement>(".boot-error .empty-mascot")) img.src = mascotUrl;
+  await loadSettings();
   setupNav();
   setupSettings(clearHomeHistory);
   setupHome();

@@ -23,7 +23,7 @@ function show(step: Step) {
 
 async function choose(path: string) {
   if (job?.status === "running") {
-    toast("Já estou a transcrever um ficheiro. Espera que acabe ou pára-o.", "error");
+    toast("Já estou a transcrever um ficheiro. Espera que acabe ou para-o.", "error");
     return;
   }
   try {
@@ -123,6 +123,9 @@ function renderJob(j: FileJob) {
   message.textContent = j.message ?? "";
   message.hidden = !j.message;
   message.className = j.status === "failed" ? "error" : "muted";
+  // Uma falha é anunciada logo pelo leitor de ecrã; o resto fica em silêncio.
+  if (j.status === "failed" && j.message) message.setAttribute("role", "alert");
+  else message.removeAttribute("role");
 
   const text = $("fj-text");
   text.textContent = j.text ?? ""; // textContent: o texto nunca é interpretado como HTML
@@ -207,8 +210,8 @@ export async function setupFiles(showPage: () => void) {
   });
   $("fj-save").addEventListener("click", async () => {
     try {
+      // Sem aviso: a linha por baixo dos botões já diz onde ficou.
       const path = await files.saveBeside();
-      toast("Guardado");
       $("fj-saved").textContent = `Guardado em ${path}`;
     } catch (e) {
       toast(errorText(e), "error");

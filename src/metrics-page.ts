@@ -1,25 +1,52 @@
-// Página Métricas: percentis, custos por mês, orçamento, o que resta na chave e RAM.
+// Página Métricas: tempos (o normal e o mais lento em cada 10), custos por mês,
+// orçamento, o que resta na chave e RAM.
 
-import { api, type Stats } from "./api";
-import { budgetLevel, costPerMinute, dateTime, duration, ms, usd } from "./format";
+import { api, errorText, type Percentiles, type Stats } from "./api";
+import { budgetLevel, costPerMinute, dateTime, duration, monthLabel, ms, usd } from "./format";
 import { openSettings } from "./settings-dialog";
 import { $, app, onViewChange } from "./store";
 
 let stats: Stats | null = null;
 
+/** Uma linha que ocupa a tabela toda: "ainda não há" ou o erro. */
+function messageRow(table: string, text: string, failed = false) {
+  const columns = $(table).closest("table")!.querySelectorAll("thead th").length;
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = columns;
+  td.className = failed ? "table-empty failed" : "table-empty";
+  td.textContent = text;
+  tr.append(td);
+  $(table).replaceChildren(tr);
+}
+
+/** Valor grande = o normal (p50); por baixo, o tempo que 9 em cada 10 não passam (p90). */
+function timing(id: string, p: Percentiles | null) {
+  $(id).textContent = p ? ms(p.p50) : "—";
+  $(`${id}-sub`).textContent = p ? `normal · 9 em 10 até ${ms(p.p90)}` : "";
+}
+
 export async function renderStats() {
-  const s = await api.getStats();
+  let s: Stats;
+  try {
+    s = await api.getStats();
+  } catch (e) {
+    const why = `Não consegui ler as métricas: ${errorText(e)}`;
+    messageRow("recent", why, true);
+    messageRow("months", why, true);
+    return;
+  }
   stats = s;
   const month = s.months[s.current_month];
   $("m-cost").textContent = usd(month?.cost_usd ?? 0);
   $("m-count").textContent = String(month?.dictations ?? 0);
-  const pair = (p: typeof s.total) => (p ? `${ms(p.p50)} / ${ms(p.p90)}` : "—");
-  $("m-total").textContent = pair(s.total);
-  $("m-stt").textContent = pair(s.stt);
-  $("m-cleanup").textContent = pair(s.cleanup);
+  timing("m-total", s.total);
+  timing("m-stt", s.stt);
+  timing("m-cleanup", s.cleanup);
   renderMoney();
 
-  $("recent").replaceChildren(
+  if (!s.recent.length) messageRow("recent", "Ainda não há ditados.");
+  else $("recent").replaceChildren(
     ...s.recent.map((r) => {
       const tr = document.createElement("tr");
       const cost = (r.cost_usd ?? 0) + (r.cleanup_cost_usd ?? 0);
@@ -40,10 +67,12 @@ export async function renderStats() {
     }),
   );
 
-  $("months").replaceChildren(
-    ...Object.entries(s.months).reverse().map(([m, t]) => {
+  const months = Object.entries(s.months).reverse();
+  if (!months.length) messageRow("months", "Ainda não há ditados.");
+  else $("months").replaceChildren(
+    ...months.map(([m, t]) => {
       const tr = document.createElement("tr");
-      for (const [i, c] of [m, String(t.dictations), usd(t.cost_usd)].entries()) {
+      for (const [i, c] of [monthLabel(m), String(t.dictations), usd(t.cost_usd)].entries()) {
         const td = document.createElement("td");
         td.textContent = c;
         if (i > 0) td.className = "num";
@@ -88,7 +117,7 @@ function renderMoney() {
     sub.replaceChildren(setupLink("Configurar a chave", () => openSettings("transcricao")));
   } else if (!key) {
     $("m-key").textContent = "—";
-    sub.textContent = "Não foi possível perguntar ao OpenRouter.";
+    sub.textContent = "Não consegui perguntar ao OpenRouter.";
   } else if (key.limit_remaining == null) {
     $("m-key").textContent = "Sem limite";
     sub.textContent = `A chave não tem limite de gasto · gastou ${usd(key.usage ?? 0, 2)}`;
@@ -97,14 +126,14 @@ function renderMoney() {
     // Só os ditados (com a limpeza, se estiver ligada), não os ficheiros.
     const dictations = (stats?.recent ?? []).filter((r) => !r.file);
     const perMin = costPerMinute(dictations, app.view.config.stt_model, true);
-    const minutes = perMin ? ` · ≈ ${Math.floor(key.limit_remaining / perMin)} min de ditado ao custo atual` : "";
+    const minutes = perMin ? ` · ≈ ${Math.floor(key.limit_remaining / perMin).toLocaleString("pt-PT")} min de ditado ao custo atual` : "";
     sub.textContent = `de ${usd(key.limit, 2)}${minutes}`;
   }
 }
 
 export async function renderMemory() {
   const m = await api.getMemory();
-  $("m-memory").textContent = m ? `${m.app_mb.toFixed(0)} MB / ${m.webview_mb.toFixed(0)} MB` : "—";
+  $("m-memory").textContent = m ? `${Math.round(m.app_mb)} MB / ${Math.round(m.webview_mb)} MB` : "—";
   if (m) $("m-memory").title = `WebView: ${m.webview_processes} processos`;
 }
 
