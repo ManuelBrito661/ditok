@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     config::Config, dictation::DictationEvent, history::HistoryStore, metrics::MetricsStore,
-    secrets, stt::openrouter::OpenRouter,
+    secrets, stt::openrouter::OpenRouter, text::TextRules,
 };
 
 pub struct AppState {
@@ -21,7 +21,7 @@ pub struct AppState {
     /// um ditado em curso usa a mesma configuração do princípio ao fim, mesmo que a
     /// guardes na janela a meio. O `RwLock` só é tocado durante a troca do `Arc`,
     /// por isso nunca bloqueia o caminho crítico de forma percetível.
-    config: RwLock<Arc<Config>>,
+    current: RwLock<Current>,
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,
@@ -31,6 +31,22 @@ pub struct AppState {
     pub history: HistoryStore,
     /// Para avisar o orquestrador (ex.: a chave mudou).
     pub events: UnboundedSender<DictationEvent>,
+}
+
+/// A configuração e as regras de texto compiladas a partir dela. Andam juntas
+/// para nunca haver um ditado com o dicionário de uma versão e o resto de outra.
+struct Current {
+    config: Arc<Config>,
+    rules: Arc<TextRules>,
+}
+
+impl Current {
+    fn new(config: Config) -> Self {
+        Self {
+            rules: Arc::new(TextRules::new(&config)),
+            config: Arc::new(config),
+        }
+    }
 }
 
 pub struct Dirs {
@@ -50,7 +66,7 @@ impl AppState {
     ) -> Self {
         Self {
             app,
-            config: RwLock::new(Arc::new(config)),
+            current: RwLock::new(Current::new(config)),
             metrics: MetricsStore::new(dirs.data.clone()),
             history: HistoryStore::new(dirs.data.clone()),
             config_dir: dirs.config,
@@ -63,20 +79,31 @@ impl AppState {
     }
 
     pub fn config(&self) -> Arc<Config> {
+        Arc::clone(&self.read().config)
+    }
+
+    /// O dicionário, as expansões e os comandos, já compilados.
+    pub fn text_rules(&self) -> Arc<TextRules> {
+        Arc::clone(&self.read().rules)
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Current> {
         // Um `RwLock` fica "envenenado" se uma thread entrar em pânico com ele
         // trancado. O valor lá dentro continua válido (só trocamos `Arc`s), por isso
         // recuperamo-lo em vez de propagar o pânico.
-        Arc::clone(&self.config.read().unwrap_or_else(PoisonError::into_inner))
+        self.current.read().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Grava no disco e só depois troca em memória. O write lock serializa duas
     /// gravações simultâneas vindas da UI.
     pub fn replace_config(&self, new: Config) -> std::io::Result<Arc<Config>> {
-        let mut guard = self.config.write().unwrap_or_else(PoisonError::into_inner);
-        new.save(&self.config_dir)?;
-        let new = Arc::new(new);
-        *guard = Arc::clone(&new);
-        Ok(new)
+        // As regras compilam-se antes de trancar: quem lê a configuração (um
+        // ditado a começar) nunca fica à espera do regex.
+        let new = Current::new(new);
+        let mut guard = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        new.config.save(&self.config_dir)?;
+        *guard = new;
+        Ok(Arc::clone(&guard.config))
     }
 
     /// Cria o cliente do OpenRouter se a chave existir no cofre. `Ok(None)` = sem chave.

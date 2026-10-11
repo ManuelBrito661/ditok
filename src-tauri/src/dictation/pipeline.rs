@@ -1,5 +1,6 @@
 //! O caminho crítico de um ditado, depois de largar a tecla:
-//! WAV pronto (sem voz, pára aqui) → pedido STT → (limpeza com LLM, se ligada) → colar →
+//! WAV pronto (sem voz, pára aqui) → pedido STT → comandos, expansões e dicionário →
+//! (limpeza com LLM, se ligada) → colar →
 //! (fora do caminho crítico) métricas, histórico, WAV de teste e, se a opção
 //! "deixar no clipboard" estiver desligada, reposição do clipboard.
 
@@ -18,6 +19,7 @@ use crate::{
     paste,
     state::AppState,
     stt::{SttProvider, SttRequest, openrouter::OpenRouter},
+    text::{Applied, Processed, TextRules},
 };
 
 /// Gravações mais curtas do que isto são quase de certeza toques acidentais.
@@ -50,6 +52,7 @@ pub async fn process(
 ) -> Outcome {
     // Uma "fotografia" da configuração: o ditado usa-a do princípio ao fim.
     let config = state.config();
+    let rules = state.text_rules();
 
     let rec = match recording.await {
         Ok(rec) => rec,
@@ -111,6 +114,7 @@ pub async fn process(
         error: None,
     };
     let mut history_entry = None;
+    let mut applied = Applied::default();
 
     let outcome = match stt.transcribe(rec.wav.clone(), &req).await {
         Err(e) => {
@@ -130,22 +134,25 @@ pub async fn process(
                 tracing::info!("nenhuma fala detetada; nada para colar");
                 Outcome::Nothing
             } else {
-                let text = if config.cleanup_enabled {
-                    match cleanup::clean(&openrouter, &config.cleanup_model, &raw).await {
-                        Ok(c) => {
-                            m.cleanup_ms = Some(ms(c.elapsed));
-                            m.cleanup_cost_usd = c.cost;
-                            c.text
-                        }
-                        Err(e) => {
-                            // A limpeza é um extra: se falhar, cola-se o texto original.
-                            tracing::warn!(error = %e, model = %config.cleanup_model, "limpeza falhou; a colar o texto original");
-                            raw.clone()
-                        }
-                    }
+                // Comandos, expansões e dicionário: neste computador, em microssegundos.
+                let local = rules.apply(&raw);
+                applied = local.applied;
+                let cleaned = if config.cleanup_enabled
+                    && let Some(input) = local.cleanup_input()
+                {
+                    clean_with_llm(
+                        &openrouter,
+                        &config.cleanup_model,
+                        &rules,
+                        &local,
+                        input,
+                        &mut m,
+                    )
+                    .await
                 } else {
-                    raw.clone()
+                    None
                 };
+                let text = cleaned.unwrap_or(local.text);
                 m.chars = text.chars().count();
                 let restore_clipboard = !config.keep_in_clipboard;
                 let outcome =
@@ -179,6 +186,9 @@ pub async fn process(
         cost_usd = m.cost_usd,
         cleanup_cost_usd = m.cleanup_cost_usd,
         chars = m.chars,
+        commands = applied.commands,
+        replaced = applied.replaced,
+        expanded = applied.expanded,
         "ditado"
     );
 
@@ -199,6 +209,35 @@ pub async fn process(
         let _ = state.app.emit(EVENT_DICTATION_RECORDED, ());
     });
     outcome
+}
+
+/// A limpeza com IA é um extra: se falhar, demorar mais de 6 s ou estragar o
+/// texto (mexer nas linhas ou nas expansões), devolve `None` e cola-se o texto
+/// sem limpeza.
+async fn clean_with_llm(
+    openrouter: &OpenRouter,
+    model: &str,
+    rules: &TextRules,
+    local: &Processed,
+    input: &str,
+    m: &mut DictationMetrics,
+) -> Option<String> {
+    match cleanup::clean(openrouter, model, input, rules.vocabulary()).await {
+        Ok(c) => {
+            m.cleanup_ms = Some(ms(c.elapsed));
+            m.cleanup_cost_usd = c.cost;
+            local
+                .merge_cleaned(&c.text)
+                .inspect_err(|e| {
+                    tracing::warn!(error = %e, model, "resposta da limpeza ignorada; a colar o texto sem limpeza");
+                })
+                .ok()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, model, "limpeza falhou; a colar o texto sem limpeza");
+            None
+        }
+    }
 }
 
 async fn paste_text(

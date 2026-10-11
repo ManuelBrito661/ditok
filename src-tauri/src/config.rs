@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{hotkey::DEFAULT_SHORTCUT, stt::openrouter::Transport};
+use crate::{
+    hotkey::DEFAULT_SHORTCUT,
+    stt::openrouter::Transport,
+    text::{Replacement, Snippet},
+};
 
 pub const DEFAULT_STT_MODEL: &str = "openai/whisper-large-v3-turbo";
 pub const DEFAULT_CLEANUP_MODEL: &str = "openai/gpt-4.1-nano";
@@ -42,6 +46,12 @@ pub struct Config {
     pub save_last_recording: bool,
     /// Barra flutuante com a mascote. Desligá-la liberta a RAM do WebView dela.
     pub show_overlay: bool,
+    /// "nova linha" e "novo parágrafo" viram mudanças de linha (ver `text.rs`).
+    pub voice_commands: bool,
+    /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
+    pub dictionary: Vec<Replacement>,
+    /// Frases que dão lugar a um texto ("o meu email" → o endereço).
+    pub snippets: Vec<Snippet>,
 }
 
 impl Default for Config {
@@ -58,6 +68,9 @@ impl Default for Config {
             history_limit: 50,
             save_last_recording: false,
             show_overlay: true,
+            voice_commands: true,
+            dictionary: Vec::new(),
+            snippets: Vec::new(),
         }
     }
 }
@@ -72,7 +85,21 @@ pub enum ConfigError {
     Language,
     #[error("o histórico tem de guardar entre 1 e 1000 ditados")]
     HistoryLimit,
+    #[error("cada palavra do dicionário precisa de saber como fica escrita")]
+    DictionaryEntry,
+    #[error("cada expansão precisa de uma frase e de um texto")]
+    SnippetEntry,
+    #[error("o dicionário e as expansões têm um limite de {MAX_ENTRIES} entradas cada")]
+    TooManyEntries,
+    #[error("uma entrada do dicionário ou das expansões é demasiado longa")]
+    EntryTooLong,
 }
+
+/// Limites do dicionário e das expansões: muito acima do que se usa, só para um
+/// config.json editado à mão não pôr o regex a compilar durante segundos.
+const MAX_ENTRIES: usize = 1000;
+const MAX_PHRASE_CHARS: usize = 200;
+const MAX_SNIPPET_CHARS: usize = 5000;
 
 impl Config {
     pub fn path(config_dir: &Path) -> PathBuf {
@@ -92,6 +119,26 @@ impl Config {
         }
         if !(1..=1000).contains(&self.history_limit) {
             return Err(ConfigError::HistoryLimit);
+        }
+        if self.dictionary.len() > MAX_ENTRIES || self.snippets.len() > MAX_ENTRIES {
+            return Err(ConfigError::TooManyEntries);
+        }
+        let too_long = |s: &str, max: usize| s.chars().count() > max;
+        for r in &self.dictionary {
+            if r.to.trim().is_empty() {
+                return Err(ConfigError::DictionaryEntry);
+            }
+            if too_long(&r.from, MAX_PHRASE_CHARS) || too_long(&r.to, MAX_PHRASE_CHARS) {
+                return Err(ConfigError::EntryTooLong);
+            }
+        }
+        for s in &self.snippets {
+            if s.trigger.trim().is_empty() || s.text.trim().is_empty() {
+                return Err(ConfigError::SnippetEntry);
+            }
+            if too_long(&s.trigger, MAX_PHRASE_CHARS) || too_long(&s.text, MAX_SNIPPET_CHARS) {
+                return Err(ConfigError::EntryTooLong);
+            }
         }
         Ok(())
     }
@@ -156,6 +203,8 @@ mod tests {
             c.keep_in_clipboard,
             "um config.json antigo passa a deixar o ditado no clipboard"
         );
+        assert!(c.voice_commands, "comandos falados ligados por omissão");
+        assert!(c.dictionary.is_empty() && c.snippets.is_empty());
     }
 
     #[test]
@@ -195,6 +244,28 @@ mod tests {
         assert!(matches!(
             bad_limit.validate(),
             Err(ConfigError::HistoryLimit)
+        ));
+        let no_target = Config {
+            dictionary: vec![Replacement {
+                from: "tauri".into(),
+                to: "  ".into(),
+            }],
+            ..Config::default()
+        };
+        assert!(matches!(
+            no_target.validate(),
+            Err(ConfigError::DictionaryEntry)
+        ));
+        let empty_snippet = Config {
+            snippets: vec![Snippet {
+                trigger: "o meu email".into(),
+                text: String::new(),
+            }],
+            ..Config::default()
+        };
+        assert!(matches!(
+            empty_snippet.validate(),
+            Err(ConfigError::SnippetEntry)
         ));
     }
 }

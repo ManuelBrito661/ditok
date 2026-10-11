@@ -14,6 +14,7 @@ mod settings_window;
 mod state;
 mod stt;
 mod sysmem;
+mod text;
 mod tray;
 mod updater;
 
