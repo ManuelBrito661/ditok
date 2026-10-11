@@ -13,7 +13,7 @@ export interface Config {
   stt_model: string;
   transport: Transport;
   language: string | null;
-  cleanup_enabled: boolean;
+  cleanup_level: CleanupLevel;
   cleanup_model: string;
   keep_in_clipboard: boolean;
   history_enabled: boolean;
@@ -29,6 +29,20 @@ export interface Config {
   input_device: string | null;
   /** O guia de primeira execução já foi concluído (ou saltado). */
   onboarding_done: boolean;
+  /** Estilo por app (config.rs, StyleRule). */
+  styles: StyleRule[];
+}
+
+/** Quanto a limpeza com IA mexe no texto (config.rs, CleanupLevel). */
+export type CleanupLevel = "off" | "light" | "medium" | "high";
+
+/** O tom de um ditado, pela app onde estás (config.rs, Style). "default" = Predefinido. */
+export type Style = "default" | "casual" | "formal" | "literal";
+
+/** "Nesta app, este estilo." `app`: nome do executável ("whatsapp.exe"). */
+export interface StyleRule {
+  app: string;
+  style: Style;
 }
 
 /** Uma palavra do dicionário. `from`: formas separadas por vírgulas; vazio = a própria palavra. */
@@ -112,6 +126,10 @@ export interface HistoryEntry {
   model: string;
   audio_ms: number;
   total_ms: number | null;
+  /** A app onde o ditado começou ("whatsapp.exe"); ausente em entradas antigas. */
+  app?: string | null;
+  /** O estilo aplicado, só quando mudou alguma coisa. */
+  style?: Style | null;
 }
 
 export interface MemoryReport {
@@ -160,6 +178,8 @@ export const api = {
   getStats: () => invoke<Stats>("get_stats"),
   getHistory: () => invoke<HistoryEntry[]>("get_history"),
   clearHistory: () => invoke<void>("clear_history"),
+  /** As últimas apps onde ditaste nesta sessão (mais recente primeiro). */
+  recentApps: () => invoke<string[]>("recent_apps"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
   getMemory: () => invoke<MemoryReport | null>("get_memory"),

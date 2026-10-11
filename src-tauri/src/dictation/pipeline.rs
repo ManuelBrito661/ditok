@@ -153,14 +153,14 @@ fn record_metrics(state: &AppState, m: &DictationMetrics, budget: Option<f64>) {
 /// Recebe `Arc`s por valor: a função é dona de uma referência a cada um e pode
 /// passá-la às tarefas de fundo que continuam depois de ela terminar.
 ///
-/// `target`: a janela em primeiro plano quando o ditado começou. Só se cola se
-/// ainda for ela (ver `focus.rs`).
+/// `target`: a janela em primeiro plano quando o ditado começou (só se cola se
+/// ainda for ela, ver `focus.rs`) e a app dona dela (decide o estilo).
 pub async fn process(
     state: Arc<AppState>,
     openrouter: Arc<OpenRouter>,
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
-    target: Option<focus::Window>,
+    target: focus::Target,
     commit: Commit,
 ) -> Outcome {
     let rec = match recording.await {
@@ -219,7 +219,7 @@ pub async fn retry(
     state: Arc<AppState>,
     openrouter: Arc<OpenRouter>,
     rec: Recording,
-    target: Option<focus::Window>,
+    target: focus::Target,
     commit: Commit,
 ) -> Outcome {
     tracing::info!(
@@ -245,12 +245,16 @@ async fn transcribe_and_paste(
     rec: Recording,
     released_at: Instant,
     release_to_wav: Duration,
-    target: Option<focus::Window>,
+    target: focus::Target,
     commit: Commit,
 ) -> Outcome {
     // Uma "fotografia" da configuração: o ditado usa-a do princípio ao fim.
     let config = state.config();
     let rules = state.text_rules();
+    // O estilo vem da app onde o ditado começou; com o nível, decide se (e
+    // como) o texto passa pelo LLM.
+    let style = config.style_for(target.app.as_deref());
+    let plan = cleanup::plan(config.cleanup_level, style);
 
     // O pipeline fala com o STT através do trait; o tipo concreto só é preciso
     // para a limpeza, que é uma funcionalidade específica do OpenRouter.
@@ -316,12 +320,13 @@ async fn transcribe_and_paste(
                 // Comandos, expansões e dicionário: neste computador, em microssegundos.
                 let local = rules.apply(&raw);
                 applied = local.applied;
-                let cleaned = if config.cleanup_enabled
+                let cleaned = if let Some(plan) = plan
                     && let Some(input) = local.cleanup_input()
                 {
                     clean_with_llm(
                         &openrouter,
                         &config.cleanup_model,
+                        plan,
                         &rules,
                         &local,
                         input,
@@ -349,7 +354,7 @@ async fn transcribe_and_paste(
                     text.clone(),
                     released_at,
                     restore_clipboard,
-                    target,
+                    target.window,
                     &mut m,
                 )
                 .await;
@@ -363,6 +368,8 @@ async fn transcribe_and_paste(
                         audio_ms: m.audio_ms,
                         total_ms: m.total_ms,
                         pasted: matches!(outcome, Outcome::Pasted),
+                        app: target.app.clone(),
+                        style: cleanup::shown_style(config.cleanup_level, style),
                     });
                 }
                 outcome
@@ -383,6 +390,9 @@ async fn transcribe_and_paste(
         cost_usd = m.cost_usd,
         cleanup_cost_usd = m.cleanup_cost_usd,
         chars = m.chars,
+        level = ?config.cleanup_level,
+        ?style,
+        app = target.app.as_deref(),
         commands = applied.commands,
         replaced = applied.replaced,
         expanded = applied.expanded,
@@ -416,12 +426,13 @@ async fn transcribe_and_paste(
 async fn clean_with_llm(
     openrouter: &OpenRouter,
     model: &str,
+    plan: cleanup::Plan,
     rules: &TextRules,
     local: &Processed,
     input: &str,
     m: &mut DictationMetrics,
 ) -> Option<String> {
-    match cleanup::clean(openrouter, model, input, rules.vocabulary()).await {
+    match cleanup::clean(openrouter, model, plan, input, rules.vocabulary()).await {
         Ok(c) => {
             m.cleanup_ms = Some(ms(c.elapsed));
             m.cleanup_cost_usd = c.cost;

@@ -4,6 +4,7 @@
 import {
   api,
   errorText,
+  type CleanupLevel,
   type Config,
   type KeyInfo,
   type ModelInfo,
@@ -13,8 +14,9 @@ import {
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
 import { ago, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
+import { refreshRecentApps, setupStyles } from "./styles-panel";
 
-export type Tab = "geral" | "transcricao" | "limpeza" | "dados";
+export type Tab = "geral" | "transcricao" | "limpeza" | "estilos" | "dados";
 
 const dialog = () => $<HTMLDialogElement>("settings");
 let models: Array<{ load: (refresh: boolean) => Promise<void>; loaded: boolean }> = [];
@@ -42,6 +44,8 @@ function selectTab(tab: Tab) {
     t.tabIndex = selected ? 0 : -1;
     $(t.getAttribute("aria-controls")!).hidden = !selected;
   }
+  // As apps recentes mudam a cada ditado: pede-as sempre que o separador abre.
+  if (tab === "estilos") void refreshRecentApps();
 }
 
 /** Abre no separador Geral com o foco no botão "Mudar" do atalho (ex.: o atalho
@@ -314,7 +318,7 @@ function renderControls() {
   const budget = $<HTMLInputElement>("budget");
   if (document.activeElement !== budget) budget.value = c.monthly_budget_usd == null ? "" : String(c.monthly_budget_usd);
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) r.checked = r.value === c.transport;
-  $<HTMLInputElement>("cleanup-enabled").checked = c.cleanup_enabled;
+  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="cleanup-level"]')) r.checked = r.value === c.cleanup_level;
   $<HTMLInputElement>("history-enabled").checked = c.history_enabled;
   $<HTMLInputElement>("history-limit").value = String(c.history_limit);
   const p = app.view.paths;
@@ -330,7 +334,6 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   checkbox("show-overlay", "show_overlay");
   checkbox("keep-in-clipboard", "keep_in_clipboard");
   checkbox("sounds", "sounds");
-  checkbox("cleanup-enabled", "cleanup_enabled");
   checkbox("history-enabled", "history_enabled");
   bindDeviceSelect($<HTMLSelectElement>("input-device"));
 
@@ -346,6 +349,18 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) {
     r.addEventListener("change", () => r.checked && save({ transport: r.value as Config["transport"] }));
   }
+  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="cleanup-level"]')) {
+    r.addEventListener("change", () => r.checked && save({ cleanup_level: r.value as CleanupLevel }));
+  }
+  // Ligações entre os dois separadores (o nível e os estilos dependem um do outro).
+  $("cleanup-open-styles").addEventListener("click", () => {
+    selectTab("estilos");
+    $("tab-estilos").focus();
+  });
+  $("styles-open-cleanup").addEventListener("click", () => {
+    selectTab("limpeza");
+    document.querySelector<HTMLInputElement>('input[name="cleanup-level"]:checked')?.focus();
+  });
 
   $<HTMLInputElement>("autostart").addEventListener("change", async (e) => {
     const input = e.target as HTMLInputElement;
@@ -380,6 +395,7 @@ export function setupSettings(onHistoryCleared: () => void) {
   setupShortcut();
   setupKey();
   bindSimpleControls(onHistoryCleared);
+  setupStyles();
   onViewChange(renderControls);
   renderControls();
   // As listas de modelos só são pedidas quando o modal abre pela primeira vez.

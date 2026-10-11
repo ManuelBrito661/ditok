@@ -132,6 +132,9 @@ kbd {
   height: 46px;
   opacity: 1;
 }
+/* Com o estilo à frente do tempo ("Formal · 0:12"): um pouco mais larga, para a
+   forma de onda não encolher. */
+#pill.styled[data-state="recording"] { width: 280px; }
 #pill[data-state="recording"] #bars {
   display: flex;
   align-items: center;
@@ -159,6 +162,8 @@ kbd {
 
 /* ---------- modo alternar: ✕ à esquerda, ■ à direita */
 #pill.latched[data-state="recording"] { width: 300px; padding: 0 6px; }
+/* A janela tem 340 px: com estilo e botões, fica no limite. */
+#pill.styled.latched[data-state="recording"] { width: 336px; }
 #pill.latched[data-state="recording"] .pill-button,
 #pill[data-state="processing"] #cancel {
   display: grid;

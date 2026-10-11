@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::config::Style;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryEntry {
     #[serde(with = "time::serde::rfc3339")]
@@ -21,6 +23,13 @@ pub struct HistoryEntry {
     /// falhou) e ficou só no clipboard. Entradas antigas, sem o campo, foram coladas.
     #[serde(default = "pasted_by_default")]
     pub pasted: bool,
+    /// A app onde o ditado começou ("whatsapp.exe"), se se soube qual era.
+    #[serde(default)]
+    pub app: Option<String>,
+    /// O estilo aplicado, só quando mudou alguma coisa (não é o Predefinido e a
+    /// limpeza está ligada). Entradas antigas não o têm.
+    #[serde(default)]
+    pub style: Option<Style>,
 }
 
 fn pasted_by_default() -> bool {
@@ -95,6 +104,8 @@ mod tests {
             audio_ms: 1000,
             total_ms: Some(800),
             pasted: true,
+            app: None,
+            style: None,
         }
     }
 
@@ -118,5 +129,6 @@ mod tests {
         let json = r#"{"at":"2026-10-11T12:00:00Z","text":"olá","raw_text":null,"model":"m","audio_ms":1,"total_ms":null}"#;
         let e: HistoryEntry = serde_json::from_str(json).unwrap();
         assert!(e.pasted);
+        assert_eq!((e.app, e.style), (None, None), "sem app nem estilo");
     }
 }

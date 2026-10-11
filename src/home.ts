@@ -6,7 +6,7 @@ import listeningMascotUrl from "../design/mascot/a-ouvir.svg?inline";
 import thinkingMascotUrl from "../design/mascot/a-processar.svg?inline";
 import readyMascotUrl from "../design/mascot/pronto.svg?inline";
 import { api, errorText, type HistoryEntry, type Stats } from "./api";
-import { budgetLevel, countWords, dayLabel, greeting, ms, renderKeys, timeOfDay, usd } from "./format";
+import { budgetLevel, countWords, dayLabel, greeting, ms, renderKeys, STYLE_LABEL, timeOfDay, usd } from "./format";
 import { openSettings } from "./settings-dialog";
 import { $, app, onViewChange, save, toast } from "./store";
 
@@ -67,8 +67,11 @@ function entryRow(h: HistoryEntry): HTMLLIElement {
   const meta = document.createElement("p");
   meta.className = "entry-meta";
   const shortModel = h.model.slice(h.model.lastIndexOf("/") + 1);
-  meta.textContent = h.total_ms != null ? `${ms(h.total_ms)} · ${shortModel}` : shortModel;
-  meta.title = h.model;
+  const parts = h.total_ms != null ? [ms(h.total_ms), shortModel] : [shortModel];
+  // O estilo só aparece quando mudou alguma coisa (o backend não o guarda nos outros casos).
+  if (h.style && h.style !== "default") parts.push(STYLE_LABEL[h.style]);
+  meta.textContent = parts.join(" · ");
+  meta.title = h.app ? `${h.model} · ditado em ${h.app}` : h.model;
   body.append(meta);
   if (h.raw_text) {
     const raw = document.createElement("details");

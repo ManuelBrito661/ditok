@@ -5,6 +5,9 @@
 // - "overlay:busy": premiste o atalho a meio do processamento (a pílula abana)
 // - "overlay:level": nível do microfone entre 0 e 1, ~20 vezes por segundo
 // - "overlay:latched": o ditado está em modo alternar (mostra ✕ e ■)
+// - "overlay:style": o estilo deste ditado ("Formal"…) ou null; chega logo antes
+//   do estado "recording" e aparece antes do tempo
+
 // - "overlay:hover": o rato entrou/saiu da pílula (o Rust vigia o cursor)
 // - "overlay:notice": falta a chave / o atalho está ocupado (aviso persistente em
 //   repouso); também pedido com overlay_status quando a página carrega
@@ -109,6 +112,14 @@ const bars = Array.from({ length: BAR_COUNT }, () => {
 const history: number[] = new Array(BAR_COUNT).fill(0);
 let smoothed = 0;
 let recordingSince = 0;
+/** O estilo do ditado em curso, se não for o Predefinido (ex.: "Formal"). */
+let styleTag: string | null = null;
+
+/** O texto da pílula a ouvir: o estilo (se houver) e o tempo. */
+function recordingLabel(secs: number): string {
+  const time = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+  return styleTag ? `${styleTag} · ${time}` : time;
+}
 /** A última falha recebida; usada quando o estado passa a "failed". */
 let failure: Failure | null = null;
 let slowTimer: number | undefined;
@@ -156,6 +167,9 @@ function setState(state: State) {
 
   if (state === "recording") {
     recordingSince = performance.now();
+    label.textContent = recordingLabel(0);
+    pill.classList.toggle("styled", styleTag !== null);
+    if (styleTag) spoken += `, estilo ${styleTag}`;
     history.fill(0);
     smoothed = 0;
     renderBars();
@@ -207,7 +221,7 @@ function onLevel(level: number) {
   renderBars();
 
   const secs = Math.floor((performance.now() - recordingSince) / 1000);
-  label.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+  label.textContent = recordingLabel(secs);
   // Aviso visual perto do limite de 60 s de processamento do OpenRouter.
   pill.classList.toggle("long", secs >= 45);
 }
@@ -260,6 +274,7 @@ void listen<Failure>("overlay:failure", (e) => onFailure(e.payload));
 void listen("overlay:busy", () => onBusy());
 void listen<number>("overlay:level", (e) => onLevel(e.payload));
 void listen("overlay:latched", () => pill.classList.add("latched"));
+void listen<string | null>("overlay:style", (e) => (styleTag = e.payload));
 void listen<boolean>("overlay:hover", (e) => onHover(e.payload));
 void listen<Status>("overlay:notice", (e) => onStatus(e.payload));
 // A barra pode nascer depois do último aviso: pede o estado atual.

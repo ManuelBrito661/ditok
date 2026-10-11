@@ -267,6 +267,20 @@ pub async fn get_history(state: AppStateRef<'_>) -> CmdResult<Vec<HistoryEntry>>
     blocking(move || state.history.list()).await
 }
 
+/// As últimas apps onde ditaste (só desta sessão), para criar um estilo sem
+/// saber o nome do executável. O próprio Ditok fica de fora.
+#[tauri::command]
+pub fn recent_apps(state: AppStateRef<'_>) -> Vec<String> {
+    let ours = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+    state
+        .recent_apps()
+        .into_iter()
+        .filter(|app| Some(app) != ours.as_ref())
+        .collect()
+}
+
 #[tauri::command]
 pub async fn clear_history(state: AppStateRef<'_>) -> CmdResult<()> {
     let state_ = Arc::clone(&state);

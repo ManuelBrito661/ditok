@@ -207,6 +207,12 @@ pub fn emit_latched(app: &AppHandle) {
     let _ = app.emit_to(LABEL, "overlay:latched", ());
 }
 
+/// O estilo deste ditado ("Formal"…), ou `None` se for o Predefinido. Enviado
+/// antes do estado `recording`; a barra mostra-o enquanto ouve.
+pub fn emit_style(app: &AppHandle, label: Option<&str>) {
+    let _ = app.emit_to(LABEL, "overlay:style", label);
+}
+
 /// Nível do microfone (0–1), ~20 vezes por segundo durante a gravação.
 pub fn emit_level(app: &AppHandle, level: f32) {
     let _ = app.emit_to(LABEL, "overlay:level", level);

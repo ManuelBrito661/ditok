@@ -759,6 +759,65 @@ dialog[open] { animation: dlg-in 0.2s var(--ease); }
 .model-id { grid-column: 1; color: var(--muted); }
 .model-price { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 
+/* níveis de limpeza: um cartão por opção, todo ele clicável */
+.choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.choice {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.choice:hover { background: var(--hover); }
+.choice:has(input:checked) { background: var(--surface); box-shadow: var(--shadow-sm), inset 0 0 0 1.5px var(--text); }
+.choice input { margin: 2px 0 0; accent-color: var(--primary); cursor: pointer; }
+.choice-title { font-weight: 600; cursor: pointer; }
+/* O rótulo estica-se por cima do cartão inteiro: clicar em qualquer sítio escolhe. */
+.choice-title::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.choice-desc { grid-column: 2; color: var(--muted); font-size: var(--fs-sm); }
+
+/* estilos por app */
+.style-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 12px;
+}
+.pairs .style-row { border-top: 1px solid var(--border); }
+.style-row select { min-width: 0; width: 100%; min-height: 34px; padding: 5px 10px; }
+.style-row input { min-height: 34px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
+.style-app { padding-left: 10px; overflow-wrap: anywhere; font-size: var(--fs-md); }
+.style-row .remove { width: 34px; height: 34px; opacity: 0.45; transition: opacity 0.15s var(--ease); }
+.style-row:hover .remove, .style-row:focus-within .remove { opacity: 1; }
+.style-recent { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 0 12px 10px; background: var(--surface-2); font-size: var(--fs-sm); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  min-height: 26px;
+  padding: 2px 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.chip:hover { background: var(--hover); }
+.styles-off {
+  margin: -4px 0 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--amber-text);
+  font-size: var(--fs-sm);
+}
+.styles-foot { margin-top: 10px; }
+
 /* ---------------------------------------------------------------- guia de primeira execução */
 dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); }
 .ob { display: flex; flex-direction: column; max-height: calc(100vh - 48px); }

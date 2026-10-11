@@ -33,8 +33,9 @@ pub struct Config {
     pub transport: Transport,
     /// ISO-639-1 (ex.: "pt"); `None` para deteção automática.
     pub language: Option<String>,
-    /// Passo opcional que corrige pontuação e remove hesitações com um LLM.
-    pub cleanup_enabled: bool,
+    /// Quanto o LLM mexe no texto (ver `cleanup.rs`). Substitui o antigo
+    /// `cleanup_enabled`, convertido em `migrate`.
+    pub cleanup_level: CleanupLevel,
     pub cleanup_model: String,
     /// Depois de colar, deixa o ditado no clipboard (pronto para colar outra vez)
     /// em vez de repor o que lá estava.
@@ -64,6 +65,100 @@ pub struct Config {
     /// O guia de primeira execução já foi concluído (ou saltado). Um config.json
     /// sem este campo é de uma versão anterior ao guia: ver `predates_onboarding`.
     pub onboarding_done: bool,
+    /// Estilo por app: a app onde estavas quando começaste a ditar decide o tom
+    /// da limpeza (ver `Config::style_for`). Um config.json sem o campo recebe as
+    /// regras iniciais (`default_styles`), por isso quem atualiza também as tem.
+    pub styles: Vec<StyleRule>,
+}
+
+/// Quanto a limpeza com IA mexe no texto. `rename_all = "lowercase"`: no JSON
+/// fica "off", "light", "medium" ou "high".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CleanupLevel {
+    /// Sem LLM: nem custo nem latência extra.
+    #[default]
+    Off,
+    /// Só pontuação, maiúsculas e hesitações; não reescreve.
+    Light,
+    /// O comportamento de sempre (também tira muletas e repetições).
+    Medium,
+    /// Reescreve para ficar claro e bem estruturado.
+    High,
+}
+
+/// O tom de um ditado, escolhido pela app onde estás a escrever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Style {
+    /// "Predefinido": usa só o nível global.
+    #[default]
+    Default,
+    /// Mensagens: frases curtas, sem formalidades.
+    Casual,
+    /// Email e documentos: frases completas, pontuação cuidada.
+    Formal,
+    /// Terminal e IDE: nunca passa pelo LLM, seja qual for o nível.
+    Literal,
+}
+
+impl Style {
+    /// O nome que aparece na UI (pílula, histórico).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Predefinido",
+            Self::Casual => "Casual",
+            Self::Formal => "Formal",
+            Self::Literal => "Literal",
+        }
+    }
+}
+
+/// "Nesta app, este estilo." `app` é o nome do executável ("whatsapp.exe");
+/// a comparação ignora maiúsculas e o ".exe" (ver `app_key`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StyleRule {
+    pub app: String,
+    pub style: Style,
+}
+
+/// As regras com que se começa. São nomes de executáveis do Windows: no macOS
+/// ainda não sei a app em foco (ver `focus::app_name`), por isso não fazem nada.
+fn default_styles() -> Vec<StyleRule> {
+    const RULES: &[(&str, Style)] = &[
+        ("whatsapp.exe", Style::Casual),
+        ("discord.exe", Style::Casual),
+        ("slack.exe", Style::Casual),
+        ("telegram.exe", Style::Casual),
+        ("outlook.exe", Style::Formal),
+        ("olk.exe", Style::Formal),
+        ("winword.exe", Style::Formal),
+        ("thunderbird.exe", Style::Formal),
+        ("windowsterminal.exe", Style::Literal),
+        ("cmd.exe", Style::Literal),
+        ("powershell.exe", Style::Literal),
+        ("pwsh.exe", Style::Literal),
+        ("code.exe", Style::Literal),
+        ("wezterm-gui.exe", Style::Literal),
+    ];
+    // `&(app, style)` desestrutura cada tuplo já na assinatura do closure.
+    RULES
+        .iter()
+        .map(|&(app, style)| StyleRule {
+            app: app.to_owned(),
+            style,
+        })
+        .collect()
+}
+
+/// A forma de comparar nomes de apps: sem espaços nas pontas, em minúsculas e
+/// sem ".exe" ("WhatsApp.exe", "whatsapp" e " whatsapp.EXE " dão o mesmo).
+pub fn app_key(app: &str) -> String {
+    let app = app.trim().to_lowercase();
+    match app.strip_suffix(".exe") {
+        Some(stem) => stem.to_owned(),
+        None => app,
+    }
 }
 
 impl Default for Config {
@@ -73,7 +168,7 @@ impl Default for Config {
             stt_model: DEFAULT_STT_MODEL.to_owned(),
             transport: Transport::Multipart,
             language: Some("pt".to_owned()),
-            cleanup_enabled: false,
+            cleanup_level: CleanupLevel::Off,
             cleanup_model: DEFAULT_CLEANUP_MODEL.to_owned(),
             keep_in_clipboard: true,
             history_enabled: true,
@@ -87,6 +182,7 @@ impl Default for Config {
             monthly_budget_usd: None,
             input_device: None,
             onboarding_done: false,
+            styles: default_styles(),
         }
     }
 }
@@ -113,6 +209,12 @@ pub enum ConfigError {
     Budget,
     #[error("o nome do microfone é demasiado longo")]
     InputDevice,
+    #[error("cada estilo precisa do nome da app (ex.: whatsapp.exe)")]
+    StyleEntry,
+    #[error("já há um estilo para {0}")]
+    DuplicateStyle(String),
+    #[error("os estilos têm um limite de {MAX_STYLES} apps")]
+    TooManyStyles,
 }
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
@@ -120,6 +222,9 @@ pub enum ConfigError {
 const MAX_ENTRIES: usize = 1000;
 const MAX_PHRASE_CHARS: usize = 200;
 const MAX_SNIPPET_CHARS: usize = 5000;
+const MAX_STYLES: usize = 200;
+/// Um nome de ficheiro no Windows não passa de 260 caracteres (MAX_PATH).
+const MAX_APP_CHARS: usize = 260;
 
 impl Config {
     pub fn path(config_dir: &Path) -> PathBuf {
@@ -172,7 +277,43 @@ impl Config {
                 return Err(ConfigError::EntryTooLong);
             }
         }
+        if self.styles.len() > MAX_STYLES {
+            return Err(ConfigError::TooManyStyles);
+        }
+        let mut seen = std::collections::HashSet::new();
+        for rule in &self.styles {
+            let key = app_key(&rule.app);
+            if key.is_empty() {
+                return Err(ConfigError::StyleEntry);
+            }
+            if too_long(&rule.app, MAX_APP_CHARS) {
+                return Err(ConfigError::EntryTooLong);
+            }
+            // `insert` devolve `false` se a chave já lá estava.
+            if !seen.insert(key) {
+                return Err(ConfigError::DuplicateStyle(rule.app.trim().to_owned()));
+            }
+        }
         Ok(())
+    }
+
+    /// O estilo para a app onde o ditado começou. Sem app conhecida (macOS, ou
+    /// não deu para a saber) ou sem regra para ela, é o Predefinido.
+    pub fn style_for(&self, app: Option<&str>) -> Style {
+        let Some(key) = app.map(app_key).filter(|k| !k.is_empty()) else {
+            return Style::Default;
+        };
+        self.styles
+            .iter()
+            .find(|r| app_key(&r.app) == key)
+            .map_or(Style::Default, |r| r.style)
+    }
+
+    /// Lê um config.json, convertendo primeiro os campos de versões anteriores.
+    pub fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes)?;
+        migrate(&mut value);
+        serde_json::from_value(value)
     }
 
     /// Lê o ficheiro; se não existir, cria-o com os valores por omissão. Se estiver
@@ -181,7 +322,7 @@ impl Config {
     pub fn load_or_create(config_dir: &Path) -> Self {
         let path = Self::path(config_dir);
         match std::fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice::<Self>(&bytes) {
+            Ok(bytes) => match Self::from_json(&bytes) {
                 Ok(config) => config,
                 Err(e) => {
                     tracing::error!(path = %path.display(), error = %e, "config.json inválido; a usar valores por omissão");
@@ -227,9 +368,113 @@ impl Config {
     }
 }
 
+/// Converte campos antigos no JSON antes de o `serde` o ler. Trabalhar sobre o
+/// `Value` (e não sobre o struct) deixa ver o que estava mesmo escrito no
+/// ficheiro: depois de o `serde` preencher os campos em falta, já não se sabe.
+fn migrate(value: &mut serde_json::Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    // Até à 0.4 era `cleanup_enabled: bool`. Ligada era o que hoje é o nível Médio.
+    if let Some(old) = obj.remove("cleanup_enabled")
+        && !obj.contains_key("cleanup_level")
+    {
+        let level = if old.as_bool() == Some(true) {
+            "medium"
+        } else {
+            "off"
+        };
+        obj.insert("cleanup_level".into(), level.into());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_the_old_cleanup_switch() {
+        let on = Config::from_json(br#"{"cleanup_enabled": true}"#).unwrap();
+        assert_eq!(on.cleanup_level, CleanupLevel::Medium);
+        let off = Config::from_json(br#"{"cleanup_enabled": false}"#).unwrap();
+        assert_eq!(off.cleanup_level, CleanupLevel::Off);
+        // Se já houver as duas (editado à mão), ganha o campo novo.
+        let both =
+            Config::from_json(br#"{"cleanup_enabled": true, "cleanup_level": "high"}"#).unwrap();
+        assert_eq!(both.cleanup_level, CleanupLevel::High);
+        // O campo antigo não volta a ser escrito.
+        let json = serde_json::to_value(&on).unwrap();
+        assert!(json.get("cleanup_enabled").is_none());
+        assert_eq!(json["cleanup_level"], "medium");
+    }
+
+    #[test]
+    fn old_configs_get_the_initial_styles_but_an_empty_list_stays_empty() {
+        let old = Config::from_json(br#"{"sounds": false}"#).unwrap();
+        assert_eq!(old.styles, default_styles());
+        assert_eq!(old.style_for(Some("WhatsApp.exe")), Style::Casual);
+        let none = Config::from_json(br#"{"styles": []}"#).unwrap();
+        assert!(
+            none.styles.is_empty(),
+            "apagaste as regras todas: não voltam"
+        );
+    }
+
+    #[test]
+    fn style_lookup_ignores_case_and_the_exe_suffix() {
+        let c = Config {
+            styles: vec![
+                StyleRule {
+                    app: "Outlook.EXE".into(),
+                    style: Style::Formal,
+                },
+                StyleRule {
+                    app: " code ".into(),
+                    style: Style::Literal,
+                },
+            ],
+            ..Config::default()
+        };
+        assert_eq!(c.style_for(Some("outlook.exe")), Style::Formal);
+        assert_eq!(c.style_for(Some("OUTLOOK")), Style::Formal);
+        assert_eq!(c.style_for(Some("Code.exe")), Style::Literal);
+        assert_eq!(c.style_for(Some("notepad.exe")), Style::Default);
+        assert_eq!(c.style_for(Some("")), Style::Default);
+        assert_eq!(c.style_for(None), Style::Default);
+    }
+
+    #[test]
+    fn validation_checks_style_rules() {
+        let rule = |app: &str| StyleRule {
+            app: app.into(),
+            style: Style::Casual,
+        };
+        let empty = Config {
+            styles: vec![rule("  ")],
+            ..Config::default()
+        };
+        assert!(matches!(empty.validate(), Err(ConfigError::StyleEntry)));
+        let twice = Config {
+            styles: vec![rule("slack.exe"), rule("Slack")],
+            ..Config::default()
+        };
+        assert!(matches!(
+            twice.validate(),
+            Err(ConfigError::DuplicateStyle(_))
+        ));
+        let long = Config {
+            styles: vec![rule(&"x".repeat(300))],
+            ..Config::default()
+        };
+        assert!(matches!(long.validate(), Err(ConfigError::EntryTooLong)));
+        let many = Config {
+            styles: (0..=MAX_STYLES)
+                .map(|i| rule(&format!("app{i}.exe")))
+                .collect(),
+            ..Config::default()
+        };
+        assert!(matches!(many.validate(), Err(ConfigError::TooManyStyles)));
+    }
 
     #[test]
     fn old_names_missing_and_unknown_fields_are_tolerated() {
@@ -240,7 +485,11 @@ mod tests {
         assert_eq!(c.language, None);
         assert_eq!(c.stt_model, "google/chirp-3");
         assert_eq!(c.shortcut, DEFAULT_SHORTCUT);
-        assert!(!c.cleanup_enabled, "limpeza desligada por omissão");
+        assert_eq!(
+            c.cleanup_level,
+            CleanupLevel::Off,
+            "limpeza desligada por omissão"
+        );
         assert!(
             c.history_enabled,
             "histórico ligado por omissão (o Início mostra os ditados)"

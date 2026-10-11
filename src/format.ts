@@ -1,6 +1,6 @@
 // Formatação partilhada pelas páginas da janela principal.
 
-import type { MetricsRow } from "./api";
+import type { MetricsRow, Style } from "./api";
 
 export const isMac = navigator.userAgent.includes("Mac");
 
@@ -150,3 +150,11 @@ export function duration(seconds: number): string {
 
 export const megabytes = (bytes: number) =>
   `${(bytes / 1_048_576).toLocaleString("pt-PT", { maximumFractionDigits: bytes < 10_485_760 ? 1 : 0 })} MB`;
+
+/** O nome de cada estilo na UI (config.rs, Style::label). */
+export const STYLE_LABEL: Record<Style, string> = {
+  default: "Predefinido",
+  casual: "Casual",
+  formal: "Formal",
+  literal: "Literal",
+};

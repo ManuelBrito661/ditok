@@ -2,12 +2,16 @@
 //! comandos da janela de definições. Vive num `Arc<AppState>` gerido pelo Tauri.
 
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::{
-        Arc, PoisonError, RwLock,
+        Arc, Mutex, PoisonError, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
+
+/// Quantas apps recentes se lembram, para escolher numa lista ao criar um estilo.
+const RECENT_APPS: usize = 8;
 
 use serde::Serialize;
 use tauri::AppHandle;
@@ -58,6 +62,11 @@ pub struct AppState {
     /// `AtomicBool`: escrito pelos comandos, lido por quem quiser, sem `Mutex`.
     key_set: AtomicBool,
     shortcut_ok: AtomicBool,
+    /// As últimas apps onde ditaste, mais recente primeiro. Só em memória (nunca
+    /// em disco): servem para a janela de definições propor "Usar esta app" sem
+    /// teres de saber o nome do executável. Um `Mutex` chega: é tocado uma vez
+    /// por ditado e quando abres o separador Estilos.
+    recent_apps: Mutex<VecDeque<String>>,
 }
 
 /// A configuração e as regras de texto compiladas a partir dela. Andam juntas
@@ -105,6 +114,7 @@ impl AppState {
             events,
             key_set: AtomicBool::new(false),
             shortcut_ok: AtomicBool::new(true),
+            recent_apps: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -174,6 +184,23 @@ impl AppState {
         Ok(secrets::get()?.map(|key| Arc::new(OpenRouter::new(self.http.clone(), key, transport))))
     }
 
+    /// Lembra a app onde começou um ditado (sem repetir; a mais recente à frente).
+    pub fn note_app(&self, app: &str) {
+        let mut recent = self
+            .recent_apps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        push_recent(&mut recent, app);
+    }
+
+    pub fn recent_apps(&self) -> Vec<String> {
+        let recent = self
+            .recent_apps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        recent.iter().cloned().collect()
+    }
+
     pub fn debug_dir(&self) -> PathBuf {
         self.data_dir.join("debug")
     }
@@ -194,3 +221,29 @@ impl AppState {
 
 pub const MISSING_KEY: &str =
     "Falta a chave do OpenRouter: abre as definições no ícone do Ditok e cola a tua chave.";
+
+/// Põe `app` à frente da lista, sem repetidos, e corta para `RECENT_APPS`.
+fn push_recent(recent: &mut VecDeque<String>, app: &str) {
+    recent.retain(|a| a != app);
+    recent.push_front(app.to_owned());
+    recent.truncate(RECENT_APPS);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_apps_are_unique_newest_first_and_capped() {
+        let mut recent = VecDeque::new();
+        for app in ["a.exe", "b.exe", "a.exe"] {
+            push_recent(&mut recent, app);
+        }
+        assert_eq!(recent, ["a.exe", "b.exe"]);
+        for i in 0..20 {
+            push_recent(&mut recent, &format!("{i}.exe"));
+        }
+        assert_eq!(recent.len(), RECENT_APPS);
+        assert_eq!(recent[0], "19.exe");
+    }
+}

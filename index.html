@@ -313,6 +313,7 @@
             <button type="button" role="tab" id="tab-geral" aria-controls="panel-geral" aria-selected="true">Geral</button>
             <button type="button" role="tab" id="tab-transcricao" aria-controls="panel-transcricao" aria-selected="false" tabindex="-1">Transcrição</button>
             <button type="button" role="tab" id="tab-limpeza" aria-controls="panel-limpeza" aria-selected="false" tabindex="-1">Limpeza com IA</button>
+            <button type="button" role="tab" id="tab-estilos" aria-controls="panel-estilos" aria-selected="false" tabindex="-1">Estilos por app</button>
             <button type="button" role="tab" id="tab-dados" aria-controls="panel-dados" aria-selected="false" tabindex="-1">Dados e privacidade</button>
           </div>
         </nav>
@@ -475,10 +476,35 @@
               Acrescenta uma ida à rede a cada ditado. Se falhar ou demorar mais de 6 s, colo o texto sem limpeza.
             </p>
             <div class="rows">
-              <label class="row switch">
-                <span class="row-text"><span class="row-title">Ativar limpeza</span></span>
-                <input id="cleanup-enabled" type="checkbox" role="switch" />
-              </label>
+              <div class="row stacked">
+                <div class="row-text">
+                  <span id="cleanup-level-label" class="row-title">Nível de limpeza</span>
+                  <span class="row-desc">Vale para todas as apps. Os <button type="button" id="cleanup-open-styles" class="link">estilos por app</button> ajustam o tom.</span>
+                </div>
+                <!-- Botões de opção nativos: as setas mudam de nível e o leitor de ecrã lê a descrição. -->
+                <div class="choices" role="radiogroup" aria-labelledby="cleanup-level-label">
+                  <div class="choice">
+                    <input type="radio" id="cl-off" name="cleanup-level" value="off" aria-describedby="cl-off-desc" />
+                    <label for="cl-off" class="choice-title">Desligada</label>
+                    <p id="cl-off-desc" class="choice-desc">Colo o que o modelo de transcrição ouviu. Sem custo nem espera extra.</p>
+                  </div>
+                  <div class="choice">
+                    <input type="radio" id="cl-light" name="cleanup-level" value="light" aria-describedby="cl-light-desc" />
+                    <label for="cl-light" class="choice-title">Ligeira</label>
+                    <p id="cl-light-desc" class="choice-desc">Só pontuação, maiúsculas e hesitações ("hum", "ééé"). Não reescrevo nada.</p>
+                  </div>
+                  <div class="choice">
+                    <input type="radio" id="cl-medium" name="cleanup-level" value="medium" aria-describedby="cl-medium-desc" />
+                    <label for="cl-medium" class="choice-title">Média</label>
+                    <p id="cl-medium-desc" class="choice-desc">Também tiro muletas e repetições e, quando te corriges a meio, fico só com a correção.</p>
+                  </div>
+                  <div class="choice">
+                    <input type="radio" id="cl-high" name="cleanup-level" value="high" aria-describedby="cl-high-desc" />
+                    <label for="cl-high" class="choice-title">Forte</label>
+                    <p id="cl-high-desc" class="choice-desc">Reescrevo para ficar claro e bem estruturado, sem mudar o sentido nem a língua.</p>
+                  </div>
+                </div>
+              </div>
               <div class="row stacked">
                 <div class="row-text">
                   <span class="row-title">Modelo de texto</span>
@@ -492,6 +518,42 @@
                 <p class="row-desc" id="cleanup-meta"></p>
               </div>
             </div>
+          </section>
+
+          <!-- Estilos por app -->
+          <section role="tabpanel" id="panel-estilos" aria-labelledby="tab-estilos" hidden>
+            <h3 class="panel-title">Estilos por app</h3>
+            <p class="muted panel-intro">
+              Ajusto o tom da limpeza à app onde começas a ditar: <b>Casual</b> para mensagens (frases curtas, sem
+              formalidades), <b>Formal</b> para email e documentos (frases completas, pontuação cuidada) e
+              <b>Literal</b> para o terminal e editores de código, onde nunca uso a IA. Nas outras apps uso o
+              nível que escolheste em Limpeza com IA.
+            </p>
+            <p id="styles-off" class="styles-off" hidden>
+              A limpeza com IA está desligada, por isso os estilos não fazem nada: não a ligo às escondidas numa app.
+              <button type="button" id="styles-open-cleanup" class="link">Escolher um nível</button>
+            </p>
+            <div class="list-card">
+              <form id="style-add" class="style-row add-row" novalidate>
+                <input id="style-app" placeholder="App, ex.: whatsapp.exe" aria-label="Nome da app" spellcheck="false" autocomplete="off" />
+                <select id="style-new" aria-label="Estilo para a app nova">
+                  <option value="casual">Casual</option>
+                  <option value="formal">Formal</option>
+                  <option value="literal">Literal</option>
+                  <option value="default">Predefinido</option>
+                </select>
+                <button type="submit" class="primary small">Adicionar</button>
+              </form>
+              <div id="style-recent" class="style-recent" hidden>
+                <span id="style-recent-label" class="muted">Ditaste há pouco em:</span>
+                <div id="style-recent-apps" class="chips" role="group" aria-labelledby="style-recent-label"></div>
+              </div>
+              <p id="style-error" class="error field-error" hidden></p>
+              <ul id="style-list" class="pairs" aria-label="Estilos por app"></ul>
+            </div>
+            <p class="row-desc styles-foot">
+              O nome é o do executável da app. No Windows, é o que aparece no Gestor de Tarefas, em Detalhes.
+            </p>
           </section>
 
           <!-- Dados -->

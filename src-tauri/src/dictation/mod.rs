@@ -116,8 +116,9 @@ struct Orchestrator {
     /// Criado já se a chave existir; senão, volta a tentar-se a cada ditado (assim
     /// podes guardar a chave sem reiniciar a app).
     openrouter: Option<Arc<OpenRouter>>,
-    /// Janela em primeiro plano quando a gravação começou: é lá que se cola.
-    target: Option<focus::Window>,
+    /// Janela em primeiro plano quando a gravação começou (é lá que se cola) e a
+    /// app dona dela (decide o estilo).
+    target: focus::Target,
     job: Option<Job>,
     next_job: u64,
     /// A última gravação cuja transcrição falhou, para o "Tentar de novo". Fica
@@ -168,7 +169,7 @@ async fn run(
         tx,
         machine: Machine::default(),
         openrouter,
-        target: None,
+        target: focus::Target::default(),
         job: None,
         next_job: 0,
         failed: None,
@@ -335,7 +336,7 @@ impl Orchestrator {
             return;
         };
         // A janela onde estás a escrever, antes de o Ditok fazer o que quer que seja.
-        self.target = focus::foreground();
+        let window = focus::foreground();
         // Primeiro o microfone (é o que tem latência), depois o som, a
         // ligação HTTP (corre enquanto falas) e o resto.
         let config = self.deps.state.config();
@@ -343,6 +344,18 @@ impl Orchestrator {
             .recorder
             .start(at, config.sounds, config.input_device.clone());
         self.deps.cue(Cue::Start);
+        // O nome da app da janela já capturada (microssegundos; depois do
+        // microfone para não o atrasar).
+        self.target = focus::Target::of(window);
+        if let Some(app) = &self.target.app {
+            self.deps.state.note_app(app);
+        }
+        // A pílula mostra o estilo enquanto ouve, se não for o Predefinido.
+        let style = config.style_for(self.target.app.as_deref());
+        crate::overlay::emit_style(
+            &app,
+            crate::cleanup::shown_style(config.cleanup_level, style).map(|s| s.label()),
+        );
         // A barra segue o monitor onde está o cursor (como no Wispr Flow).
         crate::overlay::reposition_for(&app);
         let provider = Arc::clone(provider);
@@ -373,7 +386,7 @@ impl Orchestrator {
             });
             return;
         };
-        let target = self.target;
+        let target = self.target.clone();
         let state = Arc::clone(&self.deps.state);
         let commit = Commit::default();
         self.spawn_job(commit.clone(), false, async move {
@@ -382,7 +395,8 @@ impl Orchestrator {
     }
 
     /// Volta a enviar a gravação falhada. A janela de destino é a que está em
-    /// primeiro plano agora (o ditado original já foi há algum tempo).
+    /// primeiro plano agora (o ditado original já foi há algum tempo), e o
+    /// estilo é o da app dela, porque é lá que o texto vai parar.
     fn retry(&mut self) {
         let app = self.deps.state.app.clone();
         if self.openrouter.is_none() {
@@ -400,7 +414,7 @@ impl Orchestrator {
         self.retry_offered = false;
         self.deps.tray.set(TrayState::Processing);
         hotkey::set_cancel_enabled(&app, true);
-        let target = focus::foreground_for_retry();
+        let target = focus::Target::of(focus::foreground_for_retry());
         let state = Arc::clone(&self.deps.state);
         let commit = Commit::default();
         self.spawn_job(commit.clone(), true, async move {
