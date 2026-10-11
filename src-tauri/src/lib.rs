@@ -40,6 +40,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Updates assinados vindos das Releases do GitHub; `process` serve para reiniciar.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(hotkey::plugin(tx.clone()))
         .setup(move |app| {
             let paths = app.path();
