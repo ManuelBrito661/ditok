@@ -15,6 +15,7 @@ mod state;
 mod stt;
 mod sysmem;
 mod tray;
+mod updater;
 
 use std::{
     sync::Arc,
@@ -89,6 +90,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let level_sink: audio::LevelSink = Box::new(move |level| overlay::emit_level(&handle, level));
             let recorder = audio::Recorder::spawn(tx.clone(), level_sink)?;
+            updater::spawn_background_checks(app.handle().clone(), Arc::clone(&state));
             dictation::spawn(dictation::Deps { tray, recorder, state }, tx, rx);
 
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "pronto");
@@ -107,6 +109,8 @@ pub fn run() {
             commands::clear_history,
             commands::set_autostart,
             commands::get_memory,
+            commands::check_update,
+            commands::install_update,
         ])
         .build(tauri::generate_context!());
 

@@ -27,6 +27,7 @@ use crate::{
         openrouter::{self, KeyInfo},
     },
     sysmem::{self, MemoryReport},
+    updater::{self, UpdateInfo},
 };
 
 /// Erro devolvido à UI. O `invoke` do lado do TypeScript rejeita a Promise com
@@ -250,4 +251,16 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> CmdResult<bool> {
 #[tauri::command]
 pub async fn get_memory() -> CmdResult<Option<MemoryReport>> {
     blocking(sysmem::report).await
+}
+
+/// `None` = já está na versão mais recente.
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> CmdResult<Option<UpdateInfo>> {
+    Ok(updater::check(&app).await?)
+}
+
+/// Só devolve em caso de erro: se correr bem, a app reinicia.
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> CmdResult<()> {
+    Ok(updater::install(&app).await?)
 }

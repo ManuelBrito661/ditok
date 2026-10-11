@@ -94,6 +94,12 @@ export interface MemoryReport {
   webview_processes: number;
 }
 
+export interface UpdateInfo {
+  current: string;
+  version: string;
+  notes: string | null;
+}
+
 export const api = {
   getSettings: () => invoke<SettingsView>("get_settings"),
   saveSettings: (config: Config) => invoke<SettingsView>("save_settings", { config }),
@@ -106,6 +112,8 @@ export const api = {
   clearHistory: () => invoke<void>("clear_history"),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
   getMemory: () => invoke<MemoryReport | null>("get_memory"),
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  installUpdate: () => invoke<void>("install_update"),
 };
 
 /// Emitido pelo backend depois de cada ditado (pipeline.rs, EVENT_DICTATION_RECORDED).

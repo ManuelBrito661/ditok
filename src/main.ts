@@ -457,6 +457,27 @@ function setupNav() {
   document.querySelectorAll("section.panel").forEach((s) => observer.observe(s));
 }
 
+/// Mostra o cartão "Nova versão" se o GitHub tiver uma versão mais recente.
+/// Falhas (sem rede, ainda sem Releases) ficam em silêncio: não são do utilizador.
+async function checkUpdate() {
+  const info = await api.checkUpdate().catch(() => null);
+  if (!info) return;
+  $("update-text").textContent = `${info.current} → ${info.version}`;
+  $("update").hidden = false;
+  const button = $<HTMLButtonElement>("update-install");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "A atualizar…";
+    try {
+      await api.installUpdate(); // se correr bem, a app reinicia e não volta aqui
+    } catch (e) {
+      toast(`Não foi possível atualizar: ${errorText(e)}`, "error");
+      button.disabled = false;
+      button.textContent = "Atualizar";
+    }
+  });
+}
+
 async function main() {
   $<HTMLImageElement>("mascot").src = mascotUrl;
   $<HTMLImageElement>("empty-mascot").src = mascotUrl;
@@ -478,7 +499,7 @@ async function main() {
   stt.render();
   cleanup.render();
   // Em paralelo: nenhuma destas chamadas depende das outras.
-  await Promise.allSettled([stt.load(false), cleanup.load(false), renderHistory(), renderStats(), renderMemory()]);
+  await Promise.allSettled([stt.load(false), cleanup.load(false), renderHistory(), renderStats(), renderMemory(), checkUpdate()]);
 
   // Atualiza métricas e histórico quando acaba um ditado, sem polling.
   await onDictationRecorded(() => {
