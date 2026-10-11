@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 10 420 380" role="img" aria-label="Ditok pronto: texto colado, trabalho feito">
+  <defs>
+    <radialGradient id="gBody" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#8CC1FF"/><stop offset=".45" stop-color="#3D86F2"/><stop offset="1" stop-color="#2354C4"/></radialGradient>
+    <radialGradient id="gBelly" cx="45%" cy="30%" r="75%"><stop offset="0" stop-color="#FFE3EC"/><stop offset=".6" stop-color="#FFA9C5"/><stop offset="1" stop-color="#F57FA8"/></radialGradient>
+    <radialGradient id="gWing" cx="35%" cy="25%" r="85%"><stop offset="0" stop-color="#5B9DF7"/><stop offset="1" stop-color="#1F48AE"/></radialGradient>
+    <linearGradient id="gCrest" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#A5EBB8"/><stop offset="1" stop-color="#43B766"/></linearGradient>
+    <linearGradient id="gBeak" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D68C4B"/><stop offset="1" stop-color="#8E4F22"/></linearGradient>
+    <radialGradient id="gCheek"><stop offset="0" stop-color="#FF8DB4" stop-opacity=".95"/><stop offset="1" stop-color="#FF8DB4" stop-opacity="0"/></radialGradient>
+    <radialGradient id="gShadow"><stop offset="0" stop-color="#2B1B12" stop-opacity=".28"/><stop offset="1" stop-color="#2B1B12" stop-opacity="0"/></radialGradient>
+    <linearGradient id="gShade" x1="0" y1="0" x2="0" y2="1"><stop offset=".55" stop-color="#14306E" stop-opacity="0"/><stop offset="1" stop-color="#14306E" stop-opacity=".35"/></linearGradient>
+  </defs>
+  <!-- BODY:START (partilhado por todas as poses; scripts/gen-icons.mjs usa-o) -->
+  <ellipse class="pose-extra" cx="200" cy="356" rx="122" ry="18" fill="url(#gShadow)"/>
+  <ellipse cx="156" cy="348" rx="25" ry="12" fill="url(#gBeak)"/>
+  <ellipse cx="244" cy="348" rx="25" ry="12" fill="url(#gBeak)"/>
+  <path d="M200 100 C180 66 196 36 214 22 C228 48 226 78 214 102 Z" fill="url(#gCrest)"/>
+  <path d="M176 102 C150 80 152 52 134 42 C124 70 134 94 158 108 Z" fill="url(#gCrest)"/>
+  <path d="M224 102 C250 80 248 52 266 42 C276 70 266 94 242 108 Z" fill="url(#gCrest)"/>
+  <path d="M200 82 C292 82 338 152 338 226 C338 302 282 346 200 346 C118 346 62 302 62 226 C62 152 108 82 200 82 Z" fill="url(#gBody)"/>
+  <path d="M200 82 C292 82 338 152 338 226 C338 302 282 346 200 346 C118 346 62 302 62 226 C62 152 108 82 200 82 Z" fill="url(#gShade)"/>
+  <ellipse cx="200" cy="268" rx="84" ry="70" fill="url(#gBelly)"/>
+  <ellipse cx="176" cy="238" rx="36" ry="16" transform="rotate(-18 176 238)" fill="#fff" opacity=".38"/>
+  <ellipse cx="148" cy="130" rx="46" ry="22" transform="rotate(-32 148 130)" fill="#fff" opacity=".42"/>
+  <circle cx="112" cy="168" r="6" fill="#fff" opacity=".5"/>
+  <ellipse cx="74" cy="252" rx="27" ry="55" transform="rotate(14 74 252)" fill="url(#gWing)"/>
+  <ellipse cx="326" cy="252" rx="27" ry="55" transform="rotate(-14 326 252)" fill="url(#gWing)"/>
+  <ellipse cx="66" cy="228" rx="7" ry="16" transform="rotate(14 66 228)" fill="#fff" opacity=".28"/>
+  <ellipse cx="334" cy="228" rx="7" ry="16" transform="rotate(-14 334 228)" fill="#fff" opacity=".28"/>
+  <circle cx="108" cy="236" r="24" fill="url(#gCheek)"/>
+  <circle cx="292" cy="236" r="24" fill="url(#gCheek)"/>
+  <!-- BODY:END -->
+  <g class="pose-extra">
+    <path d="M64 60 L69 74 L83 79 L69 84 L64 98 L59 84 L45 79 L59 74 Z" fill="#5DC47B"/>
+    <path d="M30 130 L33 139 L42 142 L33 145 L30 154 L27 145 L18 142 L27 139 Z" fill="#FF9DBE"/>
+    <rect x="282" y="20" width="100" height="62" rx="31" fill="#FF9DBE"/>
+    <path d="M298 76 L286 106 L322 80 Z" fill="#FF9DBE"/>
+    <text x="332" y="64" text-anchor="middle" font-family="Fredoka, sans-serif" font-weight="600" font-size="40" fill="#5A2E10">ok</text>
+  </g>
+  <path d="M134 192 Q158 164 182 192" stroke="#3A2216" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M218 192 Q242 164 266 192" stroke="#3A2216" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M184 228 C186 246 214 246 216 228 Z" fill="url(#gBeak)"/>
+  <ellipse cx="200" cy="228" rx="15" ry="8" fill="#4A1A22"/>
+  <ellipse cx="200" cy="233" rx="8" ry="4" fill="#FF8DB4"/>
+  <path d="M178 214 C186 202 214 202 222 214 C220 226 210 229 200 229 C190 229 180 226 178 214 Z" fill="url(#gBeak)"/>
+  <ellipse cx="194" cy="212" rx="9" ry="3.6" fill="#fff" opacity=".4"/>
+</svg>
