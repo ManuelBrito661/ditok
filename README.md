@@ -14,6 +14,32 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript.
 
 O ícone do tray mostra o estado com a mascote: parado, a ouvir (vermelho), a processar (laranja), pronto (verde).
 
+## Configurar
+
+### Chave de API
+As chaves ficam no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros. Para guardar a chave do [OpenRouter](https://openrouter.ai/settings/keys), na pasta `src-tauri`:
+
+```bash
+cargo run --bin set-key -- openrouter
+```
+
+A chave é pedida sem aparecer no ecrã. A app passa a usá-la no ditado seguinte, sem reiniciar. Para a apagar: `cargo run --bin set-key -- openrouter --delete`.
+
+### Definições
+Até existir a janela de definições, edita `config.json` (Windows: `%APPDATA%\com.manuelbrito.ditok\config.json`) e reinicia a app:
+
+| Campo | Por omissão | Notas |
+| - | - | - |
+| `shortcut` | `CommandOrControl+Shift+Space` | |
+| `openrouter_model` | `openai/whisper-large-v3-turbo` | slug completo (lista: `https://openrouter.ai/api/v1/models?output_modalities=transcription`) |
+| `openrouter_transport` | `multipart` | `json` envia o áudio em base64 |
+| `language` | `pt` | ISO-639-1, ou `null` para deteção automática |
+| `save_last_recording` | `true` | guarda a última gravação em `debug/last.wav` |
+
+Cada ditado fica registado (sem o texto) em `%APPDATA%\com.manuelbrito.ditok\metrics.jsonl`, e o custo mensal acumulado em `costs.json`.
+
+## Logs
+
 Os logs ficam em:
 - Windows: `%LOCALAPPDATA%\com.manuelbrito.ditok\logs`
 - macOS: `~/Library/Logs/com.manuelbrito.ditok`
