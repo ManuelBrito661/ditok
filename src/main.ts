@@ -53,7 +53,8 @@ async function save(patch: Partial<Config>): Promise<boolean> {
 const usd = (v: number | null | undefined, digits = 4) => {
   if (v == null) return "—";
   if (v === 0) return "$0";
-  if (Math.abs(v) >= 0.01) return `$${v.toFixed(Math.min(digits, 2))}`;
+  if (Math.abs(v) >= 1) return `$${v.toFixed(2)}`;
+  if (Math.abs(v) >= 0.01) return `$${v.toFixed(digits)}`;
   return `$${v.toLocaleString("en-US", { maximumSignificantDigits: 2, maximumFractionDigits: 12 })}`;
 };
 const ms = (v: number | null | undefined) => (v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v} ms`);
