@@ -20,11 +20,11 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::{
     audio::Recorder,
     hotkey,
-    stt::SttProvider,
+    state::{AppState, MISSING_KEY},
+    stt::{SttProvider, openrouter::OpenRouter},
     tray::{Tray, TrayState},
 };
 use machine::{Action, Input, Machine, Phase};
-use pipeline::Pipeline;
 
 /// Quanto tempo o ícone "pronto" fica visível depois de colar.
 const DONE_ICON_FOR: Duration = Duration::from_millis(1200);
@@ -42,6 +42,9 @@ pub enum DictationEvent {
         ok: bool,
     },
     DoneIconElapsed,
+    /// A chave ou o modo de envio mudaram nas definições: o cliente do OpenRouter
+    /// tem de ser recriado no próximo ditado.
+    ProviderChanged,
 }
 
 /// O que o orquestrador recebe do resto da app. Agrupar num struct evita funções
@@ -49,7 +52,7 @@ pub enum DictationEvent {
 pub struct Deps {
     pub tray: Tray,
     pub recorder: Recorder,
-    pub pipeline: Arc<Pipeline>,
+    pub state: Arc<AppState>,
 }
 
 pub fn spawn(
@@ -67,10 +70,10 @@ async fn run(
     mut rx: UnboundedReceiver<DictationEvent>,
 ) {
     let mut machine = Machine::default();
-    let app = deps.pipeline.app.clone();
+    let app = deps.state.app.clone();
     // Criado já se a chave existir; senão, volta a tentar-se a cada ditado (assim
     // podes guardar a chave sem reiniciar a app).
-    let mut stt: Option<Arc<dyn SttProvider>> = load_provider(&deps.pipeline);
+    let mut openrouter: Option<Arc<OpenRouter>> = load_openrouter(&deps.state);
 
     while let Some(event) = rx.recv().await {
         let (input, at) = match event {
@@ -85,7 +88,13 @@ async fn run(
                     deps.recorder.cancel();
                 }
                 deps.tray.set(TrayState::Idle);
-                deps.pipeline.notify(&reason);
+                deps.state.notify(&reason);
+                continue;
+            }
+            DictationEvent::ProviderChanged => {
+                // Um ditado em curso já tem o seu `Arc` e termina com o cliente antigo;
+                // o próximo cria um novo.
+                openrouter = None;
                 continue;
             }
             DictationEvent::ProcessingFinished { ok } => {
@@ -108,13 +117,13 @@ async fn run(
         let before = machine.phase();
         match machine.handle(input, at) {
             Some(Action::StartRecording) => {
-                if stt.is_none() {
-                    stt = load_provider(&deps.pipeline);
+                if openrouter.is_none() {
+                    openrouter = load_openrouter(&deps.state);
                 }
-                let Some(provider) = &stt else {
+                let Some(provider) = &openrouter else {
                     // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
                     machine.handle(Input::Cancel, at);
-                    deps.pipeline.notify(&deps.pipeline.missing_key_message());
+                    deps.state.notify(MISSING_KEY);
                     continue;
                 };
                 // Primeiro o microfone (é o que tem latência), depois a ligação HTTP
@@ -133,18 +142,19 @@ async fn run(
                 hotkey::set_cancel_enabled(&app, false);
                 deps.tray.set(TrayState::Processing);
 
-                let Some(provider) = stt.clone() else {
-                    // Não acontece (sem provider não se começa a gravar), mas o
-                    // compilador obriga-nos a decidir o que fazer.
+                let Some(provider) = openrouter.clone() else {
+                    // Só acontece se a chave mudou a meio da gravação; o compilador
+                    // obriga-nos a decidir o que fazer.
+                    deps.recorder.cancel();
                     let _ = tx.send(DictationEvent::ProcessingFinished { ok: false });
                     continue;
                 };
                 // O processamento corre numa tarefa à parte para o orquestrador
                 // continuar a responder (ex.: ignorar premires enquanto processa).
-                let pipeline = Arc::clone(&deps.pipeline);
+                let state = Arc::clone(&deps.state);
                 let tx = tx.clone();
                 tauri::async_runtime::spawn(async move {
-                    let ok = pipeline.process(provider, recording, at).await;
+                    let ok = pipeline::process(state, provider, recording, at).await;
                     let _ = tx.send(DictationEvent::ProcessingFinished { ok });
                 });
             }
@@ -163,14 +173,14 @@ async fn run(
     tracing::debug!("orquestrador terminado");
 }
 
-fn load_provider(pipeline: &Pipeline) -> Option<Arc<dyn SttProvider>> {
-    match pipeline.load_provider() {
+fn load_openrouter(state: &AppState) -> Option<Arc<OpenRouter>> {
+    match state.load_openrouter() {
         Ok(Some(p)) => {
             tracing::info!(provider = p.name(), "provider de STT pronto");
             Some(p)
         }
         Ok(None) => {
-            tracing::warn!("{}", pipeline.missing_key_message());
+            tracing::warn!("{MISSING_KEY}");
             None
         }
         Err(e) => {

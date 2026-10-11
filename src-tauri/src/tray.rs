@@ -63,8 +63,7 @@ impl Tray {
             .show_menu_on_left_click(true)
             .on_menu_event(|app: &AppHandle<Wry>, event| match event.id().as_ref() {
                 MENU_OPEN_SETTINGS => {
-                    // A janela de definições chega na fase 5.
-                    tracing::info!("menu: abrir definições (ainda não implementado)");
+                    crate::settings_window::open(app);
                 }
                 MENU_QUIT => {
                     tracing::info!("menu: sair");

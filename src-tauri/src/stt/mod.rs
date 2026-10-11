@@ -4,6 +4,7 @@
 //! deste áudio". Cada provider (OpenRouter, Groq, …) implementa-o à sua maneira e o
 //! resto do código não muda quando se acrescenta um novo.
 
+pub mod models;
 pub mod openrouter;
 
 use std::time::Duration;

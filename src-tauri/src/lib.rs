@@ -1,15 +1,24 @@
 mod audio;
+mod cleanup;
+mod commands;
 mod config;
 mod dictation;
+mod history;
 mod hotkey;
 mod logging;
 mod metrics;
 mod paste;
 pub mod secrets;
+mod settings_window;
+mod state;
 mod stt;
+mod sysmem;
 mod tray;
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use tauri::{Manager, RunEvent};
 
@@ -26,6 +35,10 @@ pub fn run() {
             tracing::info!(?argv, "segunda instância ignorada");
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(hotkey::plugin(tx.clone()))
         .setup(move |app| {
             let paths = app.path();
@@ -46,20 +59,41 @@ pub fn run() {
                 tray.set_tooltip("Ditok: atalho indisponível (ver log)");
             }
 
-            let data_dir = paths.app_data_dir()?;
-            let pipeline = Arc::new(dictation::pipeline::Pipeline {
-                app: app.handle().clone(),
+            let dirs = state::Dirs {
+                config: config_dir,
+                data: paths.app_data_dir()?,
+                cache: paths.app_cache_dir()?,
+                log: paths.app_log_dir()?,
+            };
+            let state = Arc::new(state::AppState::new(
+                app.handle().clone(),
                 config,
-                http: stt::http_client()?,
-                metrics: metrics::MetricsStore::new(data_dir.clone()),
-                debug_dir: data_dir.join("debug"),
-            });
+                dirs,
+                stt::http_client()?,
+                tx.clone(),
+            ));
+            // Os comandos da janela recebem o mesmo `Arc` via `State<Arc<AppState>>`.
+            app.manage(Arc::clone(&state));
             let recorder = audio::Recorder::spawn(tx.clone())?;
-            dictation::spawn(dictation::Deps { tray, recorder, pipeline }, tx, rx);
+            dictation::spawn(dictation::Deps { tray, recorder, state }, tx, rx);
 
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "pronto");
+            sysmem::log_after(Duration::from_secs(5), "em repouso, sem janela");
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            commands::get_settings,
+            commands::save_settings,
+            commands::set_api_key,
+            commands::delete_api_key,
+            commands::test_api_key,
+            commands::list_models,
+            commands::get_stats,
+            commands::get_history,
+            commands::clear_history,
+            commands::set_autostart,
+            commands::get_memory,
+        ])
         .build(tauri::generate_context!());
 
     let app = match app {

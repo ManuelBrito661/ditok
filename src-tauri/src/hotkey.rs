@@ -62,10 +62,7 @@ pub fn register_dictation<R: Runtime>(
     app: &AppHandle<R>,
     shortcut: &str,
 ) -> Result<(), HotkeyError> {
-    let parsed: Shortcut = shortcut.parse().map_err(|e| HotkeyError::Invalid {
-        shortcut: shortcut.to_owned(),
-        reason: format!("{e}"),
-    })?;
+    let parsed = parse(shortcut)?;
     app.global_shortcut()
         .register(parsed)
         .map_err(|source| HotkeyError::Register {
@@ -73,6 +70,72 @@ pub fn register_dictation<R: Runtime>(
             source,
         })?;
     tracing::info!(shortcut, "atalho de ditado registado");
+    Ok(())
+}
+
+fn parse(shortcut: &str) -> Result<Shortcut, HotkeyError> {
+    let parsed: Shortcut = shortcut.parse().map_err(|e| HotkeyError::Invalid {
+        shortcut: shortcut.to_owned(),
+        reason: format!("{e}"),
+    })?;
+    // Uma tecla "normal" sem modificadores (ex.: só "A") deixaria de funcionar em
+    // todas as outras apps. Só as teclas F13–F24, que quase ninguém usa, podem ir sozinhas.
+    let lone_ok = matches!(
+        parsed.key,
+        Code::F13
+            | Code::F14
+            | Code::F15
+            | Code::F16
+            | Code::F17
+            | Code::F18
+            | Code::F19
+            | Code::F20
+            | Code::F21
+            | Code::F22
+            | Code::F23
+            | Code::F24
+    );
+    if parsed.mods.is_empty() && !lone_ok {
+        return Err(HotkeyError::Invalid {
+            shortcut: shortcut.to_owned(),
+            reason: "inclui pelo menos um modificador (Ctrl, Alt, Shift ou Cmd), ou usa F13–F24"
+                .into(),
+        });
+    }
+    if parsed.key == Code::Escape {
+        return Err(HotkeyError::Invalid {
+            shortcut: shortcut.to_owned(),
+            reason: "o Esc está reservado para cancelar a gravação".into(),
+        });
+    }
+    Ok(parsed)
+}
+
+/// Troca o atalho de ditado. Regista o novo ANTES de largar o antigo: se o novo
+/// estiver ocupado por outra app (o `register` falha), o antigo continua ativo e
+/// o utilizador recebe o erro.
+pub fn change_dictation<R: Runtime>(
+    app: &AppHandle<R>,
+    old: &str,
+    new: &str,
+) -> Result<(), HotkeyError> {
+    let new_parsed = parse(new)?;
+    let old_parsed = old.parse::<Shortcut>().ok();
+    if old_parsed == Some(new_parsed) {
+        return Ok(());
+    }
+    let gs = app.global_shortcut();
+    gs.register(new_parsed)
+        .map_err(|source| HotkeyError::Register {
+            shortcut: new.to_owned(),
+            source,
+        })?;
+    if let Some(old) = old_parsed
+        && let Err(e) = gs.unregister(old)
+    {
+        tracing::warn!(error = %e, "não foi possível largar o atalho antigo");
+    }
+    tracing::info!(old, new, "atalho de ditado alterado");
     Ok(())
 }
 
@@ -94,5 +157,31 @@ pub fn set_cancel_enabled<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
     };
     if let Err(e) = result {
         tracing::warn!(error = %e, enabled, "não foi possível (des)registar o Esc para cancelar");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_combos_and_lone_f13_to_f24() {
+        assert!(parse("CommandOrControl+Shift+Space").is_ok());
+        assert!(parse("Control+Alt+KeyD").is_ok());
+        assert!(parse("F13").is_ok());
+    }
+
+    #[test]
+    fn rejects_lone_keys_escape_and_garbage() {
+        assert!(matches!(parse("KeyA"), Err(HotkeyError::Invalid { .. })));
+        assert!(matches!(parse("Space"), Err(HotkeyError::Invalid { .. })));
+        assert!(matches!(
+            parse("Control+Escape"),
+            Err(HotkeyError::Invalid { .. })
+        ));
+        assert!(matches!(
+            parse("Control+Banana"),
+            Err(HotkeyError::Invalid { .. })
+        ));
     }
 }

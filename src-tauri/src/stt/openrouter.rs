@@ -64,6 +64,15 @@ impl OpenRouter {
         }
     }
 
+    /// Pedido autenticado a outro endpoint do OpenRouter (usado pela limpeza com
+    /// LLM). Reaproveita o mesmo cliente, logo a mesma ligação já aquecida.
+    pub fn post(&self, path: &str) -> RequestBuilder {
+        self.client
+            .post(format!("{BASE_URL}{path}"))
+            .bearer_auth(&self.api_key)
+            .header("X-Title", "Ditok")
+    }
+
     fn multipart(&self, audio: Bytes, req: &SttRequest<'_>) -> Result<RequestBuilder, SttError> {
         let len = audio.len() as u64;
         // `Body::from(Bytes)` aponta para o mesmo buffer: o áudio não é copiado.
@@ -200,9 +209,132 @@ impl SttProvider for OpenRouter {
     }
 }
 
+/// Um modelo tal como aparece no seletor da UI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    /// USD por unidade de entrada: por segundo de áudio nos modelos de transcrição
+    /// cobrados à duração, por token nos restantes.
+    pub prompt_price: Option<f64>,
+    /// USD por token de saída (0 nos modelos cobrados à duração).
+    pub completion_price: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct ModelsBody {
+    data: Vec<RawModel>,
+}
+#[derive(Deserialize)]
+struct RawModel {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    pricing: RawPricing,
+}
+#[derive(Deserialize, Default)]
+struct RawPricing {
+    prompt: Option<String>,
+    completion: Option<String>,
+}
+
+/// `GET /models?output_modalities=…` ("transcription" ou "text"). Não precisa de chave.
+pub async fn list_models(
+    client: &Client,
+    output_modality: &str,
+) -> Result<Vec<ModelInfo>, SttError> {
+    let response = client
+        .get(format!("{BASE_URL}/models?output_modalities={output_modality}"))
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.bytes().await?;
+    if !status.is_success() {
+        return Err(error_from_response(status.as_u16(), &body, ""));
+    }
+    parse_models(&body)
+}
+
+fn parse_models(body: &[u8]) -> Result<Vec<ModelInfo>, SttError> {
+    let parsed: ModelsBody =
+        serde_json::from_slice(body).map_err(|e| SttError::Decode(e.to_string()))?;
+    // Os preços vêm como texto ("0.00000333"); um preço negativo indica preço variável.
+    let price = |p: Option<String>| p.and_then(|s| s.parse::<f64>().ok()).filter(|v| *v >= 0.0);
+    let mut models: Vec<ModelInfo> = parsed
+        .data
+        .into_iter()
+        .map(|m| ModelInfo {
+            name: if m.name.is_empty() {
+                m.id.clone()
+            } else {
+                m.name
+            },
+            id: m.id,
+            prompt_price: price(m.pricing.prompt),
+            completion_price: price(m.pricing.completion),
+        })
+        .collect();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(models)
+}
+
+/// Estado da chave devolvido por `GET /key`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeyInfo {
+    pub label: Option<String>,
+    /// USD gastos com esta chave.
+    pub usage: Option<f64>,
+    /// Limite de gasto da chave (`None` = sem limite).
+    pub limit: Option<f64>,
+    pub limit_remaining: Option<f64>,
+    pub is_free_tier: Option<bool>,
+}
+
+/// Confirma que a chave é aceite pelo OpenRouter (sem gastar créditos).
+pub async fn check_key(client: &Client, api_key: &str) -> Result<KeyInfo, SttError> {
+    #[derive(Deserialize)]
+    struct Body {
+        data: KeyInfo,
+    }
+    let response = client
+        .get(format!("{BASE_URL}/key"))
+        .bearer_auth(api_key)
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.bytes().await?;
+    if !status.is_success() {
+        return Err(error_from_response(status.as_u16(), &body, ""));
+    }
+    let parsed: Body =
+        serde_json::from_slice(&body).map_err(|e| SttError::Decode(e.to_string()))?;
+    Ok(parsed.data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_model_list_and_prices() {
+        let body = br#"{"data":[
+            {"id":"z/zeta","name":"","pricing":{"prompt":"0.00000333","completion":"0"}},
+            {"id":"a/alpha","name":"Alpha","pricing":{"prompt":"-1","completion":"0.0000004"}},
+            {"id":"m/no-pricing","name":"No pricing"}
+        ]}"#;
+        let models = parse_models(body).unwrap();
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["a/alpha", "m/no-pricing", "z/zeta"]
+        );
+        assert_eq!(models[0].prompt_price, None, "preço negativo = variável");
+        assert_eq!(models[0].completion_price, Some(0.0000004));
+        assert_eq!(models[2].name, "z/zeta", "sem nome usa o id");
+        assert_eq!(models[2].prompt_price, Some(0.00000333));
+        assert_eq!(models[1].prompt_price, None);
+    }
 
     #[test]
     fn json_request_matches_documented_shape() {

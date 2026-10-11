@@ -2,7 +2,7 @@
 //! acumulado por mês (`app_data_dir/costs.json`).
 //!
 //! O texto ditado NÃO é guardado aqui, só o número de caracteres: o histórico de
-//! ditados é uma opção à parte, desligada por omissão (fase 5).
+//! ditados é uma opção à parte, desligada por omissão (`history.rs`).
 
 use std::{
     collections::BTreeMap,
@@ -28,11 +28,14 @@ pub struct DictationMetrics {
     pub release_to_wav_ms: u64,
     /// Upload + transcrição.
     pub stt_ms: Option<u64>,
+    /// Limpeza com LLM (só quando está ligada).
+    pub cleanup_ms: Option<u64>,
     /// Clipboard + atalho de colar.
     pub paste_ms: Option<u64>,
     /// Soltar a tecla → texto colado. É o número que interessa.
     pub total_ms: Option<u64>,
     pub cost_usd: Option<f64>,
+    pub cleanup_cost_usd: Option<f64>,
     pub chars: usize,
     pub generation_id: Option<String>,
     pub error: Option<String>,
@@ -66,15 +69,104 @@ impl MetricsStore {
             .open(self.dir.join("metrics.jsonl"))?
             .write_all(&line)?;
 
-        if m.error.is_none() {
+        // O custo conta sempre que houve cobrança (mesmo que a colagem tenha
+        // falhado depois); o número de ditados só conta os que colaram texto.
+        let cost = m.cost_usd.unwrap_or(0.0) + m.cleanup_cost_usd.unwrap_or(0.0);
+        let counted = u64::from(m.error.is_none() && m.total_ms.is_some());
+        if cost > 0.0 || counted > 0 {
             add_to_month(
                 &self.dir.join("costs.json"),
                 &month_key(m.at),
-                m.cost_usd.unwrap_or(0.0),
+                cost,
+                counted,
             )?;
         }
         Ok(())
     }
+
+    pub fn months(&self) -> BTreeMap<String, MonthTotal> {
+        std::fs::read(self.dir.join("costs.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Bloqueante. Lê as últimas `recent` linhas de metrics.jsonl e calcula os
+    /// percentis de latência dos ditados bem-sucedidos.
+    pub fn stats(&self, recent: usize) -> Stats {
+        let text = std::fs::read_to_string(self.dir.join("metrics.jsonl")).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut rows: Vec<MetricsRow> = lines[lines.len().saturating_sub(recent)..]
+            .iter()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        rows.reverse(); // mais recente primeiro
+
+        let ok: Vec<&MetricsRow> = rows.iter().filter(|r| r.error.is_none()).collect();
+        let pick = |f: fn(&MetricsRow) -> Option<u64>| {
+            percentiles(ok.iter().filter_map(|r| f(r)).collect())
+        };
+        Stats {
+            current_month: month_key(now()),
+            months: self.months(),
+            total: pick(|r| r.total_ms),
+            stt: pick(|r| r.stt_ms),
+            cleanup: pick(|r| r.cleanup_ms),
+            recent: rows,
+        }
+    }
+}
+
+/// Uma linha de metrics.jsonl lida de volta (só os campos que a UI mostra).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsRow {
+    pub at: String,
+    pub model: String,
+    pub audio_ms: u64,
+    pub stt_ms: Option<u64>,
+    #[serde(default)]
+    pub cleanup_ms: Option<u64>,
+    pub paste_ms: Option<u64>,
+    pub total_ms: Option<u64>,
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub cleanup_cost_usd: Option<f64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Percentiles {
+    pub count: usize,
+    pub p50: u64,
+    pub p90: u64,
+    pub max: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Stats {
+    pub current_month: String,
+    pub months: BTreeMap<String, MonthTotal>,
+    pub total: Option<Percentiles>,
+    pub stt: Option<Percentiles>,
+    pub cleanup: Option<Percentiles>,
+    pub recent: Vec<MetricsRow>,
+}
+
+/// Percentil pelo método do "rank mais próximo": sem interpolação, devolve sempre
+/// um valor que foi realmente medido.
+fn percentiles(mut values: Vec<u64>) -> Option<Percentiles> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    let at =
+        |p: f64| values[((p * values.len() as f64).ceil() as usize).clamp(1, values.len()) - 1];
+    Some(Percentiles {
+        count: values.len(),
+        p50: at(0.5),
+        p90: at(0.9),
+        max: values[values.len() - 1],
+    })
 }
 
 /// "2026-10". Em UTC, como a faturação do OpenRouter.
@@ -82,7 +174,7 @@ fn month_key(at: OffsetDateTime) -> String {
     format!("{:04}-{:02}", at.year(), u8::from(at.month()))
 }
 
-fn add_to_month(path: &Path, month: &str, cost: f64) -> std::io::Result<()> {
+fn add_to_month(path: &Path, month: &str, cost: f64, dictations: u64) -> std::io::Result<()> {
     // BTreeMap mantém os meses ordenados no ficheiro.
     let mut totals: BTreeMap<String, MonthTotal> = match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
@@ -94,7 +186,7 @@ fn add_to_month(path: &Path, month: &str, cost: f64) -> std::io::Result<()> {
     };
     let entry = totals.entry(month.to_owned()).or_default();
     entry.cost_usd += cost;
-    entry.dictations += 1;
+    entry.dictations += dictations;
 
     let tmp = path.with_extension("json.tmp");
     std::fs::write(
@@ -124,9 +216,11 @@ mod tests {
             mic_start_ms: Some(46),
             release_to_wav_ms: 3,
             stt_ms: Some(600),
+            cleanup_ms: None,
             paste_ms: Some(20),
             total_ms: Some(630),
             cost_usd: cost,
+            cleanup_cost_usd: None,
             chars: 80,
             generation_id: Some("gen-1".into()),
             error: error.map(str::to_owned),
@@ -159,6 +253,27 @@ mod tests {
         let oct = totals["2026-10"];
         assert_eq!(oct.dictations, 2);
         assert!((oct.cost_usd - 0.0005).abs() < 1e-12);
+
+        // As estatísticas leem de volta e ignoram a linha com erro nos percentis.
+        let stats = store.stats(10);
+        assert_eq!(stats.recent.len(), 3);
+        assert_eq!(
+            stats.recent[0].error.as_deref(),
+            Some("timeout"),
+            "mais recente primeiro"
+        );
+        assert_eq!(stats.total.map(|p| p.count), Some(2));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn percentiles_use_nearest_rank() {
+        assert_eq!(percentiles(vec![]), None);
+        let p = percentiles(vec![500]).unwrap();
+        assert_eq!((p.p50, p.p90, p.max), (500, 500, 500));
+        let p = percentiles((1..=10).map(|i| i * 100).collect()).unwrap();
+        assert_eq!((p.count, p.p50, p.p90, p.max), (10, 500, 900, 1000));
+        let p = percentiles(vec![900, 100, 300]).unwrap();
+        assert_eq!((p.p50, p.p90), (300, 900));
     }
 }

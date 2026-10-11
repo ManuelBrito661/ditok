@@ -1,206 +1,203 @@
 //! O caminho crítico de um ditado, depois de largar a tecla:
-//! WAV pronto → pedido STT → colar → (fora do caminho crítico) métricas, WAV de
-//! teste e reposição do clipboard.
+//! WAV pronto → pedido STT → (limpeza com LLM, se ligada) → colar →
+//! (fora do caminho crítico) métricas, histórico, WAV de teste e reposição do
+//! clipboard.
 
 use std::{
-    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use tauri::AppHandle;
-use tauri_plugin_notification::NotificationExt;
+use tauri::Emitter;
 
 use crate::{
     audio::{AudioError, Recording},
-    config::{Config, Provider},
-    metrics::{self, DictationMetrics, MetricsStore},
+    cleanup,
+    history::HistoryEntry,
+    metrics::{self, DictationMetrics},
     paste,
-    secrets::{self, ApiKey},
+    state::AppState,
     stt::{SttProvider, SttRequest, openrouter::OpenRouter},
 };
 
 /// Gravações mais curtas do que isto são quase de certeza toques acidentais.
 const MIN_AUDIO: Duration = Duration::from_millis(250);
 
-/// Dados partilhados (só leitura) entre o orquestrador e as tarefas de
-/// processamento. Vive num `Arc`: cada tarefa leva uma referência, não uma cópia.
-pub struct Pipeline {
-    pub app: AppHandle,
-    pub config: Config,
-    pub http: reqwest::Client,
-    pub metrics: MetricsStore,
-    pub debug_dir: PathBuf,
-}
+/// Evento emitido para a janela de definições (se estiver aberta) depois de
+/// guardar as métricas de um ditado, para atualizar o ecrã sem polling.
+pub const EVENT_DICTATION_RECORDED: &str = "dictation-recorded";
 
-impl Pipeline {
-    /// Cria o provider configurado se a chave existir no cofre. `Ok(None)` = falta a chave.
-    pub fn load_provider(&self) -> Result<Option<Arc<dyn SttProvider>>, secrets::SecretError> {
-        Ok(match self.config.provider {
-            Provider::OpenRouter => secrets::get(ApiKey::OpenRouter)?.map(|key| {
-                // `as Arc<dyn …>`: a partir daqui só sabemos que é "um SttProvider".
-                Arc::new(OpenRouter::new(
-                    self.http.clone(),
-                    key,
-                    self.config.openrouter_transport,
-                )) as Arc<dyn SttProvider>
-            }),
-        })
-    }
+/// Processa um ditado do princípio ao fim. Devolve `true` se colou texto.
+///
+/// Recebe `Arc`s por valor: a função é dona de uma referência a cada um e pode
+/// passá-la às tarefas de fundo que continuam depois de ela terminar.
+pub async fn process(
+    state: Arc<AppState>,
+    openrouter: Arc<OpenRouter>,
+    recording: impl Future<Output = Result<Recording, AudioError>>,
+    released_at: Instant,
+) -> bool {
+    // Uma "fotografia" da configuração: o ditado usa-a do princípio ao fim.
+    let config = state.config();
 
-    pub fn missing_key_message(&self) -> String {
-        let key = match self.config.provider {
-            Provider::OpenRouter => ApiKey::OpenRouter,
-        };
-        format!(
-            "Falta a chave do {key}. Num terminal, na pasta src-tauri: cargo run --bin set-key -- {}",
-            key.to_string().to_lowercase()
-        )
-    }
-
-    pub fn notify(&self, body: &str) {
-        if let Err(e) = self
-            .app
-            .notification()
-            .builder()
-            .title("Ditok")
-            .body(body)
-            .show()
-        {
-            tracing::warn!(error = %e, "não foi possível mostrar a notificação");
-        }
-    }
-
-    fn model(&self) -> &str {
-        match self.config.provider {
-            Provider::OpenRouter => &self.config.openrouter_model,
-        }
-    }
-
-    /// Processa um ditado do princípio ao fim. Devolve `true` se colou texto.
-    ///
-    /// `self: Arc<Self>` permite chamar o método num `Arc<Pipeline>` e mover esse
-    /// `Arc` para dentro das tarefas de fundo lançadas no fim.
-    pub async fn process(
-        self: Arc<Self>,
-        stt: Arc<dyn SttProvider>,
-        recording: impl Future<Output = Result<Recording, AudioError>>,
-        released_at: Instant,
-    ) -> bool {
-        let rec = match recording.await {
-            Ok(rec) => rec,
-            Err(e) => {
-                tracing::error!(error = %e, "gravação falhou");
-                self.notify(&e.to_string());
-                return false;
-            }
-        };
-        let release_to_wav = released_at.elapsed();
-        log_recording(&rec, release_to_wav);
-        if rec.audio < MIN_AUDIO {
-            tracing::info!(
-                audio_ms = ms(rec.audio),
-                "gravação demasiado curta; ignorada"
-            );
+    let rec = match recording.await {
+        Ok(rec) => rec,
+        Err(e) => {
+            tracing::error!(error = %e, "gravação falhou");
+            state.notify(&e.to_string());
             return false;
         }
-
-        let model = self.model().to_owned();
-        let req = SttRequest {
-            model: &model,
-            language: self.config.language.as_deref(),
-        };
-        let mut m = DictationMetrics {
-            at: metrics::now(),
-            provider: stt.name(),
-            model: model.clone(),
-            transport: None,
-            audio_ms: ms(rec.audio),
-            wav_bytes: rec.wav.len(),
-            mic_start_ms: rec.mic_start.map(ms),
-            release_to_wav_ms: ms(release_to_wav),
-            stt_ms: None,
-            paste_ms: None,
-            total_ms: None,
-            cost_usd: None,
-            chars: 0,
-            generation_id: None,
-            error: None,
-        };
-
-        let pasted = match stt.transcribe(rec.wav.clone(), &req).await {
-            Err(e) => {
-                tracing::error!(error = %e, provider = stt.name(), model, "transcrição falhou");
-                self.notify(&format!("Transcrição falhou: {e}"));
-                m.error = Some(e.to_string());
-                false
-            }
-            Ok(t) => {
-                m.stt_ms = Some(ms(t.elapsed));
-                m.transport = Some(t.transport);
-                m.cost_usd = t.usage.cost;
-                m.generation_id = t.generation_id;
-                let text = t.text.trim().to_owned();
-                m.chars = text.chars().count();
-                if text.is_empty() {
-                    tracing::info!("nenhuma fala detetada; nada para colar");
-                    false
-                } else {
-                    self.paste(text, released_at, &mut m).await
-                }
-            }
-        };
-
+    };
+    let release_to_wav = released_at.elapsed();
+    log_recording(&rec, release_to_wav);
+    if rec.audio < MIN_AUDIO {
         tracing::info!(
-            provider = m.provider,
-            model = %m.model,
-            transport = m.transport,
-            audio_ms = m.audio_ms,
-            release_to_wav_ms = m.release_to_wav_ms,
-            stt_ms = m.stt_ms,
-            paste_ms = m.paste_ms,
-            total_ms = m.total_ms,
-            cost_usd = m.cost_usd,
-            chars = m.chars,
-            "ditado"
+            audio_ms = ms(rec.audio),
+            "gravação demasiado curta; ignorada"
         );
-
-        // Já colámos: o que falta não atrasa o utilizador.
-        let this = Arc::clone(&self);
-        tauri::async_runtime::spawn_blocking(move || {
-            if let Err(e) = this.metrics.record(&m) {
-                tracing::warn!(error = %e, "não foi possível guardar as métricas");
-            }
-            if this.config.save_last_recording {
-                save_debug_wav(&this.debug_dir, &rec);
-            }
-        });
-        pasted
+        return false;
     }
 
-    async fn paste(&self, text: String, released_at: Instant, m: &mut DictationMetrics) -> bool {
-        // `move` passa a posse do `text` para a thread de bloqueio.
-        match tauri::async_runtime::spawn_blocking(move || paste::paste(&text)).await {
-            Ok(Ok((took, restore))) => {
-                m.paste_ms = Some(ms(took));
-                m.total_ms = Some(ms(released_at.elapsed()));
-                tauri::async_runtime::spawn_blocking(move || {
-                    std::thread::sleep(paste::RESTORE_AFTER);
-                    restore.run();
-                });
-                true
-            }
-            Ok(Err(e)) => {
-                tracing::error!(error = %e, "colagem falhou");
-                self.notify(&e.to_string());
-                m.error = Some(e.to_string());
+    // O pipeline fala com o STT através do trait; o tipo concreto só é preciso
+    // para a limpeza, que é uma funcionalidade específica do OpenRouter.
+    let stt: &dyn SttProvider = &*openrouter;
+    let req = SttRequest {
+        model: &config.stt_model,
+        language: config.language.as_deref(),
+    };
+    let mut m = DictationMetrics {
+        at: metrics::now(),
+        provider: stt.name(),
+        model: config.stt_model.clone(),
+        transport: None,
+        audio_ms: ms(rec.audio),
+        wav_bytes: rec.wav.len(),
+        mic_start_ms: rec.mic_start.map(ms),
+        release_to_wav_ms: ms(release_to_wav),
+        stt_ms: None,
+        cleanup_ms: None,
+        paste_ms: None,
+        total_ms: None,
+        cost_usd: None,
+        cleanup_cost_usd: None,
+        chars: 0,
+        generation_id: None,
+        error: None,
+    };
+    let mut history_entry = None;
+
+    let pasted = match stt.transcribe(rec.wav.clone(), &req).await {
+        Err(e) => {
+            tracing::error!(error = %e, model = %config.stt_model, "transcrição falhou");
+            state.notify(&format!("Transcrição falhou: {e}"));
+            m.error = Some(e.to_string());
+            false
+        }
+        Ok(t) => {
+            m.stt_ms = Some(ms(t.elapsed));
+            m.transport = Some(t.transport);
+            m.cost_usd = t.usage.cost;
+            m.generation_id = t.generation_id;
+            let raw = t.text.trim().to_owned();
+
+            if raw.is_empty() {
+                tracing::info!("nenhuma fala detetada; nada para colar");
                 false
+            } else {
+                let text = if config.cleanup_enabled {
+                    match cleanup::clean(&openrouter, &config.cleanup_model, &raw).await {
+                        Ok(c) => {
+                            m.cleanup_ms = Some(ms(c.elapsed));
+                            m.cleanup_cost_usd = c.cost;
+                            c.text
+                        }
+                        Err(e) => {
+                            // A limpeza é um extra: se falhar, cola-se o texto original.
+                            tracing::warn!(error = %e, model = %config.cleanup_model, "limpeza falhou; a colar o texto original");
+                            raw.clone()
+                        }
+                    }
+                } else {
+                    raw.clone()
+                };
+                m.chars = text.chars().count();
+                let ok = paste_text(&state, text.clone(), released_at, &mut m).await;
+                if ok && config.history_enabled {
+                    history_entry = Some(HistoryEntry {
+                        at: m.at,
+                        raw_text: (text != raw).then_some(raw),
+                        text,
+                        model: config.stt_model.clone(),
+                        audio_ms: m.audio_ms,
+                        total_ms: m.total_ms,
+                    });
+                }
+                ok
             }
-            Err(e) => {
-                tracing::error!(error = %e, "tarefa de colagem falhou");
-                m.error = Some(e.to_string());
-                false
-            }
+        }
+    };
+
+    tracing::info!(
+        model = %m.model,
+        transport = m.transport,
+        audio_ms = m.audio_ms,
+        release_to_wav_ms = m.release_to_wav_ms,
+        stt_ms = m.stt_ms,
+        cleanup_ms = m.cleanup_ms,
+        paste_ms = m.paste_ms,
+        total_ms = m.total_ms,
+        cost_usd = m.cost_usd,
+        cleanup_cost_usd = m.cleanup_cost_usd,
+        chars = m.chars,
+        "ditado"
+    );
+
+    // Já colámos: o que falta não atrasa o utilizador.
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(e) = state.metrics.record(&m) {
+            tracing::warn!(error = %e, "não foi possível guardar as métricas");
+        }
+        if let Some(entry) = history_entry
+            && let Err(e) = state.history.push(entry, config.history_limit)
+        {
+            tracing::warn!(error = %e, "não foi possível guardar o histórico");
+        }
+        if config.save_last_recording {
+            save_debug_wav(&state.debug_dir(), &rec);
+        }
+        // Sem janela aberta não há ninguém a ouvir, e o `emit` não custa nada.
+        let _ = state.app.emit(EVENT_DICTATION_RECORDED, ());
+    });
+    pasted
+}
+
+async fn paste_text(
+    state: &AppState,
+    text: String,
+    released_at: Instant,
+    m: &mut DictationMetrics,
+) -> bool {
+    // `move` passa a posse do `text` para a thread de bloqueio.
+    match tauri::async_runtime::spawn_blocking(move || paste::paste(&text)).await {
+        Ok(Ok((took, restore))) => {
+            m.paste_ms = Some(ms(took));
+            m.total_ms = Some(ms(released_at.elapsed()));
+            tauri::async_runtime::spawn_blocking(move || {
+                std::thread::sleep(paste::RESTORE_AFTER);
+                restore.run();
+            });
+            true
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "colagem falhou");
+            state.notify(&e.to_string());
+            m.error = Some(e.to_string());
+            false
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "tarefa de colagem falhou");
+            m.error = Some(e.to_string());
+            false
         }
     }
 }
