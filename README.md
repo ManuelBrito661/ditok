@@ -16,27 +16,25 @@ O ícone do tray mostra o estado com a mascote: parado, a ouvir (vermelho), a pr
 
 ## Configurar
 
+Clica no ícone do Ditok no tray → **Abrir definições**. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua no tray.
+
+| Secção | O que tem |
+| - | - |
+| Geral | atalho (com deteção de conflitos), idioma, arranque com o sistema, guardar a última gravação |
+| Transcrição | chave do OpenRouter (guardar / testar / apagar), modelo de transcrição com pesquisa e preço, formato de envio |
+| Limpeza com IA | corrige pontuação e remove hesitações com um modelo de texto (desligada por omissão) |
+| Histórico | texto dos últimos ditados, só neste computador (desligado por omissão) |
+| Métricas e custos | latência p50/p90, custo do mês, últimos ditados, RAM da app e da janela |
+
 ### Chave de API
-As chaves ficam no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros. Para guardar a chave do [OpenRouter](https://openrouter.ai/settings/keys), na pasta `src-tauri`:
+A chave do [OpenRouter](https://openrouter.ai/settings/keys) fica no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros, e a janela nunca a mostra. Em alternativa à janela, na pasta `src-tauri`:
 
 ```bash
-cargo run --bin set-key -- openrouter
+cargo run --bin set-key
 ```
 
-A chave é pedida sem aparecer no ecrã. A app passa a usá-la no ditado seguinte, sem reiniciar. Para a apagar: `cargo run --bin set-key -- openrouter --delete`.
-
-### Definições
-Até existir a janela de definições, edita `config.json` (Windows: `%APPDATA%\com.manuelbrito.ditok\config.json`) e reinicia a app:
-
-| Campo | Por omissão | Notas |
-| - | - | - |
-| `shortcut` | `CommandOrControl+Shift+Space` | |
-| `openrouter_model` | `openai/whisper-large-v3-turbo` | slug completo (lista: `https://openrouter.ai/api/v1/models?output_modalities=transcription`) |
-| `openrouter_transport` | `multipart` | `json` envia o áudio em base64 |
-| `language` | `pt` | ISO-639-1, ou `null` para deteção automática |
-| `save_last_recording` | `true` | guarda a última gravação em `debug/last.wav` |
-
-Cada ditado fica registado (sem o texto) em `%APPDATA%\com.manuelbrito.ditok\metrics.jsonl`, e o custo mensal acumulado em `costs.json`.
+### Ficheiros
+As definições ficam em `config.json` (Windows: `%APPDATA%\com.manuelbrito.ditok\`). Na mesma pasta, cada ditado fica registado, sem o texto, em `metrics.jsonl`, e o custo mensal em `costs.json`.
 
 ## Logs
 
