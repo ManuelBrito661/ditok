@@ -31,7 +31,7 @@ function renderStats() {
 
 async function copy(text: string, button: HTMLButtonElement) {
   try {
-    await navigator.clipboard.writeText(text);
+    await api.copyText(text); // pelo backend: o clipboard do WebView nem sempre está disponível
     button.textContent = "Copiado";
     window.setTimeout(() => (button.textContent = "Copiar"), 1400);
   } catch (e) {
