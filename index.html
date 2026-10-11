@@ -23,6 +23,11 @@
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v14H6.5A2.5 2.5 0 0 0 4 19.5Zm0 0A2.5 2.5 0 0 0 6.5 22H20v-5"/><path d="M9 8h6"/></svg>
           Dicionário
         </button>
+        <button type="button" class="nav-link" data-page="ficheiros">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/><path d="M9 17v-4m3 4v-6m3 6v-3"/></svg>
+          Ficheiros
+          <span id="nav-file-progress" class="nav-badge" hidden></span>
+        </button>
         <button type="button" class="nav-link" data-page="metricas">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/></svg>
           Métricas
@@ -144,6 +149,55 @@
           </div>
         </section>
 
+        <!-- ============================================================ Ficheiros -->
+        <section id="page-ficheiros" class="page" aria-labelledby="files-title" hidden>
+          <header class="page-head">
+            <h1 id="files-title" class="serif">Transcrever um ficheiro</h1>
+            <p class="muted">
+              A gravação de uma aula, uma reunião ou um vídeo. É partida nas pausas e enviada aos bocados ao teu modelo
+              de transcrição, vários ao mesmo tempo. Podes fechar a janela enquanto trabalha: aviso quando acabar.
+            </p>
+          </header>
+
+          <div id="file-drop" class="dropzone">
+            <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0L7 8m5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+            <p><strong>Arrasta um ficheiro para esta janela</strong></p>
+            <p class="muted">mp3, m4a, wav, flac, ogg, mp4, mov…</p>
+            <button id="file-pick" type="button" class="secondary">Escolher ficheiro…</button>
+          </div>
+
+          <div id="file-confirm" class="file-card" hidden>
+            <div class="file-head">
+              <strong id="fc-name" class="file-name"></strong>
+              <span id="fc-meta" class="muted"></span>
+            </div>
+            <p id="fc-estimate"></p>
+            <p id="fc-warning" class="file-warning" hidden></p>
+            <div class="file-actions">
+              <button id="fc-start" type="button" class="primary">Transcrever</button>
+              <button id="fc-back" type="button" class="ghost">Escolher outro</button>
+            </div>
+          </div>
+
+          <div id="file-job" class="file-card" hidden>
+            <div class="file-head">
+              <strong id="fj-name" class="file-name"></strong>
+              <span id="fj-status" class="pill"></span>
+            </div>
+            <div id="fj-meter" class="meter big" role="progressbar" aria-labelledby="fj-name" aria-valuemin="0" aria-valuemax="100"><span id="fj-bar"></span></div>
+            <p id="fj-detail" class="muted"></p>
+            <p id="fj-message" hidden></p>
+            <div class="file-actions">
+              <button id="fj-stop" type="button" class="secondary danger">Parar</button>
+              <button id="fj-copy" type="button" class="primary">Copiar texto</button>
+              <button id="fj-save" type="button" class="secondary">Guardar ao lado do original</button>
+              <button id="fj-new" type="button" class="ghost">Transcrever outro</button>
+            </div>
+            <p id="fj-saved" class="row-desc"></p>
+            <div id="fj-text" class="transcript" tabindex="0" aria-label="Texto transcrito" hidden></div>
+          </div>
+        </section>
+
         <!-- ============================================================ Métricas -->
         <section id="page-metricas" class="page" aria-labelledby="metrics-title" hidden>
           <header class="page-head">
@@ -200,6 +254,14 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <!-- Aparece por cima de tudo enquanto arrastas um ficheiro para a janela. -->
+    <div id="drop-overlay" class="drop-overlay" hidden>
+      <div class="drop-overlay-box">
+        <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+        <strong>Larga para transcrever</strong>
+      </div>
     </div>
 
     <!-- ============================================================ Definições (modal) -->

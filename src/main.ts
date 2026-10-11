@@ -5,12 +5,13 @@ import "@fontsource/instrument-serif/latin-400.css";
 import mascotUrl from "../design/mascot/parado.svg?inline";
 import { api, errorText, onDictationRecorded } from "./api";
 import { setupDictionary } from "./dictionary-page";
+import { setupFiles } from "./files-page";
 import { clearHomeHistory, refreshHome, setupHome } from "./home";
 import { renderMemory, renderStats, setupMetrics } from "./metrics-page";
 import { openSettings, setupSettings } from "./settings-dialog";
 import { $, app, onViewChange, refreshKey, toast } from "./store";
 
-type Page = "inicio" | "dicionario" | "metricas";
+type Page = "inicio" | "dicionario" | "ficheiros" | "metricas";
 
 function showPage(page: Page) {
   for (const link of document.querySelectorAll<HTMLButtonElement>(".nav-link[data-page]")) {
@@ -74,7 +75,14 @@ async function main() {
   renderStatus();
 
   // Em paralelo: nenhuma destas chamadas depende das outras.
-  await Promise.allSettled([refreshHome(), renderStats(), renderMemory(), refreshKey(), checkUpdate()]);
+  await Promise.allSettled([
+    setupFiles(() => showPage("ficheiros")),
+    refreshHome(),
+    renderStats(),
+    renderMemory(),
+    refreshKey(),
+    checkUpdate(),
+  ]);
 
   // Atualiza o Início e as métricas quando acaba um ditado, sem polling.
   await onDictationRecorded(() => {

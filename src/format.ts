@@ -1,5 +1,7 @@
 // Formatação partilhada pelas páginas da janela principal.
 
+import type { MetricsRow } from "./api";
+
 export const isMac = navigator.userAgent.includes("Mac");
 
 /** Valores pequenos em decimal com 2 algarismos significativos ($0.000087), nunca em notação científica. */
@@ -96,3 +98,27 @@ export function budgetLevel(spent: number, budget: number | null): "" | "warn" |
   if (!budget) return "";
   return spent >= budget ? "over" : spent >= budget * 0.8 ? "warn" : "";
 }
+
+/** Custo por minuto de áudio nos últimos registos com `model`, ou `null` se não
+ *  houver nenhum. `withCleanup`: soma o custo da limpeza (os ficheiros não a têm). */
+export function costPerMinute(rows: MetricsRow[], model: string, withCleanup: boolean): number | null {
+  let cost = 0;
+  let audioMs = 0;
+  for (const r of rows) {
+    if (r.model !== model || r.cost_usd == null) continue;
+    cost += r.cost_usd + (withCleanup ? r.cleanup_cost_usd ?? 0 : 0);
+    audioMs += r.audio_ms;
+  }
+  return audioMs > 0 && cost > 0 ? (cost / audioMs) * 60_000 : null;
+}
+
+/** "4 min 21 s", "62 min", "1 h 05 min". */
+export function duration(seconds: number): string {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} s`;
+  if (s < 600) return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+export const megabytes = (bytes: number) => `${(bytes / 1_048_576).toFixed(bytes < 10_485_760 ? 1 : 0)} MB`;

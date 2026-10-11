@@ -1,7 +1,7 @@
 // Página Métricas: percentis, custos por mês, orçamento, o que resta na chave e RAM.
 
-import { api, type MetricsRow, type Stats } from "./api";
-import { budgetLevel, dateTime, ms, usd } from "./format";
+import { api, type Stats } from "./api";
+import { budgetLevel, costPerMinute, dateTime, duration, ms, usd } from "./format";
 import { openSettings } from "./settings-dialog";
 import { $, app, onViewChange } from "./store";
 
@@ -23,8 +23,11 @@ export async function renderStats() {
     ...s.recent.map((r) => {
       const tr = document.createElement("tr");
       const cost = (r.cost_usd ?? 0) + (r.cleanup_cost_usd ?? 0);
-      const cells = [dateTime(r.at), r.model, ms(r.audio_ms), ms(r.stt_ms), ms(r.cleanup_ms),
-        r.error ? "erro" : ms(r.total_ms), usd(r.cost_usd == null && r.cleanup_cost_usd == null ? null : cost)];
+      // Um ficheiro não tem latência: mostra a duração e "ficheiro" no total.
+      const audio = r.file ? duration(r.audio_ms / 1000) : ms(r.audio_ms);
+      const total = r.error ? "erro" : r.file ? "ficheiro" : ms(r.total_ms);
+      const cells = [dateTime(r.at), r.model, audio, ms(r.stt_ms), ms(r.cleanup_ms), total,
+        usd(r.cost_usd == null && r.cleanup_cost_usd == null ? null : cost)];
       cells.forEach((c, i) => {
         const td = document.createElement("td");
         td.textContent = c;
@@ -49,20 +52,6 @@ export async function renderStats() {
       return tr;
     }),
   );
-}
-
-/** Custo por minuto de áudio nos últimos ditados com o modelo atual (transcrição
- *  + limpeza), ou `null` se ainda não houver nenhum. */
-function costPerMinute(rows: MetricsRow[]): number | null {
-  const model = app.view.config.stt_model;
-  let cost = 0;
-  let audioMs = 0;
-  for (const r of rows) {
-    if (r.model !== model || r.cost_usd == null) continue;
-    cost += r.cost_usd + (r.cleanup_cost_usd ?? 0);
-    audioMs += r.audio_ms;
-  }
-  return audioMs > 0 && cost > 0 ? (cost / audioMs) * 60_000 : null;
 }
 
 function setupLink(text: string, onClick: () => void): HTMLButtonElement {
@@ -105,7 +94,9 @@ function renderMoney() {
     sub.textContent = `A chave não tem limite de gasto · gastou ${usd(key.usage ?? 0, 2)}`;
   } else {
     $("m-key").textContent = usd(key.limit_remaining, 2);
-    const perMin = costPerMinute(stats?.recent ?? []);
+    // Só os ditados (com a limpeza, se estiver ligada), não os ficheiros.
+    const dictations = (stats?.recent ?? []).filter((r) => !r.file);
+    const perMin = costPerMinute(dictations, app.view.config.stt_model, true);
     const minutes = perMin ? ` · ≈ ${Math.floor(key.limit_remaining / perMin)} min de ditado ao custo atual` : "";
     sub.textContent = `de ${usd(key.limit, 2)}${minutes}`;
   }

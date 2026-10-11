@@ -86,6 +86,8 @@ export interface MetricsRow {
   cost_usd: number | null;
   cleanup_cost_usd: number | null;
   error: string | null;
+  /** Linha de um ficheiro transcrito, não de um ditado. */
+  file?: boolean;
 }
 
 export interface Stats {
@@ -149,4 +151,44 @@ export function onDictationRecorded(handler: () => void): Promise<UnlistenFn> {
 /// Os comandos rejeitam com o texto do erro (CommandError em commands.rs).
 export function errorText(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
+}
+
+// ---------------------------------------------------------------- ficheiros (files.rs)
+
+export interface FileProbe {
+  name: string;
+  path: string;
+  duration_s: number | null;
+  size_bytes: number;
+}
+
+export type FileStatus = "running" | "done" | "failed" | "cancelled";
+
+export interface FileJob {
+  name: string;
+  status: FileStatus;
+  model: string;
+  total_s: number | null;
+  done_s: number;
+  cost_usd: number;
+  elapsed_s: number;
+  text: string | null;
+  message: string | null;
+  saved_to: string | null;
+  failed_chunks: number;
+}
+
+export const files = {
+  probe: (path: string) => invoke<FileProbe>("file_probe", { path }),
+  pick: () => invoke<string | null>("file_pick"),
+  start: (path: string) => invoke<FileJob>("file_start", { path }),
+  cancel: () => invoke<void>("file_cancel"),
+  status: () => invoke<FileJob | null>("file_status"),
+  clear: () => invoke<void>("file_clear"),
+  saveBeside: () => invoke<string>("file_save_beside"),
+};
+
+/// Emitido pelo backend a cada pedaço transcrito e no fim (files.rs, EVENT).
+export function onFileJob(handler: (job: FileJob) => void): Promise<UnlistenFn> {
+  return listen<FileJob>("file:job", (e) => handler(e.payload));
 }
