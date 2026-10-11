@@ -116,6 +116,11 @@ export const api = {
   getMemory: () => invoke<MemoryReport | null>("get_memory"),
   checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
   installUpdate: () => invoke<void>("install_update"),
+  // Barra flutuante (overlay.ts)
+  overlayClick: () => invoke<void>("overlay_click"),
+  overlayCancel: () => invoke<void>("overlay_cancel"),
+  overlayHitRect: (rect: { x: number; y: number; width: number; height: number }) =>
+    invoke<void>("overlay_hit_rect", { rect }),
 };
 
 /// Emitido pelo backend depois de cada ditado (pipeline.rs, EVENT_DICTATION_RECORDED).

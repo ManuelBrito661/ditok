@@ -37,6 +37,8 @@ pub enum DictationEvent {
         at: Instant,
     },
     Cancel,
+    /// Clique na barra flutuante (começa ou termina um ditado em modo alternar).
+    Click,
     /// O microfone não abriu ou desligou-se a meio.
     AudioFailed(String),
     ProcessingFinished(Outcome),
@@ -79,6 +81,7 @@ async fn run(
             DictationEvent::Hotkey { pressed: true, at } => (Input::Pressed, at),
             DictationEvent::Hotkey { pressed: false, at } => (Input::Released, at),
             DictationEvent::Cancel => (Input::Cancel, Instant::now()),
+            DictationEvent::Click => (Input::Click, Instant::now()),
             DictationEvent::AudioFailed(reason) => {
                 tracing::error!(%reason, "falha de áudio");
                 // Para a máquina é igual a cancelar; depois mostramos o motivo.
@@ -172,6 +175,11 @@ async fn run(
                 tracing::info!("modo alternar: prime o atalho outra vez para terminar");
             }
             None => tracing::trace!(?input, phase = ?machine.phase(), "evento ignorado"),
+        }
+        // Em modo alternar, a barra mostra os botões ✕ (cancelar) e ■ (parar). Vem
+        // depois de `tray.set` para chegar à barra a seguir ao estado "a gravar".
+        if machine.phase() == Phase::Latched && before != Phase::Latched {
+            crate::overlay::emit_latched(&app);
         }
     }
     tracing::debug!("orquestrador terminado");

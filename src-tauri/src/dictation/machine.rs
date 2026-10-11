@@ -28,6 +28,8 @@ pub enum Input {
     Pressed,
     Released,
     Cancel,
+    /// Clique na barra flutuante: começa em modo alternar ou termina-o.
+    Click,
     ProcessingFinished,
 }
 
@@ -70,10 +72,14 @@ impl Machine {
                 }
             }
             (Latched, Pressed) => (Processing, Some(Action::StopAndProcess)),
+            // Com o rato não há "segurar": um clique começa logo em modo alternar.
+            (Idle, Click) => (Latched, Some(Action::StartRecording)),
+            (Latched, Click) => (Processing, Some(Action::StopAndProcess)),
             (Holding { .. } | Latched, Cancel) => (Idle, Some(Action::CancelRecording)),
             (Processing, ProcessingFinished) => (Idle, None),
             // Auto-repetição do teclado (Pressed em Holding), Released depois de
-            // parar, premir durante o processamento, etc.: não mudam nada.
+            // parar, premir ou clicar durante o processamento, clicar com a
+            // tecla em baixo, etc.: não mudam nada.
             (phase, _) => (phase, None),
         };
         self.phase = next;
@@ -180,5 +186,51 @@ mod tests {
         assert_eq!(m.handle(Input::Pressed, t0 + ms(600)), None);
         assert_eq!(m.handle(Input::Cancel, t0 + ms(650)), None);
         assert_eq!(m.phase(), Phase::Processing);
+    }
+
+    #[test]
+    fn click_starts_latched_and_next_click_stops() {
+        let t0 = Instant::now();
+        let mut m = Machine::default();
+        assert_eq!(m.handle(Input::Click, t0), Some(Action::StartRecording));
+        assert_eq!(m.phase(), Phase::Latched);
+        assert_eq!(
+            m.handle(Input::Click, t0 + ms(3000)),
+            Some(Action::StopAndProcess)
+        );
+        assert_eq!(m.phase(), Phase::Processing);
+    }
+
+    #[test]
+    fn click_and_shortcut_mix() {
+        let t0 = Instant::now();
+        let mut m = Machine::default();
+        // Começa com um clique, termina com o atalho.
+        m.handle(Input::Click, t0);
+        assert_eq!(
+            m.handle(Input::Pressed, t0 + ms(2000)),
+            Some(Action::StopAndProcess)
+        );
+        m.handle(Input::ProcessingFinished, t0 + ms(2500));
+        // Clicar com a tecla em baixo não interrompe o push-to-talk.
+        m.handle(Input::Pressed, t0 + ms(3000));
+        assert_eq!(m.handle(Input::Click, t0 + ms(3100)), None);
+        assert!(matches!(m.phase(), Phase::Holding { .. }));
+        // Clicar durante o processamento é ignorado.
+        m.handle(Input::Released, t0 + ms(4000));
+        assert_eq!(m.handle(Input::Click, t0 + ms(4100)), None);
+        assert_eq!(m.phase(), Phase::Processing);
+    }
+
+    #[test]
+    fn cancel_after_click_returns_to_idle() {
+        let t0 = Instant::now();
+        let mut m = Machine::default();
+        m.handle(Input::Click, t0);
+        assert_eq!(
+            m.handle(Input::Cancel, t0 + ms(500)),
+            Some(Action::CancelRecording)
+        );
+        assert_eq!(m.phase(), Phase::Idle);
     }
 }

@@ -273,3 +273,23 @@ pub async fn check_update(app: AppHandle) -> CmdResult<Option<UpdateInfo>> {
 pub async fn install_update(app: AppHandle) -> CmdResult<()> {
     Ok(updater::install(&app).await?)
 }
+
+// ---------------------------------------------------------------- barra flutuante
+
+/// Clique na pílula: começa um ditado em modo alternar, ou termina-o.
+#[tauri::command]
+pub fn overlay_click(state: AppStateRef<'_>) {
+    let _ = state.events.send(DictationEvent::Click);
+}
+
+/// Botão ✕ da pílula: igual a carregar em Esc.
+#[tauri::command]
+pub fn overlay_cancel(state: AppStateRef<'_>) {
+    let _ = state.events.send(DictationEvent::Cancel);
+}
+
+/// A pílula mudou de tamanho: guarda onde está, para o rato saber quando lhe toca.
+#[tauri::command]
+pub fn overlay_hit_rect(rect: overlay::HitRect) {
+    overlay::set_hit_rect(rect);
+}
