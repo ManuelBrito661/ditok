@@ -100,6 +100,8 @@ pub struct Recording {
 enum Command {
     Start {
         pressed_at: Instant,
+        /// O som de início vai tocar: a deteção de voz ignora-o (ver `vad.rs`).
+        start_cue: bool,
     },
     Stop {
         reply: oneshot::Sender<Result<Recording, AudioError>>,
@@ -132,8 +134,12 @@ impl Recorder {
 
     /// Não espera que o microfone abra: o orquestrador continua livre. Se falhar, a
     /// thread envia `DictationEvent::AudioFailed`.
-    pub fn start(&self, pressed_at: Instant) {
-        if self.tx.send(Command::Start { pressed_at }).is_err() {
+    pub fn start(&self, pressed_at: Instant, start_cue: bool) {
+        let cmd = Command::Start {
+            pressed_at,
+            start_cue,
+        };
+        if self.tx.send(cmd).is_err() {
             tracing::error!("thread de áudio indisponível");
         }
     }
@@ -182,12 +188,15 @@ fn audio_thread(
         };
 
         match cmd {
-            Command::Start { pressed_at } => {
+            Command::Start {
+                pressed_at,
+                start_cue,
+            } => {
                 if session.is_some() {
                     tracing::warn!("início pedido com uma gravação em curso; ignorado");
                     continue;
                 }
-                match Session::open(pressed_at, events.clone()) {
+                match Session::open(pressed_at, start_cue, events.clone()) {
                     Ok(s) => session = Some(s),
                     Err(e) => {
                         tracing::error!(error = %e, "não foi possível abrir o microfone");
@@ -222,6 +231,7 @@ struct Session {
     rate: u32,
     channels: u16,
     pressed_at: Instant,
+    start_cue: bool,
     first_callback: Arc<OnceLock<Instant>>,
     dropped: Arc<AtomicUsize>,
 }
@@ -229,6 +239,7 @@ struct Session {
 impl Session {
     fn open(
         pressed_at: Instant,
+        start_cue: bool,
         events: UnboundedSender<DictationEvent>,
     ) -> Result<Self, AudioError> {
         // Pedimos sempre o dispositivo por omissão no momento: se trocares de
@@ -279,6 +290,7 @@ impl Session {
             rate,
             channels,
             pressed_at,
+            start_cue,
             first_callback,
             dropped,
         })
@@ -312,7 +324,7 @@ impl Session {
         self.drain();
 
         let mono16k = to16k.convert(&self.samples, self.rate)?;
-        let voice = vad::detect(&mono16k, TARGET_RATE);
+        let voice = vad::detect(&mono16k, TARGET_RATE, self.start_cue);
         let kept = voice.speech.clone().unwrap_or(0..mono16k.len());
         let duration =
             |samples: usize| Duration::from_secs_f64(samples as f64 / f64::from(TARGET_RATE));

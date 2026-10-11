@@ -194,8 +194,13 @@ pub async fn process(
 
     // Já colámos: o que falta não atrasa o utilizador.
     tauri::async_runtime::spawn_blocking(move || {
-        if let Err(e) = state.metrics.record(&m) {
-            tracing::warn!(error = %e, "não foi possível guardar as métricas");
+        match state.metrics.record(&m, config.monthly_budget_usd) {
+            Ok(Some(alert)) => {
+                tracing::info!(?alert, "aviso de orçamento");
+                state.notify(&alert.message());
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(error = %e, "não foi possível guardar as métricas"),
         }
         if let Some(entry) = history_entry
             && let Err(e) = state.history.push(entry, config.history_limit)

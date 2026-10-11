@@ -35,6 +35,13 @@ const MIN_SEGMENT_FRAMES: usize = 4;
 /// silêncio à volta.
 const PAD_BEFORE_MS: usize = 300;
 const PAD_AFTER_MS: usize = 400;
+/// O som de início (`sound.rs`) toca enquanto o microfone abre e, com colunas e
+/// eco, pode ficar gravado como um segmento de ~200 ms. Quando tocou, um segmento
+/// que acabe nos primeiros `CUE_WINDOW_MS` e não passe de `CUE_MAX_MS` é
+/// ignorado. Fala que comece cedo mas continue não é afetada; só se perderia um
+/// ditado inteiro de uma palavra dita no primeiro meio segundo.
+const CUE_WINDOW_MS: usize = 500;
+const CUE_MAX_MS: usize = 300;
 
 /// Resultado da análise. Os níveis em dBFS servem para os logs: são eles que
 /// permitem afinar os limiares se um microfone se portar de forma diferente.
@@ -68,7 +75,8 @@ pub fn dbfs(samples: &[f32]) -> f32 {
     10.0 * mean_square.max(1e-10).log10() // 10·log10(x²) = 20·log10(x)
 }
 
-pub fn detect(samples: &[f32], rate: u32) -> Voice {
+/// `start_cue`: o som de início tocou no começo desta gravação.
+pub fn detect(samples: &[f32], rate: u32, start_cue: bool) -> Voice {
     let rate = rate as usize;
     let frame = (rate * FRAME_MS / 1000).max(1);
     // `chunks` (e não `chunks_exact`) inclui o último bloco, mesmo incompleto.
@@ -97,7 +105,10 @@ pub fn detect(samples: &[f32], rate: u32) -> Voice {
             _ => segments.push(i..i + 1),
         }
     }
-    segments.retain(|s| s.len() >= MIN_SEGMENT_FRAMES);
+    let is_cue = |s: &Range<usize>| {
+        start_cue && s.end * FRAME_MS <= CUE_WINDOW_MS && s.len() * FRAME_MS <= CUE_MAX_MS
+    };
+    segments.retain(|s| s.len() >= MIN_SEGMENT_FRAMES && !is_cue(s));
 
     let voiced_ms = segments.iter().map(|s| s.len() * FRAME_MS).sum();
     let speech = match (segments.first(), segments.last()) {
@@ -156,11 +167,11 @@ mod tests {
 
     #[test]
     fn digital_silence_and_steady_noise_have_no_speech() {
-        assert!(!detect(&[0.0; 32_000], RATE).has_speech());
-        assert!(!detect(&noise(2000, -60.0, 1), RATE).has_speech());
+        assert!(!detect(&[0.0; 32_000], RATE, false).has_speech());
+        assert!(!detect(&noise(2000, -60.0, 1), RATE, false).has_speech());
         // Microfone barulhento: o limiar sobe com o ruído.
-        assert!(!detect(&noise(2000, -40.0, 2), RATE).has_speech());
-        assert!(!detect(&[], RATE).has_speech());
+        assert!(!detect(&noise(2000, -40.0, 2), RATE, false).has_speech());
+        assert!(!detect(&[], RATE, false).has_speech());
     }
 
     #[test]
@@ -168,7 +179,7 @@ mod tests {
         // 1 s de silêncio, 0,5 s de fala, 1 s de silêncio. Os limites caem
         // exatamente em blocos de 20 ms, por isso as contas são exatas.
         let audio = concat(&[noise(1000, -70.0, 3), tone(500, 4), noise(1000, -70.0, 5)]);
-        let v = detect(&audio, RATE);
+        let v = detect(&audio, RATE, false);
         assert_eq!(v.speech, Some((1000 - 300) * MS..(1500 + 400) * MS));
         assert_eq!(v.voiced_ms, 500);
         assert!(v.noise_db < -65.0 && v.peak_db > -30.0, "{v:?}");
@@ -178,7 +189,7 @@ mod tests {
     fn a_key_click_is_not_speech() {
         let click: Vec<f32> = noise(20, -6.0, 6);
         let audio = concat(&[noise(800, -70.0, 7), click, noise(800, -70.0, 8)]);
-        assert!(!detect(&audio, RATE).has_speech());
+        assert!(!detect(&audio, RATE, false).has_speech());
     }
 
     #[test]
@@ -192,15 +203,40 @@ mod tests {
             tone(60, 12),
             noise(500, -70.0, 13),
         ]);
-        let v = detect(&audio, RATE);
+        let v = detect(&audio, RATE, false);
         assert!(v.has_speech());
         assert_eq!(v.voiced_ms, 160);
     }
 
     #[test]
+    fn a_short_blip_at_the_start_is_ignored_only_after_the_start_cue() {
+        // 200 ms de "bip" logo no início, como o som de início com eco da sala.
+        let audio = concat(&[noise(100, -70.0, 15), tone(200, 16), noise(1500, -70.0, 17)]);
+        assert!(detect(&audio, RATE, false).has_speech());
+        assert!(!detect(&audio, RATE, true).has_speech());
+    }
+
+    #[test]
+    fn speech_around_the_start_cue_is_kept() {
+        // Fala que começa logo e continua: não é o bip.
+        let early = concat(&[noise(100, -70.0, 18), tone(800, 19), noise(500, -70.0, 20)]);
+        assert!(detect(&early, RATE, true).has_speech());
+        // Bip no início e fala depois: o corte começa na fala, não no bip.
+        let later = concat(&[
+            noise(100, -70.0, 21),
+            tone(200, 22),
+            noise(900, -70.0, 23),
+            tone(500, 24),
+            noise(500, -70.0, 25),
+        ]);
+        let v = detect(&later, RATE, true);
+        assert_eq!(v.speech, Some((1200 - 300) * MS..(1700 + 400) * MS));
+    }
+
+    #[test]
     fn speech_that_fills_the_recording_is_kept_whole() {
         let audio = tone(1000, 14);
-        assert_eq!(detect(&audio, RATE).speech, Some(0..audio.len()));
+        assert_eq!(detect(&audio, RATE, false).speech, Some(0..audio.len()));
     }
 
     /// Analisa um WAV gravado pelo Ditok (`debug/last.wav`), para afinar os limiares
@@ -216,7 +252,7 @@ mod tests {
             .chunks_exact(2)
             .map(|c| f32::from(i16::from_le_bytes([c[0], c[1]])) / 32768.0)
             .collect();
-        let v = detect(&samples, RATE);
+        let v = detect(&samples, RATE, false);
         println!("{} ms gravados → {v:?}", samples.len() / MS);
     }
 

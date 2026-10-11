@@ -11,6 +11,7 @@ mod overlay;
 mod paste;
 pub mod secrets;
 mod settings_window;
+mod sound;
 mod state;
 mod stt;
 mod sysmem;
@@ -87,8 +88,15 @@ pub fn run() {
             let handle = app.handle().clone();
             let level_sink: audio::LevelSink = Box::new(move |level| overlay::emit_level(&handle, level));
             let recorder = audio::Recorder::spawn(tx.clone(), level_sink)?;
+            let sounds = sound::Sounds::spawn()?;
             updater::spawn_background_checks(app.handle().clone(), Arc::clone(&state));
-            dictation::spawn(dictation::Deps { tray, recorder, state }, tx, rx);
+            let deps = dictation::Deps {
+                tray,
+                recorder,
+                sounds,
+                state,
+            };
+            dictation::spawn(deps, tx, rx);
 
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "pronto");
             sysmem::log_after(Duration::from_secs(5), "em repouso, sem janela");

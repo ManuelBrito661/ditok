@@ -20,6 +20,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::{
     audio::Recorder,
     hotkey,
+    sound::{Cue, Sounds},
     state::{AppState, MISSING_KEY},
     stt::{SttProvider, openrouter::OpenRouter},
     tray::{Tray, TrayState},
@@ -53,7 +54,17 @@ pub enum DictationEvent {
 pub struct Deps {
     pub tray: Tray,
     pub recorder: Recorder,
+    pub sounds: Sounds,
     pub state: Arc<AppState>,
+}
+
+impl Deps {
+    /// Toca um som, se estiverem ligados nas definições.
+    fn cue(&self, cue: Cue) {
+        if self.state.config().sounds {
+            self.sounds.play(cue);
+        }
+    }
 }
 
 pub fn spawn(
@@ -131,9 +142,11 @@ async fn run(
                     deps.state.notify(MISSING_KEY);
                     continue;
                 };
-                // Primeiro o microfone (é o que tem latência), depois a ligação HTTP
-                // (corre enquanto falas), depois o resto.
-                deps.recorder.start(at);
+                // Primeiro o microfone (é o que tem latência), depois o som, a
+                // ligação HTTP (corre enquanto falas) e o resto.
+                let sounds = deps.state.config().sounds;
+                deps.recorder.start(at, sounds);
+                deps.cue(Cue::Start);
                 // A barra segue o monitor onde está o cursor (como no Wispr Flow).
                 crate::overlay::reposition_for(&app);
                 let provider = Arc::clone(provider);
@@ -146,6 +159,7 @@ async fn run(
                 // `stop()` envia já o pedido à thread de áudio; o future que devolve
                 // só entrega a gravação quando estiver pronta.
                 let recording = deps.recorder.stop();
+                deps.cue(Cue::Stop);
                 hotkey::set_cancel_enabled(&app, false);
                 deps.tray.set(TrayState::Processing);
 
@@ -167,6 +181,7 @@ async fn run(
             }
             Some(Action::CancelRecording) => {
                 deps.recorder.cancel();
+                deps.cue(Cue::Cancel);
                 hotkey::set_cancel_enabled(&app, false);
                 deps.tray.set(TrayState::Idle);
                 tracing::info!("gravação cancelada");

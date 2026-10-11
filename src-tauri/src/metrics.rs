@@ -59,7 +59,14 @@ impl MetricsStore {
     /// Bloqueante: chamar a partir de `spawn_blocking`. Só há um ditado de cada vez
     /// (a máquina de estados ignora o atalho enquanto processa), por isso não há
     /// escritas concorrentes nestes ficheiros.
-    pub fn record(&self, m: &DictationMetrics) -> std::io::Result<()> {
+    ///
+    /// Com um orçamento definido, devolve um aviso se este ditado o fez passar os
+    /// 80 % ou os 100 %.
+    pub fn record(
+        &self,
+        m: &DictationMetrics,
+        budget: Option<f64>,
+    ) -> std::io::Result<Option<BudgetAlert>> {
         std::fs::create_dir_all(&self.dir)?;
         let mut line = serde_json::to_vec(m).map_err(std::io::Error::other)?;
         line.push(b'\n');
@@ -73,15 +80,16 @@ impl MetricsStore {
         // falhado depois); o número de ditados só conta os que colaram texto.
         let cost = m.cost_usd.unwrap_or(0.0) + m.cleanup_cost_usd.unwrap_or(0.0);
         let counted = u64::from(m.error.is_none() && m.total_ms.is_some());
-        if cost > 0.0 || counted > 0 {
-            add_to_month(
-                &self.dir.join("costs.json"),
-                &month_key(m.at),
-                cost,
-                counted,
-            )?;
+        if cost <= 0.0 && counted == 0 {
+            return Ok(None);
         }
-        Ok(())
+        let before = add_to_month(
+            &self.dir.join("costs.json"),
+            &month_key(m.at),
+            cost,
+            counted,
+        )?;
+        Ok(budget.and_then(|b| BudgetAlert::crossed(before, before + cost, b)))
     }
 
     pub fn months(&self) -> BTreeMap<String, MonthTotal> {
@@ -174,7 +182,48 @@ fn month_key(at: OffsetDateTime) -> String {
     format!("{:04}-{:02}", at.year(), u8::from(at.month()))
 }
 
-fn add_to_month(path: &Path, month: &str, cost: f64, dictations: u64) -> std::io::Result<()> {
+/// Aviso de orçamento, mostrado numa notificação.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BudgetAlert {
+    /// Passou os 80 %.
+    Near { spent: f64, budget: f64 },
+    /// Chegou ao orçamento.
+    Reached { spent: f64, budget: f64 },
+}
+
+impl BudgetAlert {
+    pub const NEAR: f64 = 0.8;
+
+    /// Compara o gasto do mês antes e depois de um ditado. Só avisa quando um
+    /// limite é atravessado, por isso cada aviso aparece uma vez por mês sem ser
+    /// preciso guardar que já foi dado; no mês seguinte a conta recomeça do zero.
+    pub fn crossed(before: f64, after: f64, budget: f64) -> Option<Self> {
+        let spent = after;
+        if before < budget && after >= budget {
+            Some(Self::Reached { spent, budget })
+        } else if before < budget * Self::NEAR && after >= budget * Self::NEAR {
+            Some(Self::Near { spent, budget })
+        } else {
+            None
+        }
+    }
+
+    pub fn message(self) -> String {
+        match self {
+            Self::Near { spent, budget } => format!(
+                "Já gastaste ${spent:.2} dos ${budget:.2} do orçamento deste mês ({:.0} %).",
+                spent / budget * 100.0
+            ),
+            Self::Reached { spent, budget } => format!(
+                "Chegaste ao orçamento deste mês: ${spent:.2} de ${budget:.2}. O Ditok continua a \
+                 funcionar; podes mudar o orçamento nas definições."
+            ),
+        }
+    }
+}
+
+/// Soma ao mês e devolve o custo que o mês tinha antes.
+fn add_to_month(path: &Path, month: &str, cost: f64, dictations: u64) -> std::io::Result<f64> {
     // BTreeMap mantém os meses ordenados no ficheiro.
     let mut totals: BTreeMap<String, MonthTotal> = match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
@@ -185,6 +234,7 @@ fn add_to_month(path: &Path, month: &str, cost: f64, dictations: u64) -> std::io
         Err(e) => return Err(e),
     };
     let entry = totals.entry(month.to_owned()).or_default();
+    let before = entry.cost_usd;
     entry.cost_usd += cost;
     entry.dictations += dictations;
 
@@ -193,7 +243,8 @@ fn add_to_month(path: &Path, month: &str, cost: f64, dictations: u64) -> std::io
         &tmp,
         serde_json::to_vec_pretty(&totals).map_err(std::io::Error::other)?,
     )?;
-    std::fs::rename(tmp, path)
+    std::fs::rename(tmp, path)?;
+    Ok(before)
 }
 
 pub fn now() -> OffsetDateTime {
@@ -238,9 +289,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let store = MetricsStore::new(dir.clone());
 
-        store.record(&sample(Some(0.0002), None)).unwrap();
-        store.record(&sample(Some(0.0003), None)).unwrap();
-        store.record(&sample(None, Some("timeout"))).unwrap(); // falhas não contam
+        assert_eq!(
+            store
+                .record(&sample(Some(0.0002), None), Some(0.0004))
+                .unwrap(),
+            None
+        );
+        let alert = store
+            .record(&sample(Some(0.0003), None), Some(0.0004))
+            .unwrap();
+        assert!(
+            matches!(alert, Some(BudgetAlert::Reached { .. })),
+            "{alert:?}"
+        );
+        store.record(&sample(None, Some("timeout")), None).unwrap(); // falhas não contam
 
         let lines = std::fs::read_to_string(dir.join("metrics.jsonl")).unwrap();
         assert_eq!(lines.lines().count(), 3);
@@ -264,6 +326,26 @@ mod tests {
         );
         assert_eq!(stats.total.map(|p| p.count), Some(2));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn budget_alerts_fire_once_when_crossing() {
+        let near = |b, a| BudgetAlert::crossed(b, a, 10.0);
+        assert_eq!(near(7.0, 7.9), None);
+        assert!(matches!(near(7.9, 8.0), Some(BudgetAlert::Near { spent, .. }) if spent == 8.0));
+        assert_eq!(near(8.0, 9.0), None, "já tinha avisado aos 80 %");
+        assert!(matches!(near(9.9, 10.1), Some(BudgetAlert::Reached { .. })));
+        assert_eq!(near(10.1, 10.5), None, "já tinha avisado aos 100 %");
+        // Um ditado caro que salta os dois limites dá só o aviso mais grave.
+        assert!(matches!(near(7.0, 11.0), Some(BudgetAlert::Reached { .. })));
+        assert_eq!(
+            BudgetAlert::Near {
+                spent: 8.123,
+                budget: 10.0
+            }
+            .message(),
+            "Já gastaste $8.12 dos $10.00 do orçamento deste mês (81 %)."
+        );
     }
 
     #[test]

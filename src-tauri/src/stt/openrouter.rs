@@ -381,4 +381,33 @@ mod tests {
             Transport::Json
         );
     }
+
+    /// O estado da chave do cofre: gasto e limite (pedido GET, gratuito).
+    /// `cargo test live_account -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_account() {
+        let key = crate::secrets::get().unwrap().expect("sem chave no cofre");
+        let client = crate::stt::http_client().unwrap();
+        for path in ["/key"] {
+            let r = client
+                .get(format!("{BASE_URL}{path}"))
+                .bearer_auth(&key)
+                .send()
+                .await
+                .unwrap();
+            let status = r.status();
+            let body = r.text().await.unwrap();
+            // Sem o "label" (tem o início da chave).
+            let body = serde_json::from_str::<serde_json::Value>(&body)
+                .map(|mut v| {
+                    if let Some(d) = v.get_mut("data").and_then(|d| d.as_object_mut()) {
+                        d.remove("label");
+                    }
+                    v.to_string()
+                })
+                .unwrap_or(body);
+            println!("{path}: {status} {body}");
+        }
+    }
 }

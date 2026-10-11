@@ -52,6 +52,11 @@ pub struct Config {
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
     pub snippets: Vec<Snippet>,
+    /// Sons curtos ao começar e ao acabar de gravar (ver `sound.rs`).
+    pub sounds: bool,
+    /// Orçamento mensal em USD; `None` = sem orçamento. Há um aviso aos 80 % e
+    /// outro aos 100 % (ver `metrics::BudgetAlert`).
+    pub monthly_budget_usd: Option<f64>,
 }
 
 impl Default for Config {
@@ -71,6 +76,8 @@ impl Default for Config {
             voice_commands: true,
             dictionary: Vec::new(),
             snippets: Vec::new(),
+            sounds: true,
+            monthly_budget_usd: None,
         }
     }
 }
@@ -93,6 +100,8 @@ pub enum ConfigError {
     TooManyEntries,
     #[error("uma entrada do dicionário ou das expansões é demasiado longa")]
     EntryTooLong,
+    #[error("o orçamento tem de ser um valor em USD maior do que 0 (ou vazio para não ter)")]
+    Budget,
 }
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
@@ -119,6 +128,11 @@ impl Config {
         }
         if !(1..=1000).contains(&self.history_limit) {
             return Err(ConfigError::HistoryLimit);
+        }
+        if let Some(budget) = self.monthly_budget_usd
+            && !(budget.is_finite() && budget > 0.0 && budget <= 100_000.0)
+        {
+            return Err(ConfigError::Budget);
         }
         if self.dictionary.len() > MAX_ENTRIES || self.snippets.len() > MAX_ENTRIES {
             return Err(ConfigError::TooManyEntries);
@@ -205,6 +219,8 @@ mod tests {
         );
         assert!(c.voice_commands, "comandos falados ligados por omissão");
         assert!(c.dictionary.is_empty() && c.snippets.is_empty());
+        assert!(c.sounds, "sons ligados por omissão");
+        assert_eq!(c.monthly_budget_usd, None);
     }
 
     #[test]
@@ -267,5 +283,17 @@ mod tests {
             empty_snippet.validate(),
             Err(ConfigError::SnippetEntry)
         ));
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let c = Config {
+                monthly_budget_usd: Some(bad),
+                ..Config::default()
+            };
+            assert!(matches!(c.validate(), Err(ConfigError::Budget)), "{bad}");
+        }
+        let ok = Config {
+            monthly_budget_usd: Some(10.0),
+            ..Config::default()
+        };
+        assert!(ok.validate().is_ok());
     }
 }
