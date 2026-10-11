@@ -424,6 +424,31 @@ kbd.recording {
 }
 .history li .muted { font-size: 12px; }
 .history li p { margin: 6px 0 0; white-space: pre-wrap; }
+.history-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Botão pequeno das listas. Largura mínima para "Copiar" → "Copiado" não mexer no layout. */
+button.compact {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 104px;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+}
+button.copied { color: var(--green); }
+.btn-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .history details { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
 .history summary { cursor: pointer; }
 

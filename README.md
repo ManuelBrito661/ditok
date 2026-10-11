@@ -41,10 +41,10 @@ Clica no ícone do Ditok no tray → **Abrir definições**. A janela só existe
 
 | Secção | O que tem |
 | - | - |
-| Geral | atalho (com deteção de conflitos com outras apps), idioma, arranque com o sistema, mostrar a barra com a mascote, guardar a última gravação |
+| Geral | atalho (com deteção de conflitos com outras apps), idioma, arranque com o sistema, mostrar a barra com a mascote, deixar o ditado no clipboard depois de colar (ligado por omissão; desligado, o clipboard volta ao que lá tinhas), guardar a última gravação |
 | Transcrição | chave do OpenRouter (guardar / testar / apagar), modelo de transcrição com pesquisa e preço, formato de envio (multipart ou JSON) |
 | Limpeza com IA | corrige pontuação e remove hesitações com um modelo de texto (desligada por omissão; se falhar ou demorar mais de 6 s, cola o texto original) |
-| Histórico | texto dos últimos ditados, só neste computador (desligado por omissão) |
+| Histórico | texto dos últimos ditados, com um botão "Copiar" em cada um, só neste computador (desligado por omissão). Um ditado que não chegou a ser colado também fica lá |
 | Métricas e custos | latência p50/p90, custo e ditados do mês, últimos ditados, RAM da app e das janelas |
 
 ### Chave de API
@@ -119,7 +119,7 @@ src-tauri/src/
   audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV, nível do microfone
   stt/                trait SttProvider, OpenRouter, cache da lista de modelos
   cleanup.rs          limpeza opcional com LLM
-  paste.rs            clipboard + Ctrl/Cmd+V + reposição do clipboard
+  paste.rs            clipboard + Ctrl/Cmd+V (+ reposição do clipboard, se pedida), copiar sem colar
   hotkey.rs           atalho global, troca com deteção de conflitos
   overlay.rs          barra flutuante com a mascote
   settings_window.rs  janela de definições criada/destruída a pedido

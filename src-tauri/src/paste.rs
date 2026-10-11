@@ -1,5 +1,6 @@
 //! Colar texto na app em foco: guardar o clipboard → pôr o texto → simular
-//! Ctrl+V / Cmd+V → (mais tarde) repor o clipboard anterior.
+//! Ctrl+V / Cmd+V → (mais tarde, se a opção estiver desligada) repor o clipboard
+//! anterior. Também copia texto sem colar (botão "Copiar" do histórico).
 //!
 //! Tudo aqui é bloqueante (APIs do sistema), por isso é chamado a partir de
 //! `spawn_blocking` e nunca diretamente numa tarefa assíncrona.
@@ -17,10 +18,16 @@ pub const RESTORE_AFTER: Duration = Duration::from_millis(300);
 pub enum PasteError {
     #[error("clipboard: {0}")]
     Clipboard(#[from] arboard::Error),
+    // Este erro só acontece depois de o texto já estar no clipboard.
     #[error(
-        "não foi possível simular o atalho de colar: {0}. No macOS, dá acesso em Definições do Sistema → Privacidade e Segurança → Acessibilidade."
+        "não foi possível colar ({0}), mas o texto ficou no clipboard, pronto a colar. No macOS, dá acesso em Definições do Sistema → Privacidade e Segurança → Acessibilidade."
     )]
     Input(String),
+}
+
+/// Põe `text` no clipboard sem colar.
+pub fn copy(text: &str) -> Result<(), PasteError> {
+    Ok(set_text(&mut Clipboard::new()?, text)?)
 }
 
 /// O que é preciso para repor o clipboard depois. Devolvido ao chamador para que a

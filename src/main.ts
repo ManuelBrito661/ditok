@@ -290,6 +290,35 @@ function modelPicker(kind: ModelKind, prefix: "stt" | "cleanup", field: "stt_mod
 
 // ---------------------------------------------------------------- histórico e métricas
 
+const COPY_ICON = `<svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
+const CHECK_ICON = `<svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>`;
+
+/** Botão que põe `text` no clipboard e confirma no próprio botão durante um instante. */
+function copyButton(text: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary compact";
+  const idle = `${COPY_ICON}<span>Copiar</span>`;
+  button.innerHTML = idle; // só ícones e texto fixo: o ditado nunca entra no innerHTML
+  let timer: number | undefined;
+  button.addEventListener("click", async () => {
+    try {
+      await api.copyText(text);
+    } catch (err) {
+      toast(errorText(err), "error");
+      return;
+    }
+    button.innerHTML = `${CHECK_ICON}<span>Copiado</span>`;
+    button.classList.add("copied");
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      button.innerHTML = idle;
+      button.classList.remove("copied");
+    }, 1500);
+  });
+  return button;
+}
+
 async function renderHistory() {
   const entries = await api.getHistory();
   const list = $("history-list");
@@ -297,12 +326,15 @@ async function renderHistory() {
   list.replaceChildren(
     ...entries.map((h) => {
       const li = document.createElement("li");
+      const head = document.createElement("div");
+      head.className = "history-head";
       const meta = document.createElement("span");
       meta.className = "muted";
       meta.textContent = `${dateTime(h.at)} · ${ms(h.total_ms)} · ${h.model}`;
+      head.append(meta, copyButton(h.text));
       const text = document.createElement("p");
       text.textContent = h.text; // textContent: o texto ditado nunca é interpretado como HTML
-      li.append(meta, text);
+      li.append(head, text);
       if (h.raw_text) {
         const raw = document.createElement("details");
         raw.innerHTML = "<summary>Antes da limpeza</summary>";
@@ -376,6 +408,7 @@ function renderConfig() {
   $<HTMLInputElement>("autostart").checked = view.autostart;
   $<HTMLInputElement>("save-last-recording").checked = c.save_last_recording;
   $<HTMLInputElement>("show-overlay").checked = c.show_overlay;
+  $<HTMLInputElement>("keep-in-clipboard").checked = c.keep_in_clipboard;
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) r.checked = r.value === c.transport;
   $<HTMLInputElement>("cleanup-enabled").checked = c.cleanup_enabled;
   $<HTMLInputElement>("history-enabled").checked = c.history_enabled;
@@ -391,6 +424,8 @@ function bindSimpleControls() {
     save({ save_last_recording: (e.target as HTMLInputElement).checked }));
   $<HTMLInputElement>("show-overlay").addEventListener("change", (e) =>
     save({ show_overlay: (e.target as HTMLInputElement).checked }));
+  $<HTMLInputElement>("keep-in-clipboard").addEventListener("change", (e) =>
+    save({ keep_in_clipboard: (e.target as HTMLInputElement).checked }));
   $<HTMLInputElement>("cleanup-enabled").addEventListener("change", (e) =>
     save({ cleanup_enabled: (e.target as HTMLInputElement).checked }));
   $<HTMLInputElement>("history-enabled").addEventListener("change", (e) =>

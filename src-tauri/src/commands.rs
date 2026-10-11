@@ -19,7 +19,7 @@ use crate::{
     history::HistoryEntry,
     hotkey,
     metrics::Stats,
-    overlay, secrets,
+    overlay, paste, secrets,
     state::AppState,
     stt::{
         SttError,
@@ -233,6 +233,15 @@ pub async fn clear_history(state: AppStateRef<'_>) -> CmdResult<()> {
     let state = Arc::clone(&state);
     blocking(move || state.history.clear()).await??;
     tracing::info!("histórico apagado");
+    Ok(())
+}
+
+/// Copia um texto (ex.: um ditado do histórico) para o clipboard. É feito aqui e
+/// não no WebView para usar o mesmo clipboard da colagem (no Windows, fora do
+/// histórico do Win+V e da sincronização na nuvem).
+#[tauri::command]
+pub async fn copy_text(text: String) -> CmdResult<()> {
+    blocking(move || paste::copy(&text)).await??;
     Ok(())
 }
 

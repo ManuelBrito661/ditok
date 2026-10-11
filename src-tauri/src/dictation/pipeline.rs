@@ -1,7 +1,7 @@
 //! O caminho crítico de um ditado, depois de largar a tecla:
 //! WAV pronto (sem voz, pára aqui) → pedido STT → (limpeza com LLM, se ligada) → colar →
-//! (fora do caminho crítico) métricas, histórico, WAV de teste e reposição do
-//! clipboard.
+//! (fora do caminho crítico) métricas, histórico, WAV de teste e, se a opção
+//! "deixar no clipboard" estiver desligada, reposição do clipboard.
 
 use std::{
     sync::Arc,
@@ -147,8 +147,11 @@ pub async fn process(
                     raw.clone()
                 };
                 m.chars = text.chars().count();
-                let outcome = paste_text(&state, text.clone(), released_at, &mut m).await;
-                if outcome == Outcome::Pasted && config.history_enabled {
+                let restore_clipboard = !config.keep_in_clipboard;
+                let outcome =
+                    paste_text(&state, text.clone(), released_at, restore_clipboard, &mut m).await;
+                // Também quando a colagem falha: é aí que o histórico mais faz falta.
+                if config.history_enabled {
                     history_entry = Some(HistoryEntry {
                         at: m.at,
                         raw_text: (text != raw).then_some(raw),
@@ -202,6 +205,7 @@ async fn paste_text(
     state: &AppState,
     text: String,
     released_at: Instant,
+    restore_clipboard: bool,
     m: &mut DictationMetrics,
 ) -> Outcome {
     // `move` passa a posse do `text` para a thread de bloqueio.
@@ -209,10 +213,13 @@ async fn paste_text(
         Ok(Ok((took, restore))) => {
             m.paste_ms = Some(ms(took));
             m.total_ms = Some(ms(released_at.elapsed()));
-            tauri::async_runtime::spawn_blocking(move || {
-                std::thread::sleep(paste::RESTORE_AFTER);
-                restore.run();
-            });
+            if restore_clipboard {
+                tauri::async_runtime::spawn_blocking(move || {
+                    std::thread::sleep(paste::RESTORE_AFTER);
+                    restore.run();
+                });
+            }
+            // Senão, o `restore` é largado aqui sem correr e o ditado fica no clipboard.
             Outcome::Pasted
         }
         Ok(Err(e)) => {

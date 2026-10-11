@@ -15,6 +15,7 @@ export interface Config {
   language: string | null;
   cleanup_enabled: boolean;
   cleanup_model: string;
+  keep_in_clipboard: boolean;
   history_enabled: boolean;
   history_limit: number;
   save_last_recording: boolean;
@@ -110,6 +111,7 @@ export const api = {
   getStats: () => invoke<Stats>("get_stats"),
   getHistory: () => invoke<HistoryEntry[]>("get_history"),
   clearHistory: () => invoke<void>("clear_history"),
+  copyText: (text: string) => invoke<void>("copy_text", { text }),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
   getMemory: () => invoke<MemoryReport | null>("get_memory"),
   checkUpdate: () => invoke<UpdateInfo | null>("check_update"),

@@ -32,6 +32,9 @@ pub struct Config {
     /// Passo opcional que corrige pontuação e remove hesitações com um LLM.
     pub cleanup_enabled: bool,
     pub cleanup_model: String,
+    /// Depois de colar, deixa o ditado no clipboard (pronto para colar outra vez)
+    /// em vez de repor o que lá estava.
+    pub keep_in_clipboard: bool,
     /// Guarda os últimos ditados (texto incluído) em disco, só neste computador.
     pub history_enabled: bool,
     pub history_limit: usize,
@@ -50,6 +53,7 @@ impl Default for Config {
             language: Some("pt".to_owned()),
             cleanup_enabled: false,
             cleanup_model: DEFAULT_CLEANUP_MODEL.to_owned(),
+            keep_in_clipboard: true,
             history_enabled: false,
             history_limit: 50,
             save_last_recording: false,
@@ -145,6 +149,10 @@ mod tests {
         assert_eq!(c.shortcut, DEFAULT_SHORTCUT);
         assert!(!c.cleanup_enabled, "limpeza desligada por omissão");
         assert!(!c.history_enabled, "histórico desligado por omissão");
+        assert!(
+            c.keep_in_clipboard,
+            "um config.json antigo passa a deixar o ditado no clipboard"
+        );
     }
 
     #[test]

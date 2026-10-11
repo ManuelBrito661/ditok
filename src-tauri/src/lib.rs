@@ -108,6 +108,7 @@ pub fn run() {
             commands::get_stats,
             commands::get_history,
             commands::clear_history,
+            commands::copy_text,
             commands::set_autostart,
             commands::get_memory,
             commands::check_update,
