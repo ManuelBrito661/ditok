@@ -38,10 +38,23 @@ const PAD_AFTER_MS: usize = 400;
 /// O som de início (`sound.rs`) toca enquanto o microfone abre e, com colunas e
 /// eco, pode ficar gravado como um segmento de ~200 ms. Quando tocou, um segmento
 /// que acabe nos primeiros `CUE_WINDOW_MS` e não passe de `CUE_MAX_MS` é
-/// ignorado. Fala que comece cedo mas continue não é afetada; só se perderia um
-/// ditado inteiro de uma palavra dita no primeiro meio segundo.
+/// *candidato* a ser o som, mas só é ignorado se também parecer o som pela
+/// energia (ver `looks_like_cue`). Assim um "sim" dito logo a seguir ao premir
+/// não se perde.
 const CUE_WINDOW_MS: usize = 500;
 const CUE_MAX_MS: usize = 300;
+/// Critério 1, "fraco": o bloco mais forte do segmento mal passa o limiar. É o
+/// caso de um eco do som a chegar baixinho ao microfone; uma palavra dita para o
+/// microfone fica muito acima disto.
+const CUE_WEAK_DB: f32 = 6.0;
+/// Critério 2, "agudo": o som de início são notas a 1–1,6 kHz (e harmónicas
+/// acima), enquanto a voz tem quase toda a energia abaixo de ~700 Hz (a nota
+/// fundamental, 85–255 Hz, e o primeiro formante). Medimos que fração da
+/// energia do segmento passa num filtro passa-baixo de `LOW_BAND_HZ`: a voz
+/// fica tipicamente acima de 30 %, o som de início abaixo de 10 %. Isto não
+/// depende do volume, por isso funciona mesmo com o som alto nas colunas.
+const LOW_BAND_HZ: f32 = 700.0;
+const CUE_MAX_LOW_SHARE: f32 = 0.2;
 
 /// Resultado da análise. Os níveis em dBFS servem para os logs: são eles que
 /// permitem afinar os limiares se um microfone se portar de forma diferente.
@@ -106,7 +119,10 @@ pub fn detect(samples: &[f32], rate: u32, start_cue: bool) -> Voice {
         }
     }
     let is_cue = |s: &Range<usize>| {
-        start_cue && s.end * FRAME_MS <= CUE_WINDOW_MS && s.len() * FRAME_MS <= CUE_MAX_MS
+        start_cue
+            && s.end * FRAME_MS <= CUE_WINDOW_MS
+            && s.len() * FRAME_MS <= CUE_MAX_MS
+            && looks_like_cue(samples, rate, frame, &db, s, threshold_db)
     };
     segments.retain(|s| s.len() >= MIN_SEGMENT_FRAMES && !is_cue(s));
 
@@ -127,6 +143,45 @@ pub fn detect(samples: &[f32], rate: u32, start_cue: bool) -> Voice {
         voiced_ms,
         speech,
     }
+}
+
+/// Um segmento curto no início parece o som de início se for fraco (mal passa o
+/// limiar) ou agudo (pouca energia abaixo de `LOW_BAND_HZ`). `segment` está em
+/// blocos; `db` é a energia de cada bloco.
+fn looks_like_cue(
+    samples: &[f32],
+    rate: usize,
+    frame: usize,
+    db: &[f32],
+    segment: &Range<usize>,
+    threshold_db: f32,
+) -> bool {
+    let loudest = db[segment.clone()]
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    if loudest < threshold_db + CUE_WEAK_DB {
+        return true;
+    }
+    let audio = &samples[segment.start * frame..(segment.end * frame).min(samples.len())];
+    low_band_share(audio, rate) < CUE_MAX_LOW_SHARE
+}
+
+/// Fração (0–1) da energia de `audio` abaixo de `LOW_BAND_HZ`, medida com dois
+/// filtros passa-baixo de 1.ª ordem em série (12 dB por oitava: corta bem as
+/// notas a 1–1,6 kHz e deixa passar quase toda a voz). Barato: duas
+/// multiplicações por amostra, e só corre em segmentos candidatos.
+fn low_band_share(audio: &[f32], rate: usize) -> f32 {
+    let alpha = 1.0 - (-std::f32::consts::TAU * LOW_BAND_HZ / rate as f32).exp();
+    let (mut a, mut b) = (0.0f32, 0.0f32);
+    let (mut low, mut total) = (0.0f32, 0.0f32);
+    for &s in audio {
+        a += alpha * (s - a);
+        b += alpha * (a - b);
+        low += b * b;
+        total += s * s;
+    }
+    if total <= 0.0 { 0.0 } else { low / total }
 }
 
 #[cfg(test)]
@@ -208,12 +263,52 @@ mod tests {
         assert_eq!(v.voiced_ms, 160);
     }
 
+    /// "Bip" agudo como o som de início: notas de 1046 e 1568 Hz alternadas a
+    /// cada 50 ms, com amplitude 0.1 (tão forte como a "fala" de `tone`).
+    fn beep(ms: usize, seed: u32) -> Vec<f32> {
+        noise(ms, -70.0, seed)
+            .into_iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let freq = if (i / (50 * MS)).is_multiple_of(2) {
+                    1046.5
+                } else {
+                    1568.0
+                };
+                n + (TAU * freq * i as f32 / RATE as f32).sin() * 0.1
+            })
+            .collect()
+    }
+
     #[test]
     fn a_short_blip_at_the_start_is_ignored_only_after_the_start_cue() {
         // 200 ms de "bip" logo no início, como o som de início com eco da sala.
-        let audio = concat(&[noise(100, -70.0, 15), tone(200, 16), noise(1500, -70.0, 17)]);
+        let audio = concat(&[noise(100, -70.0, 15), beep(200, 16), noise(1500, -70.0, 17)]);
         assert!(detect(&audio, RATE, false).has_speech());
         assert!(!detect(&audio, RATE, true).has_speech());
+    }
+
+    #[test]
+    fn a_weak_blip_at_the_start_is_ignored_even_if_low_pitched() {
+        // Mal passa o limiar (-55 dBFS): ~-52 dBFS.
+        let weak: Vec<f32> = tone(200, 26).iter().map(|s| s * 0.035).collect();
+        let audio = concat(&[noise(100, -70.0, 27), weak, noise(1500, -70.0, 28)]);
+        assert!(detect(&audio, RATE, false).has_speech());
+        assert!(!detect(&audio, RATE, true).has_speech());
+    }
+
+    #[test]
+    fn a_short_word_right_after_the_start_cue_is_kept() {
+        // Um "sim" de 200 ms dito logo ao premir: forte e grave, não é o bip.
+        let audio = concat(&[noise(100, -70.0, 29), tone(200, 30), noise(1500, -70.0, 31)]);
+        assert!(detect(&audio, RATE, true).has_speech());
+    }
+
+    #[test]
+    fn low_band_share_separates_voice_from_the_cue() {
+        assert!(low_band_share(&tone(200, 32), RATE as usize) > 0.5);
+        assert!(low_band_share(&beep(200, 33), RATE as usize) < 0.1);
+        assert_eq!(low_band_share(&[0.0; 100], RATE as usize), 0.0);
     }
 
     #[test]
@@ -224,7 +319,7 @@ mod tests {
         // Bip no início e fala depois: o corte começa na fala, não no bip.
         let later = concat(&[
             noise(100, -70.0, 21),
-            tone(200, 22),
+            beep(200, 22),
             noise(900, -70.0, 23),
             tone(500, 24),
             noise(500, -70.0, 25),

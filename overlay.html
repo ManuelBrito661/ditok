@@ -11,16 +11,24 @@
     <!-- Dica que aparece por cima da pílula quando o rato lhe passa por cima (em repouso). -->
     <div id="tip" role="tooltip">Clica ou segura <span id="tip-keys" class="keys"></span> para ditar</div>
 
-    <!-- data-state: idle | recording | processing | done | failed | nothing-heard (vem do backend).
-         class "latched": modo alternar, mostra ✕ e ■. class "hover": o rato está por cima. -->
-    <div id="pill" data-state="idle" role="status" aria-live="polite">
+    <!-- Só as mudanças de estado são anunciadas aos leitores de ecrã. O cronómetro
+         (que muda a cada segundo) fica fora desta região, senão seria lido sem parar. -->
+    <span id="announce" class="sr-only" role="status" aria-live="polite"></span>
+
+    <!-- data-state: idle | recording | processing | done | copied | failed | nothing-heard
+         (vem do backend). class "latched": modo alternar, mostra ✕ e ■. class "hover":
+         o rato está por cima. class "slow": a processar há mais de 5 s. class "retry":
+         a falha oferece "Tentar de novo". class "busy": abanão quando o atalho é premido
+         a meio do processamento. -->
+    <div id="pill" data-state="idle">
       <button id="cancel" class="pill-button" type="button" aria-label="Cancelar o ditado">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
       </button>
       <img id="mascot" alt="" />
       <div id="bars" aria-hidden="true"></div>
       <div id="dots" aria-hidden="true"><span></span><span></span><span></span></div>
-      <span id="label"></span>
+      <span id="label" aria-hidden="true"></span>
+      <span id="retry" aria-hidden="true">Tentar de novo</span>
       <button id="stop" class="pill-button" type="button" aria-label="Parar e colar">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
       </button>

@@ -1,10 +1,14 @@
 // Barra flutuante com a mascote. Reage a eventos do backend (overlay.rs):
-// - "overlay:state": idle | recording | processing | done | failed | nothing-heard
+// - "overlay:state": idle | recording | processing | done | copied | failed | nothing-heard
+// - "overlay:failure": motivo curto da falha ("Sem rede"…) e se há "Tentar de novo";
+//   chega logo antes do estado "failed"
+// - "overlay:busy": premiste o atalho a meio do processamento (a pílula abana)
 // - "overlay:level": nível do microfone entre 0 e 1, ~20 vezes por segundo
 // - "overlay:latched": o ditado está em modo alternar (mostra ✕ e ■)
 // - "overlay:hover": o rato entrou/saiu da pílula (o Rust vigia o cursor)
 // e responde com os comandos overlay_click / overlay_cancel / overlay_hit_rect.
-// Não há polling nem temporizadores a correr em repouso: as animações são CSS.
+// Não há polling nem temporizadores a correr em repouso: as animações são CSS, e
+// o único temporizador (o "a demorar…") só existe enquanto se processa.
 
 import { listen } from "@tauri-apps/api/event";
 import parado from "../design/mascot/parado.svg?inline";
@@ -14,13 +18,31 @@ import pronto from "../design/mascot/pronto.svg?inline";
 import { api } from "./api";
 import { renderKeys } from "./format";
 
-type State = "idle" | "recording" | "processing" | "done" | "failed" | "nothing-heard";
+type State =
+  | "idle"
+  | "recording"
+  | "processing"
+  | "done"
+  | "copied"
+  | "failed"
+  | "nothing-heard";
+
+interface Failure {
+  label: string;
+  retry: boolean;
+}
+
+const IS_MAC = /Mac/i.test(navigator.userAgent);
+const PASTE_KEYS = IS_MAC ? "⌘V" : "Ctrl+V";
+/** Ao fim deste tempo a processar, a pílula diz "a demorar…". */
+const SLOW_AFTER_MS = 5000;
 
 const MASCOT: Record<State, string> = {
   idle: parado,
   recording: aOuvir,
   processing: aProcessar,
   done: pronto,
+  copied: pronto,
   failed: parado,
   "nothing-heard": parado,
 };
@@ -29,7 +51,18 @@ const LABEL: Record<State, string> = {
   recording: "0:00",
   processing: "",
   done: "Colado",
+  copied: `Copiado · ${PASTE_KEYS}`,
   failed: "Falhou",
+  "nothing-heard": "Não ouvi nada",
+};
+/** O que o leitor de ecrã anuncia em cada estado (vazio = nada a dizer). */
+const ANNOUNCE: Record<State, string> = {
+  idle: "",
+  recording: "A ouvir",
+  processing: "A transcrever",
+  done: "Texto colado",
+  copied: `Texto copiado, cola com ${PASTE_KEYS}`,
+  failed: "O ditado falhou",
   "nothing-heard": "Não ouvi nada",
 };
 const BAR_COUNT = 14;
@@ -37,6 +70,7 @@ const BAR_COUNT = 14;
 const pill = document.getElementById("pill")!;
 const mascot = document.getElementById("mascot") as HTMLImageElement;
 const label = document.getElementById("label")!;
+const announce = document.getElementById("announce")!;
 const barsEl = document.getElementById("bars")!;
 
 // As poses vêm embutidas (?inline, data URI): a troca não depende da rede, o que
@@ -58,19 +92,54 @@ const bars = Array.from({ length: BAR_COUNT }, () => {
 const history: number[] = new Array(BAR_COUNT).fill(0);
 let smoothed = 0;
 let recordingSince = 0;
+/** A última falha recebida; usada quando o estado passa a "failed". */
+let failure: Failure | null = null;
+let slowTimer: number | undefined;
 
 function setState(state: State) {
   pill.dataset.state = state;
-  pill.classList.remove("latched"); // o backend volta a avisar se for o caso
+  // O backend volta a avisar se for o caso.
+  pill.classList.remove("latched", "slow", "retry", "busy");
+  window.clearTimeout(slowTimer);
   mascot.src = MASCOT[state];
   label.textContent = LABEL[state];
+  let spoken = ANNOUNCE[state];
+
   if (state === "recording") {
     recordingSince = performance.now();
     history.fill(0);
     smoothed = 0;
     renderBars();
+  } else if (state === "processing") {
+    slowTimer = window.setTimeout(() => {
+      if (pill.dataset.state !== "processing") return;
+      pill.classList.add("slow");
+      label.textContent = "a demorar…";
+      announce.textContent = "Ainda a transcrever";
+    }, SLOW_AFTER_MS);
+  } else if (state === "failed" && failure) {
+    label.textContent = failure.label;
+    pill.classList.toggle("retry", failure.retry);
+    spoken = `O ditado falhou: ${failure.label}`;
+    if (failure.retry) spoken += ". Clica na barra para tentar de novo.";
   }
+  if (state !== "failed") failure = null;
+  announce.textContent = spoken;
 }
+
+function onFailure(f: Failure) {
+  failure = f;
+  // Duas falhas seguidas: o estado já é "failed", por isso atualiza já.
+  if (pill.dataset.state === "failed") setState("failed");
+}
+
+function onBusy() {
+  // Reinicia a animação mesmo que ainda esteja a meio de um abanão anterior.
+  pill.classList.remove("busy");
+  void pill.offsetWidth; // força o browser a "ver" a remoção antes de voltar a pôr
+  pill.classList.add("busy");
+}
+pill.addEventListener("animationend", () => pill.classList.remove("busy"));
 
 function renderBars() {
   bars.forEach((bar, i) => {
@@ -118,9 +187,13 @@ async function onHover(inside: boolean) {
 }
 
 pill.addEventListener("click", (e) => {
-  // Os botões tratam de si; aqui só o clique na pílula em repouso.
+  // Os botões tratam de si; aqui só o clique na pílula em repouso ou numa falha
+  // que oferece "Tentar de novo" (o backend decide qual dos dois é).
   if ((e.target as Element).closest(".pill-button")) return;
-  if (pill.dataset.state === "idle") void api.overlayClick();
+  const state = pill.dataset.state;
+  if (state === "idle" || (state === "failed" && pill.classList.contains("retry"))) {
+    void api.overlayClick();
+  }
 });
 document.getElementById("stop")!.addEventListener("click", () => void api.overlayClick());
 document.getElementById("cancel")!.addEventListener("click", () => void api.overlayCancel());
@@ -128,6 +201,8 @@ document.getElementById("cancel")!.addEventListener("click", () => void api.over
 setState("idle");
 reportHitRect();
 void listen<State>("overlay:state", (e) => setState(e.payload));
+void listen<Failure>("overlay:failure", (e) => onFailure(e.payload));
+void listen("overlay:busy", () => onBusy());
 void listen<number>("overlay:level", (e) => onLevel(e.payload));
 void listen("overlay:latched", () => pill.classList.add("latched"));
 void listen<boolean>("overlay:hover", (e) => void onHover(e.payload));

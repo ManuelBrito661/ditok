@@ -494,6 +494,7 @@ fn is_fatal(e: &SttError) -> bool {
     matches!(
         e,
         SttError::Unauthorized(_)
+            | SttError::Forbidden(_)
             | SttError::InsufficientCredits(_)
             | SttError::ModelNotFound { .. }
     )

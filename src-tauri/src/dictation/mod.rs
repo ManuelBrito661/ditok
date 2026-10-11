@@ -7,6 +7,7 @@
 //! uma mensagem. O `rx.recv().await` adormece a tarefa até chegar uma mensagem:
 //! não há polling.
 
+pub mod failure;
 pub mod machine;
 pub mod pipeline;
 
@@ -15,21 +16,28 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tauri::async_runtime::JoinHandle;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::{
-    audio::Recorder,
-    hotkey,
+    audio::{Recorder, Recording},
+    focus, hotkey,
     sound::{Cue, Sounds},
     state::{AppState, MISSING_KEY},
     stt::{SttProvider, openrouter::OpenRouter},
     tray::{Tray, TrayState},
 };
+use failure::FailReason;
 use machine::{Action, Input, Machine, Phase};
-use pipeline::Outcome;
+use pipeline::{Commit, Outcome};
 
-/// Quanto tempo o estado "pronto" (ou "falhou") fica visível.
-const DONE_ICON_FOR: Duration = Duration::from_millis(1200);
+/// Quanto tempo cada resultado fica visível antes de voltar a "parado". Uma falha
+/// fica mais tempo: tem um motivo para ler e, às vezes, um "Tentar de novo".
+const DONE_FOR: Duration = Duration::from_millis(1200);
+const COPIED_FOR: Duration = Duration::from_millis(3000);
+const FAILED_FOR: Duration = Duration::from_millis(4000);
+/// Intervalo mínimo entre dois avisos de "ocupado" (abanão + som).
+const BUSY_EVERY: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum DictationEvent {
@@ -38,12 +46,23 @@ pub enum DictationEvent {
         at: Instant,
     },
     Cancel,
-    /// Clique na barra flutuante (começa ou termina um ditado em modo alternar).
+    /// Clique na barra flutuante: começa ou termina um ditado em modo alternar,
+    /// ou, numa falha com gravação guardada, tenta de novo.
     Click,
+    /// "Tentar de novo" no menu do tray.
+    Retry,
     /// O microfone não abriu ou desligou-se a meio.
     AudioFailed(String),
-    ProcessingFinished(Outcome),
-    DoneIconElapsed,
+    /// `job`: qual processamento acabou. Um processamento cancelado pode ainda
+    /// chegar a enviar o seu fim; o número permite ignorá-lo.
+    ProcessingFinished {
+        job: u64,
+        outcome: Outcome,
+    },
+    /// O resultado número `shown` já esteve visível o suficiente.
+    ResultElapsed {
+        shown: u64,
+    },
     /// A chave ou o modo de envio mudaram nas definições: o cliente do OpenRouter
     /// tem de ser recriado no próximo ditado.
     ProviderChanged,
@@ -67,6 +86,42 @@ impl Deps {
     }
 }
 
+/// O processamento em curso: o número que o identifica e a "pega" da tarefa,
+/// que permite abortá-la.
+struct Job {
+    id: u64,
+    handle: JoinHandle<()>,
+    /// Decide quem ganha entre cancelar e colar (ver `pipeline::Commit`).
+    commit: Commit,
+    /// É um "Tentar de novo"?
+    is_retry: bool,
+}
+
+/// Tudo o que o orquestrador guarda entre eventos, além da máquina de estados.
+/// Como só a tarefa do orquestrador lhe toca, os métodos recebem `&mut self`
+/// sem precisar de `Mutex`.
+struct Orchestrator {
+    deps: Deps,
+    tx: UnboundedSender<DictationEvent>,
+    machine: Machine,
+    /// Criado já se a chave existir; senão, volta a tentar-se a cada ditado (assim
+    /// podes guardar a chave sem reiniciar a app).
+    openrouter: Option<Arc<OpenRouter>>,
+    /// Janela em primeiro plano quando a gravação começou: é lá que se cola.
+    target: Option<focus::Window>,
+    job: Option<Job>,
+    next_job: u64,
+    /// A última gravação cuja transcrição falhou, para o "Tentar de novo". Fica
+    /// em memória (não em disco): o áudio é privado e só faz falta nesta sessão.
+    failed: Option<Recording>,
+    /// A falha que está à vista na barra oferece "Tentar de novo"?
+    retry_offered: bool,
+    /// Cada resultado mostrado recebe um número; o temporizador de um resultado
+    /// antigo não apaga um mais recente.
+    shown: u64,
+    last_busy: Option<Instant>,
+}
+
 pub fn spawn(
     deps: Deps,
     tx: UnboundedSender<DictationEvent>,
@@ -77,127 +132,357 @@ pub fn spawn(
 }
 
 async fn run(
-    mut deps: Deps,
+    deps: Deps,
     tx: UnboundedSender<DictationEvent>,
     mut rx: UnboundedReceiver<DictationEvent>,
 ) {
-    let mut machine = Machine::default();
-    let app = deps.state.app.clone();
-    // Criado já se a chave existir; senão, volta a tentar-se a cada ditado (assim
-    // podes guardar a chave sem reiniciar a app).
-    let mut openrouter: Option<Arc<OpenRouter>> = load_openrouter(&deps.state);
-
+    let openrouter = load_openrouter(&deps.state);
+    let mut o = Orchestrator {
+        deps,
+        tx,
+        machine: Machine::default(),
+        openrouter,
+        target: None,
+        job: None,
+        next_job: 0,
+        failed: None,
+        retry_offered: false,
+        shown: 0,
+        last_busy: None,
+    };
     while let Some(event) = rx.recv().await {
+        o.handle(event);
+    }
+    tracing::debug!("orquestrador terminado");
+}
+
+impl Orchestrator {
+    fn handle(&mut self, event: DictationEvent) {
+        let app = self.deps.state.app.clone();
         let (input, at) = match event {
             DictationEvent::Hotkey { pressed: true, at } => (Input::Pressed, at),
             DictationEvent::Hotkey { pressed: false, at } => (Input::Released, at),
+            // A processar, o cancelamento só vale se a colagem ainda não começou. A
+            // decisão é atómica (`try_cancel`) e vem ANTES da máquina de estados,
+            // para a máquina nunca ficar "parada" com um ditado ainda a colar.
+            DictationEvent::Cancel
+                if self.machine.phase() == Phase::Processing
+                    && self.job.as_ref().is_some_and(|j| !j.commit.try_cancel()) =>
+            {
+                tracing::info!("já a colar (ou acabado); cancelamento ignorado");
+                return;
+            }
             DictationEvent::Cancel => (Input::Cancel, Instant::now()),
+            // Clicar numa falha que oferece "Tentar de novo" tenta de novo; nos
+            // outros casos é o clique normal (começar/terminar).
+            DictationEvent::Click
+                if self.deps.tray.state() == TrayState::Failed
+                    && self.retry_offered
+                    && self.failed.is_some() =>
+            {
+                (Input::Retry, Instant::now())
+            }
             DictationEvent::Click => (Input::Click, Instant::now()),
-            DictationEvent::AudioFailed(reason) => {
-                tracing::error!(%reason, "falha de áudio");
-                // Para a máquina é igual a cancelar; depois mostramos o motivo.
-                if machine.handle(Input::Cancel, Instant::now()).is_some() {
-                    hotkey::set_cancel_enabled(&app, false);
-                    deps.recorder.cancel();
+            DictationEvent::Retry => {
+                if self.failed.is_none() {
+                    tracing::debug!("tentar de novo pedido sem gravação guardada");
+                    return;
                 }
-                deps.tray.set(TrayState::Idle);
-                deps.state.notify(&reason);
-                continue;
+                (Input::Retry, Instant::now())
+            }
+            DictationEvent::AudioFailed(reason) => {
+                self.audio_failed(&reason);
+                return;
             }
             DictationEvent::ProviderChanged => {
                 // Um ditado em curso já tem o seu `Arc` e termina com o cliente antigo;
                 // o próximo cria um novo.
-                openrouter = None;
-                continue;
+                self.openrouter = None;
+                return;
             }
-            DictationEvent::ProcessingFinished(outcome) => {
-                let before = machine.phase();
-                machine.handle(Input::ProcessingFinished, Instant::now());
-                if before == Phase::Processing {
-                    finish_processing(&mut deps.tray, &tx, outcome);
+            DictationEvent::ProcessingFinished { job, outcome } => {
+                // Um processamento cancelado (ou de um ditado anterior) já não conta.
+                if self.job.as_ref().map(|j| j.id) != Some(job) {
+                    tracing::debug!(job, "fim de um processamento cancelado; ignorado");
+                    return;
                 }
-                continue;
+                let is_retry = self.job.take().is_some_and(|j| j.is_retry);
+                self.machine
+                    .handle(Input::ProcessingFinished, Instant::now());
+                hotkey::set_cancel_enabled(&app, false);
+                self.finish_processing(outcome, is_retry);
+                return;
             }
-            DictationEvent::DoneIconElapsed => {
-                // Só volta a "parado" se entretanto não começou outro ditado.
-                if matches!(
-                    deps.tray.state(),
-                    TrayState::Done | TrayState::Failed | TrayState::NothingHeard
-                ) {
-                    deps.tray.set(TrayState::Idle);
+            DictationEvent::ResultElapsed { shown } => {
+                // Só volta a "parado" se entretanto não aconteceu mais nada.
+                if shown == self.shown
+                    && matches!(
+                        self.deps.tray.state(),
+                        TrayState::Done
+                            | TrayState::Copied
+                            | TrayState::Failed
+                            | TrayState::NothingHeard
+                    )
+                {
+                    self.retry_offered = false;
+                    self.deps.tray.set(TrayState::Idle);
                 }
-                continue;
+                return;
             }
         };
 
-        let before = machine.phase();
-        match machine.handle(input, at) {
-            Some(Action::StartRecording) => {
-                if openrouter.is_none() {
-                    openrouter = load_openrouter(&deps.state);
-                }
-                let Some(provider) = &openrouter else {
-                    // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
-                    machine.handle(Input::Cancel, at);
-                    deps.state.notify(MISSING_KEY);
-                    continue;
-                };
-                // Primeiro o microfone (é o que tem latência), depois o som, a
-                // ligação HTTP (corre enquanto falas) e o resto.
-                let sounds = deps.state.config().sounds;
-                deps.recorder.start(at, sounds);
-                deps.cue(Cue::Start);
-                // A barra segue o monitor onde está o cursor (como no Wispr Flow).
-                crate::overlay::reposition_for(&app);
-                let provider = Arc::clone(provider);
-                tauri::async_runtime::spawn(async move { provider.prewarm().await });
-                deps.tray.set(TrayState::Recording);
-                hotkey::set_cancel_enabled(&app, true);
-                tracing::info!("a gravar");
-            }
-            Some(Action::StopAndProcess) => {
-                // `stop()` envia já o pedido à thread de áudio; o future que devolve
-                // só entrega a gravação quando estiver pronta.
-                let recording = deps.recorder.stop();
-                deps.cue(Cue::Stop);
-                hotkey::set_cancel_enabled(&app, false);
-                deps.tray.set(TrayState::Processing);
-
-                let Some(provider) = openrouter.clone() else {
-                    // Só acontece se a chave mudou a meio da gravação; o compilador
-                    // obriga-nos a decidir o que fazer.
-                    deps.recorder.cancel();
-                    let _ = tx.send(DictationEvent::ProcessingFinished(Outcome::Failed));
-                    continue;
-                };
-                // O processamento corre numa tarefa à parte para o orquestrador
-                // continuar a responder (ex.: ignorar premires enquanto processa).
-                let state = Arc::clone(&deps.state);
-                let tx = tx.clone();
-                tauri::async_runtime::spawn(async move {
-                    let outcome = pipeline::process(state, provider, recording, at).await;
-                    let _ = tx.send(DictationEvent::ProcessingFinished(outcome));
-                });
-            }
+        let before = self.machine.phase();
+        match self.machine.handle(input, at) {
+            Some(Action::StartRecording) => self.start_recording(at),
+            Some(Action::StopAndProcess) => self.stop_and_process(at),
+            Some(Action::Retry) => self.retry(),
             Some(Action::CancelRecording) => {
-                deps.recorder.cancel();
-                deps.cue(Cue::Cancel);
+                self.deps.recorder.cancel();
+                self.deps.cue(Cue::Cancel);
                 hotkey::set_cancel_enabled(&app, false);
-                deps.tray.set(TrayState::Idle);
+                self.deps.tray.set(TrayState::Idle);
                 tracing::info!("gravação cancelada");
             }
-            None if machine.phase() == Phase::Latched && before != Phase::Latched => {
+            Some(Action::CancelProcessing) => {
+                // `abort` pára a tarefa no próximo `.await`: o pedido HTTP é largado
+                // e nada é colado. Só chegamos aqui se `try_cancel` ganhou, ou seja,
+                // a colagem ainda não tinha começado (ver `pipeline::Commit`).
+                if let Some(job) = self.job.take() {
+                    job.handle.abort();
+                }
+                self.deps.cue(Cue::Cancel);
+                hotkey::set_cancel_enabled(&app, false);
+                self.deps.tray.set(TrayState::Idle);
+                tracing::info!("processamento cancelado; nada foi colado");
+            }
+            Some(Action::Busy) => self.busy(),
+            None if self.machine.phase() == Phase::Latched && before != Phase::Latched => {
                 tracing::info!("modo alternar: prime o atalho outra vez para terminar");
             }
-            None => tracing::trace!(?input, phase = ?machine.phase(), "evento ignorado"),
+            None => tracing::trace!(?input, phase = ?self.machine.phase(), "evento ignorado"),
         }
         // Em modo alternar, a barra mostra os botões ✕ (cancelar) e ■ (parar). Vem
         // depois de `tray.set` para chegar à barra a seguir ao estado "a gravar".
-        if machine.phase() == Phase::Latched && before != Phase::Latched {
+        if self.machine.phase() == Phase::Latched && before != Phase::Latched {
             crate::overlay::emit_latched(&app);
         }
     }
-    tracing::debug!("orquestrador terminado");
+
+    fn start_recording(&mut self, at: Instant) {
+        let app = self.deps.state.app.clone();
+        if self.openrouter.is_none() {
+            self.openrouter = load_openrouter(&self.deps.state);
+        }
+        let Some(provider) = &self.openrouter else {
+            // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
+            self.machine.handle(Input::Cancel, at);
+            self.deps.state.notify(MISSING_KEY);
+            self.show_failure(FailReason::NoKey, false);
+            return;
+        };
+        // A janela onde estás a escrever, antes de o Ditok fazer o que quer que seja.
+        self.target = focus::foreground();
+        // Primeiro o microfone (é o que tem latência), depois o som, a
+        // ligação HTTP (corre enquanto falas) e o resto.
+        let sounds = self.deps.state.config().sounds;
+        self.deps.recorder.start(at, sounds);
+        self.deps.cue(Cue::Start);
+        // A barra segue o monitor onde está o cursor (como no Wispr Flow).
+        crate::overlay::reposition_for(&app);
+        let provider = Arc::clone(provider);
+        tauri::async_runtime::spawn(async move { provider.prewarm().await });
+        self.retry_offered = false;
+        self.deps.tray.set(TrayState::Recording);
+        hotkey::set_cancel_enabled(&app, true);
+        tracing::info!("a gravar");
+    }
+
+    fn stop_and_process(&mut self, released_at: Instant) {
+        // `stop()` envia já o pedido à thread de áudio; o future que devolve
+        // só entrega a gravação quando estiver pronta.
+        let recording = self.deps.recorder.stop();
+        self.deps.cue(Cue::Stop);
+        // O Esc continua registado: também cancela durante o processamento.
+        self.deps.tray.set(TrayState::Processing);
+
+        let Some(provider) = self.openrouter.clone() else {
+            // Só acontece se a chave mudou a meio da gravação; o compilador
+            // obriga-nos a decidir o que fazer.
+            self.deps.recorder.cancel();
+            self.spawn_job(Commit::default(), false, async {
+                Outcome::Failed {
+                    reason: FailReason::NoKey,
+                    retry: None,
+                }
+            });
+            return;
+        };
+        let target = self.target;
+        let state = Arc::clone(&self.deps.state);
+        let commit = Commit::default();
+        self.spawn_job(commit.clone(), false, async move {
+            pipeline::process(state, provider, recording, released_at, target, commit).await
+        });
+    }
+
+    /// Volta a enviar a gravação falhada. A janela de destino é a que está em
+    /// primeiro plano agora (o ditado original já foi há algum tempo).
+    fn retry(&mut self) {
+        let app = self.deps.state.app.clone();
+        if self.openrouter.is_none() {
+            self.openrouter = load_openrouter(&self.deps.state);
+        }
+        // `clone` barato (o WAV é `Bytes`): se cancelares, a gravação continua guardada.
+        let (Some(provider), Some(rec)) = (self.openrouter.clone(), self.failed.clone()) else {
+            self.machine.handle(Input::Cancel, Instant::now());
+            if self.openrouter.is_none() {
+                self.deps.state.notify(MISSING_KEY);
+                self.show_failure(FailReason::NoKey, false);
+            }
+            return;
+        };
+        self.retry_offered = false;
+        self.deps.tray.set(TrayState::Processing);
+        hotkey::set_cancel_enabled(&app, true);
+        let target = focus::foreground_for_retry();
+        let state = Arc::clone(&self.deps.state);
+        let commit = Commit::default();
+        self.spawn_job(commit.clone(), true, async move {
+            pipeline::retry(state, provider, rec, target, commit).await
+        });
+    }
+
+    /// O processamento corre numa tarefa à parte para o orquestrador continuar a
+    /// responder (ao Esc, ao "ocupado"…). Guardamos a "pega" para a podermos abortar.
+    fn spawn_job(
+        &mut self,
+        commit: Commit,
+        is_retry: bool,
+        work: impl Future<Output = Outcome> + Send + 'static,
+    ) {
+        self.next_job += 1;
+        let id = self.next_job;
+        let tx = self.tx.clone();
+        let finished = commit.clone();
+        let handle = tauri::async_runtime::spawn(async move {
+            let outcome = work.await;
+            // Acabar também "compromete": um Esc que chegue a seguir já não
+            // finge cancelar um ditado que terminou. Se foi cancelado, ninguém espera
+            // por este resultado.
+            if finished.try_commit() {
+                let _ = tx.send(DictationEvent::ProcessingFinished { job: id, outcome });
+            }
+        });
+        self.job = Some(Job {
+            id,
+            handle,
+            commit,
+            is_retry,
+        });
+    }
+
+    fn finish_processing(&mut self, outcome: Outcome, is_retry: bool) {
+        match outcome {
+            Outcome::Pasted => {
+                // Um ditado novo correu bem: a gravação falhada antiga já não interessa.
+                self.set_failed(None);
+                self.show_result(TrayState::Done, DONE_FOR);
+            }
+            Outcome::Copied => {
+                self.set_failed(None);
+                self.show_result(TrayState::Copied, COPIED_FOR);
+            }
+            // Sem isto, um ditado sem voz acabava sem dizer nada e parecia avariado.
+            Outcome::Nothing => {
+                // Tentar de novo e o modelo não ouviu nada: repetir não muda isso.
+                if is_retry {
+                    self.set_failed(None);
+                }
+                self.show_result(TrayState::NothingHeard, DONE_FOR);
+            }
+            Outcome::Failed { reason, retry } => {
+                let can_retry = retry.is_some();
+                // Uma falha sem gravação (ex.: microfone) não apaga a anterior.
+                if can_retry {
+                    self.set_failed(retry);
+                }
+                self.show_failure(reason, can_retry);
+            }
+        }
+    }
+
+    fn set_failed(&mut self, rec: Option<Recording>) {
+        self.deps.tray.set_retry_available(rec.is_some());
+        self.failed = rec;
+    }
+
+    fn show_failure(&mut self, reason: FailReason, retry: bool) {
+        tracing::info!(?reason, retry, "ditado falhou");
+        self.retry_offered = retry;
+        self.deps.cue(Cue::Error);
+        self.deps.tray.fail(reason, retry);
+        self.schedule_reset(FAILED_FOR);
+    }
+
+    /// O resultado fica visível um instante e depois volta a "parado".
+    fn show_result(&mut self, state: TrayState, visible_for: Duration) {
+        self.retry_offered = false;
+        self.deps.tray.set(state);
+        self.schedule_reset(visible_for);
+    }
+
+    fn schedule_reset(&mut self, after: Duration) {
+        self.shown += 1;
+        let shown = self.shown;
+        let tx = self.tx.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(after).await;
+            let _ = tx.send(DictationEvent::ResultElapsed { shown });
+        });
+    }
+
+    /// Premiste o atalho a meio do processamento: a pílula abana e ouve-se um som
+    /// curto, para não parecer que o atalho deixou de funcionar.
+    fn busy(&mut self) {
+        let now = Instant::now();
+        if self
+            .last_busy
+            .is_some_and(|t| now.saturating_duration_since(t) < BUSY_EVERY)
+        {
+            return;
+        }
+        self.last_busy = Some(now);
+        tracing::info!("atalho premido a meio do processamento; ainda ocupado");
+        crate::overlay::emit_busy(&self.deps.state.app);
+        self.deps.cue(Cue::Busy);
+    }
+
+    fn audio_failed(&mut self, reason: &str) {
+        let app = self.deps.state.app.clone();
+        match self.machine.phase() {
+            Phase::Holding { .. } | Phase::Latched => {
+                tracing::error!(%reason, "falha de áudio durante a gravação");
+                // Para a máquina é igual a cancelar; a barra mostra a falha em vez
+                // de continuar a fingir que grava.
+                self.machine.handle(Input::Cancel, Instant::now());
+                self.deps.recorder.cancel();
+                hotkey::set_cancel_enabled(&app, false);
+                self.deps.state.notify(reason);
+                self.show_failure(FailReason::NoMicrophone, false);
+            }
+            Phase::Processing => {
+                // Largaste a tecla antes de o microfone falhar: o processamento vai
+                // receber "não havia gravação" e mostra a falha. Aqui só se explica.
+                tracing::error!(%reason, "falha de áudio; o processamento mostra o erro");
+                self.deps.state.notify(reason);
+            }
+            Phase::Idle => {
+                // Nada a gravar (ex.: um erro atrasado de uma gravação já cancelada):
+                // não mexemos na barra nem no tray.
+                tracing::warn!(%reason, "falha de áudio sem gravação em curso");
+            }
+        }
+    }
 }
 
 fn load_openrouter(state: &AppState) -> Option<Arc<OpenRouter>> {
@@ -215,20 +500,4 @@ fn load_openrouter(state: &AppState) -> Option<Arc<OpenRouter>> {
             None
         }
     }
-}
-
-fn finish_processing(tray: &mut Tray, tx: &UnboundedSender<DictationEvent>, outcome: Outcome) {
-    let shown = match outcome {
-        Outcome::Pasted => TrayState::Done,
-        Outcome::Failed => TrayState::Failed,
-        // Sem isto, um ditado sem voz acabava sem dizer nada e parecia avariado.
-        Outcome::Nothing => TrayState::NothingHeard,
-    };
-    // O resultado fica visível um instante e depois volta a "parado".
-    tray.set(shown);
-    let tx = tx.clone();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(DONE_ICON_FOR).await;
-        let _ = tx.send(DictationEvent::DoneIconElapsed);
-    });
 }

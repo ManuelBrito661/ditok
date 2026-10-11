@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod dictation;
 mod files;
+mod focus;
 mod history;
 mod hotkey;
 mod logging;
@@ -59,7 +60,7 @@ pub fn run() {
             let config = config::Config::load_or_create(&config_dir);
             tracing::info!(path = %config::Config::path(&config_dir).display(), ?config, "configuração");
 
-            let tray = tray::Tray::new(app.handle())?;
+            let tray = tray::Tray::new(app.handle(), tx.clone())?;
             if let Err(e) = hotkey::register_dictation(app.handle(), &config.shortcut) {
                 tracing::error!(error = %e, "sem atalho de ditado");
                 tray.set_tooltip("Ditok: atalho indisponível (ver log)");

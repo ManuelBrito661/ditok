@@ -1,19 +1,24 @@
 //! O caminho crítico de um ditado, depois de largar a tecla:
 //! WAV pronto (sem voz, pára aqui) → pedido STT → comandos, expansões e dicionário →
-//! (limpeza com LLM, se ligada) → colar →
+//! (limpeza com LLM, se ligada) → colar, se a janela em foco ainda for a do início
+//! (senão fica só no clipboard) →
 //! (fora do caminho crítico) métricas, histórico, WAV de teste e, se a opção
 //! "deixar no clipboard" estiver desligada, reposição do clipboard.
 
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use tauri::Emitter;
 
+use super::failure::FailReason;
 use crate::{
     audio::{AudioError, Recording},
-    cleanup,
+    cleanup, focus,
     history::HistoryEntry,
     metrics::{self, DictationMetrics},
     paste,
@@ -30,36 +35,146 @@ const MIN_AUDIO: Duration = Duration::from_millis(250);
 pub const EVENT_DICTATION_RECORDED: &str = "dictation-recorded";
 
 /// Como acabou um ditado; decide o que a barra e o tray mostram a seguir.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// (Sem `Copy`/`PartialEq`: `Failed` pode levar a gravação consigo.)
+#[derive(Debug)]
 pub enum Outcome {
     /// Texto colado na app em foco.
     Pasted,
+    /// Não se colou (a janela em foco mudou, ou o sistema não deixou simular o
+    /// Ctrl+V), mas o texto ficou no clipboard.
+    Copied,
     /// Nada para colar: toque acidental ou silêncio. Não é um erro.
     Nothing,
     /// A gravação, a transcrição ou a colagem falharam (há uma notificação).
-    Failed,
+    Failed {
+        reason: FailReason,
+        /// A gravação, quando a falha foi depois de a termos (ex.: sem rede):
+        /// fica guardada para o "Tentar de novo".
+        retry: Option<Recording>,
+    },
+}
+
+impl Outcome {
+    fn failed(reason: FailReason) -> Self {
+        Self::Failed {
+            reason,
+            retry: None,
+        }
+    }
+}
+
+/// Partilhado entre o processamento e o orquestrador para decidir, sem corridas,
+/// quem ganha: o cancelamento (Esc/✕) ou a colagem.
+///
+/// Porquê: abortar a tarefa assíncrona não pára uma thread de `spawn_blocking`
+/// que já esteja a colar. Por isso, antes de colar, o processamento
+/// "compromete-se"; a partir daí o cancelamento é recusado e o ditado acaba
+/// normalmente (com histórico, métricas e reposição do clipboard).
+///
+/// Um único `AtomicU8` com `compare_exchange` garante que só uma das duas
+/// transições (a correr → comprometido, ou a correr → cancelado) acontece, mesmo
+/// que as duas threads tentem ao mesmo tempo. `Clone` só copia o `Arc`.
+#[derive(Debug, Clone, Default)]
+pub struct Commit(Arc<AtomicU8>);
+
+const RUNNING: u8 = 0;
+const COMMITTED: u8 = 1;
+const CANCELLED: u8 = 2;
+
+impl Commit {
+    /// Chamado pelo processamento antes de colar (e ao terminar). `false` se já
+    /// foi cancelado: nesse caso não se cola nada.
+    pub fn try_commit(&self) -> bool {
+        match self
+            .0
+            .compare_exchange(RUNNING, COMMITTED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(current) => current == COMMITTED,
+        }
+    }
+
+    /// Chamado pelo orquestrador no Esc/✕. `false` se já é tarde (está a colar
+    /// ou já acabou): o cancelamento é ignorado.
+    pub fn try_cancel(&self) -> bool {
+        self.0
+            .compare_exchange(RUNNING, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+}
+
+/// Se o ditado for cancelado depois de a transcrição já ter sido paga (ex.: a
+/// meio da limpeza com IA), a tarefa é abortada e o código depois do `.await`
+/// nunca corre. Este guarda corre no `Drop` (que acontece mesmo num abort) e
+/// regista as métricas do STT, para o custo não se perder. No fim normal é
+/// "desarmado" e as métricas completas são registadas uma única vez.
+struct SttMetricsGuard {
+    state: Arc<AppState>,
+    budget: Option<f64>,
+    metrics: Option<DictationMetrics>,
+}
+
+impl SttMetricsGuard {
+    fn disarm(&mut self) {
+        self.metrics = None;
+    }
+}
+
+impl Drop for SttMetricsGuard {
+    fn drop(&mut self) {
+        let Some(mut m) = self.metrics.take() else {
+            return;
+        };
+        m.error = Some("cancelado depois da transcrição".into());
+        let state = Arc::clone(&self.state);
+        let budget = self.budget;
+        tracing::info!("ditado cancelado depois da transcrição; custo registado");
+        tauri::async_runtime::spawn_blocking(move || {
+            record_metrics(&state, &m, budget);
+            let _ = state.app.emit(EVENT_DICTATION_RECORDED, ());
+        });
+    }
+}
+
+/// Bloqueante. Guarda as métricas e avisa se o orçamento foi ultrapassado.
+fn record_metrics(state: &AppState, m: &DictationMetrics, budget: Option<f64>) {
+    match state.metrics.record(m, budget) {
+        Ok(Some(alert)) => {
+            tracing::info!(?alert, "aviso de orçamento");
+            state.notify(&alert.message());
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "não foi possível guardar as métricas"),
+    }
 }
 
 /// Processa um ditado do princípio ao fim.
 ///
 /// Recebe `Arc`s por valor: a função é dona de uma referência a cada um e pode
 /// passá-la às tarefas de fundo que continuam depois de ela terminar.
+///
+/// `target`: a janela em primeiro plano quando o ditado começou. Só se cola se
+/// ainda for ela (ver `focus.rs`).
 pub async fn process(
     state: Arc<AppState>,
     openrouter: Arc<OpenRouter>,
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
+    target: Option<focus::Window>,
+    commit: Commit,
 ) -> Outcome {
-    // Uma "fotografia" da configuração: o ditado usa-a do princípio ao fim.
-    let config = state.config();
-    let rules = state.text_rules();
-
     let rec = match recording.await {
         Ok(rec) => rec,
+        // O microfone nem abriu: o motivo já foi notificado quando falhou
+        // (`DictationEvent::AudioFailed`). Repetir a notificação só confundia.
+        Err(AudioError::NotRecording) => {
+            tracing::warn!("não havia gravação (o microfone não abriu)");
+            return Outcome::failed(FailReason::NoMicrophone);
+        }
         Err(e) => {
             tracing::error!(error = %e, "gravação falhou");
             state.notify(&e.to_string());
-            return Outcome::Failed;
+            return Outcome::failed(FailReason::from_audio(&e));
         }
     };
     let release_to_wav = released_at.elapsed();
@@ -81,11 +196,61 @@ pub async fn process(
             "sem voz na gravação; não enviada"
         );
         // O WAV de diagnóstico é o que permite perceber um falso negativo.
-        if config.save_last_recording {
+        if state.config().save_last_recording {
             tauri::async_runtime::spawn_blocking(move || save_debug_wav(&state.debug_dir(), &rec));
         }
         return Outcome::Nothing;
     }
+    transcribe_and_paste(
+        state,
+        openrouter,
+        rec,
+        released_at,
+        release_to_wav,
+        target,
+        commit,
+    )
+    .await
+}
+
+/// "Tentar de novo": volta a enviar uma gravação cuja transcrição falhou. As
+/// métricas contam a partir de agora (o tempo de gravação já passou há muito).
+pub async fn retry(
+    state: Arc<AppState>,
+    openrouter: Arc<OpenRouter>,
+    rec: Recording,
+    target: Option<focus::Window>,
+    commit: Commit,
+) -> Outcome {
+    tracing::info!(
+        audio_ms = ms(rec.audio),
+        "a tentar de novo a última gravação"
+    );
+    transcribe_and_paste(
+        state,
+        openrouter,
+        rec,
+        Instant::now(),
+        Duration::ZERO,
+        target,
+        commit,
+    )
+    .await
+}
+
+/// Do pedido STT à colagem, para uma gravação que já sabemos ter voz.
+async fn transcribe_and_paste(
+    state: Arc<AppState>,
+    openrouter: Arc<OpenRouter>,
+    rec: Recording,
+    released_at: Instant,
+    release_to_wav: Duration,
+    target: Option<focus::Window>,
+    commit: Commit,
+) -> Outcome {
+    // Uma "fotografia" da configuração: o ditado usa-a do princípio ao fim.
+    let config = state.config();
+    let rules = state.text_rules();
 
     // O pipeline fala com o STT através do trait; o tipo concreto só é preciso
     // para a limpeza, que é uma funcionalidade específica do OpenRouter.
@@ -116,19 +281,32 @@ pub async fn process(
     };
     let mut history_entry = None;
     let mut applied = Applied::default();
+    let mut stt_guard: Option<SttMetricsGuard> = None;
 
     let outcome = match stt.transcribe(rec.wav.clone(), &req).await {
         Err(e) => {
             tracing::error!(error = %e, model = %config.stt_model, "transcrição falhou");
             state.notify(&format!("Transcrição falhou: {e}"));
             m.error = Some(e.to_string());
-            Outcome::Failed
+            Outcome::Failed {
+                reason: FailReason::from_stt(&e),
+                // Só para erros que podem correr bem à segunda. `clone` barato (o
+                // WAV é `Bytes`): o original ainda vai para o WAV de diagnóstico.
+                retry: FailReason::retryable(&e).then(|| rec.clone()),
+            }
         }
         Ok(t) => {
             m.stt_ms = Some(ms(t.elapsed));
             m.transport = Some(t.transport);
             m.cost_usd = t.usage.cost;
             m.generation_id = t.generation_id;
+            // A partir daqui a transcrição já foi paga: se o ditado for cancelado,
+            // o guarda regista pelo menos isto.
+            stt_guard = Some(SttMetricsGuard {
+                state: Arc::clone(&state),
+                budget: config.monthly_budget_usd,
+                metrics: Some(m.clone()),
+            });
             let raw = t.text.trim().to_owned();
 
             if raw.is_empty() {
@@ -155,9 +333,22 @@ pub async fn process(
                 };
                 let text = cleaned.unwrap_or(local.text);
                 m.chars = text.chars().count();
+                // Ponto sem retorno: daqui em diante o Esc já não cancela (a thread
+                // de colagem não se pode parar a meio). Se já foi cancelado, pára aqui.
+                if !commit.try_commit() {
+                    tracing::info!("cancelado antes de colar; nada foi colado");
+                    return Outcome::Nothing;
+                }
                 let restore_clipboard = !config.keep_in_clipboard;
-                let outcome =
-                    paste_text(&state, text.clone(), released_at, restore_clipboard, &mut m).await;
+                let outcome = paste_text(
+                    &state,
+                    text.clone(),
+                    released_at,
+                    restore_clipboard,
+                    target,
+                    &mut m,
+                )
+                .await;
                 // Também quando a colagem falha: é aí que o histórico mais faz falta.
                 if config.history_enabled {
                     history_entry = Some(HistoryEntry {
@@ -167,6 +358,7 @@ pub async fn process(
                         model: config.stt_model.clone(),
                         audio_ms: m.audio_ms,
                         total_ms: m.total_ms,
+                        pasted: matches!(outcome, Outcome::Pasted),
                     });
                 }
                 outcome
@@ -193,16 +385,13 @@ pub async fn process(
         "ditado"
     );
 
+    // As métricas completas vão já a seguir: o guarda já não faz falta.
+    if let Some(guard) = &mut stt_guard {
+        guard.disarm();
+    }
     // Já colámos: o que falta não atrasa o utilizador.
     tauri::async_runtime::spawn_blocking(move || {
-        match state.metrics.record(&m, config.monthly_budget_usd) {
-            Ok(Some(alert)) => {
-                tracing::info!(?alert, "aviso de orçamento");
-                state.notify(&alert.message());
-            }
-            Ok(None) => {}
-            Err(e) => tracing::warn!(error = %e, "não foi possível guardar as métricas"),
-        }
+        record_metrics(&state, &m, config.monthly_budget_usd);
         if let Some(entry) = history_entry
             && let Err(e) = state.history.push(entry, config.history_limit)
         {
@@ -246,37 +435,80 @@ async fn clean_with_llm(
     }
 }
 
+/// O que aconteceu na thread de colagem.
+enum Pasting {
+    Pasted(Duration),
+    /// A janela mudou: ficou só no clipboard.
+    Copied,
+}
+
 async fn paste_text(
     state: &AppState,
     text: String,
     released_at: Instant,
     restore_clipboard: bool,
+    target: Option<focus::Window>,
     m: &mut DictationMetrics,
 ) -> Outcome {
-    // `move` passa a posse do `text` para a thread de bloqueio.
-    match tauri::async_runtime::spawn_blocking(move || paste::paste(&text)).await {
-        Ok(Ok((took, restore))) => {
-            m.paste_ms = Some(ms(took));
-            m.total_ms = Some(ms(released_at.elapsed()));
+    // `move` passa a posse do `text` para a thread de bloqueio. A janela é
+    // verificada lá dentro, o mais perto possível do Ctrl+V.
+    let job = move || -> Result<Pasting, paste::PasteError> {
+        let now = focus::foreground();
+        if focus::should_paste(target, now) {
+            let (took, restore) = paste::paste(&text)?;
+            // A reposição do clipboard é agendada aqui dentro, numa thread própria:
+            // uma vez colado, nada (nem um cancelamento) a pode impedir de correr.
             if restore_clipboard {
-                tauri::async_runtime::spawn_blocking(move || {
-                    std::thread::sleep(paste::RESTORE_AFTER);
-                    restore.run();
-                });
+                let spawned = std::thread::Builder::new()
+                    .name("ditok-clipboard".into())
+                    .spawn(move || {
+                        std::thread::sleep(paste::RESTORE_AFTER);
+                        restore.run();
+                    });
+                if let Err(e) = spawned {
+                    tracing::warn!(error = %e, "não foi possível agendar a reposição do clipboard");
+                }
             }
             // Senão, o `restore` é largado aqui sem correr e o ditado fica no clipboard.
+            Ok(Pasting::Pasted(took))
+        } else {
+            tracing::info!(
+                ?target,
+                ?now,
+                "a janela em foco mudou durante o ditado; texto só copiado"
+            );
+            paste::copy(&text).map(|()| Pasting::Copied)
+        }
+    };
+    match tauri::async_runtime::spawn_blocking(job).await {
+        Ok(Ok(Pasting::Copied)) => {
+            m.total_ms = Some(ms(released_at.elapsed()));
+            // Não se repõe o clipboard: o texto tem de lá ficar para o colares.
+            Outcome::Copied
+        }
+        Ok(Ok(Pasting::Pasted(took))) => {
+            m.paste_ms = Some(ms(took));
+            m.total_ms = Some(ms(released_at.elapsed()));
             Outcome::Pasted
+        }
+        // O texto já estava no clipboard quando o Ctrl+V falhou: para o
+        // utilizador é igual a "copiado", e a notificação explica porquê.
+        Ok(Err(e @ paste::PasteError::Input(_))) => {
+            tracing::error!(error = %e, "colagem falhou; o texto ficou no clipboard");
+            state.notify(&e.to_string());
+            m.error = Some(e.to_string());
+            Outcome::Copied
         }
         Ok(Err(e)) => {
             tracing::error!(error = %e, "colagem falhou");
             state.notify(&e.to_string());
             m.error = Some(e.to_string());
-            Outcome::Failed
+            Outcome::failed(FailReason::Generic)
         }
         Err(e) => {
             tracing::error!(error = %e, "tarefa de colagem falhou");
             m.error = Some(e.to_string());
-            Outcome::Failed
+            Outcome::failed(FailReason::Generic)
         }
     }
 }
@@ -317,5 +549,33 @@ fn save_debug_wav(dir: &std::path::Path, rec: &Recording) {
     match result {
         Ok(()) => tracing::debug!(path = %path.display(), "WAV de teste guardado"),
         Err(e) => tracing::warn!(error = %e, "não foi possível guardar o WAV de teste"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commit_and_cancel_exclude_each_other() {
+        // Colar primeiro: o cancelamento chega tarde e é recusado.
+        let c = Commit::default();
+        assert!(c.try_commit());
+        assert!(!c.try_cancel());
+        assert!(c.try_commit(), "comprometer duas vezes não faz mal");
+
+        // Cancelar primeiro: a colagem já não acontece.
+        let c = Commit::default();
+        assert!(c.try_cancel());
+        assert!(!c.try_commit());
+        assert!(!c.try_cancel(), "só se cancela uma vez");
+    }
+
+    #[test]
+    fn clones_share_the_same_decision() {
+        let c = Commit::default();
+        let other = c.clone();
+        assert!(other.try_cancel());
+        assert!(!c.try_commit());
     }
 }

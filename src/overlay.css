@@ -61,6 +61,7 @@ body {
 #bars,
 #dots,
 #label,
+#retry,
 .pill-button {
   display: none;
 }
@@ -133,7 +134,8 @@ kbd {
 
 /* ---------- modo alternar: ✕ à esquerda, ■ à direita */
 #pill.latched[data-state="recording"] { width: 300px; padding: 0 6px; }
-#pill.latched[data-state="recording"] .pill-button {
+#pill.latched[data-state="recording"] .pill-button,
+#pill[data-state="processing"] #cancel {
   display: grid;
   place-items: center;
   flex: none;
@@ -154,13 +156,21 @@ kbd {
 #stop:hover { background: #ff8587; }
 .pill-button:active { transform: scale(0.92); }
 
-/* ---------- a processar: pontos brancos */
+/* ---------- a processar: ✕ para cancelar + pontos brancos (+ "a demorar…") */
 #pill[data-state="processing"] {
-  width: 104px;
+  width: 144px;
   height: 46px;
+  padding: 0 6px;
   opacity: 1;
 }
 #pill[data-state="processing"] #dots { display: flex; gap: 6px; }
+/* Mais de 5 s a processar: diz que está a demorar, para não parecer pendurado. */
+#pill.slow[data-state="processing"] { width: 226px; }
+#pill.slow[data-state="processing"] #label {
+  display: block;
+  white-space: nowrap;
+  color: var(--amber);
+}
 #dots span {
   width: 7px;
   height: 7px;
@@ -175,10 +185,20 @@ kbd {
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
-/* ---------- pronto / falhou / não ouvi nada */
-#pill[data-state="done"],
-#pill[data-state="failed"] {
+/* ---------- pronto / copiado / falhou / não ouvi nada */
+#pill[data-state="done"] {
   width: 116px;
+  height: 46px;
+  opacity: 1;
+}
+/* "Copiado · Ctrl+V": a janela mudou e o texto ficou só no clipboard. */
+#pill[data-state="copied"] {
+  width: 184px;
+  height: 46px;
+  opacity: 1;
+}
+#pill[data-state="failed"] {
+  width: 172px;
   height: 46px;
   opacity: 1;
 }
@@ -188,18 +208,55 @@ kbd {
   opacity: 1;
 }
 #pill[data-state="done"] #label,
+#pill[data-state="copied"] #label,
 #pill[data-state="failed"] #label,
 #pill[data-state="nothing-heard"] #label {
   display: block;
   white-space: nowrap; /* não partir a linha enquanto a pílula ainda está a crescer */
 }
 #pill[data-state="done"] #label { color: var(--green); }
-#pill[data-state="failed"] #label { color: var(--red); }
+#pill[data-state="copied"] #label { color: var(--amber); }
 #pill[data-state="nothing-heard"] #label { opacity: 0.75; }
-#pill[data-state="failed"] { animation: shake 300ms; }
+
+/* Falha: pílula em tom vermelho (sem arte nova da mascote) e um abanão. */
+#pill[data-state="failed"] {
+  background: rgb(58 14 16 / 0.94);
+  border-color: rgb(255 107 110 / 0.55);
+  animation: shake 300ms;
+}
+#pill[data-state="failed"] #label { color: var(--red); }
+#pill[data-state="failed"] #mascot { filter: grayscale(0.4) sepia(0.6) hue-rotate(-40deg) saturate(2.5); }
+/* Com "Tentar de novo": a pílula inteira é clicável. */
+#pill.retry[data-state="failed"] { width: 292px; cursor: pointer; }
+#pill.retry[data-state="failed"] #retry {
+  display: block;
+  flex: none;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.14);
+  white-space: nowrap;
+  transition: background 120ms;
+}
+#pill.retry.hover[data-state="failed"] #retry { background: rgb(255 255 255 / 0.26); }
+
+/* Atalho premido a meio do processamento: "ainda estou ocupado". */
+#pill.busy { animation: shake 300ms; }
 @keyframes shake {
   25% { transform: translateX(-3px); }
   75% { transform: translateX(3px); }
+}
+
+/* Só para leitores de ecrã. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 #pill:not([data-state="idle"]) #mascot {
@@ -209,5 +266,5 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   #pill, #mascot, #bars span, #tip { transition: none; }
-  #dots span, #pill[data-state="failed"] { animation: none; }
+  #dots span, #pill[data-state="failed"], #pill.busy { animation: none; }
 }

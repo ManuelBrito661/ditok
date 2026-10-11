@@ -10,16 +10,16 @@ use std::time::{Duration, Instant};
 /// gravar depois de largar); acima, é push-to-talk (largar termina a gravação).
 pub const TOGGLE_THRESHOLD: Duration = Duration::from_millis(300);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Phase {
+    #[default]
     Idle,
     /// A gravar com a tecla em baixo desde `since`.
-    Holding {
-        since: Instant,
-    },
+    Holding { since: Instant },
     /// A gravar em modo alternar: a tecla já foi largada e o próximo premir termina.
     Latched,
-    /// À espera da transcrição/colagem. Novos premires são ignorados.
+    /// À espera da transcrição/colagem. Um novo premir não começa outro ditado
+    /// (só dá o aviso "ocupado"); cancelar aborta o processamento.
     Processing,
 }
 
@@ -30,6 +30,9 @@ pub enum Input {
     Cancel,
     /// Clique na barra flutuante: começa em modo alternar ou termina-o.
     Click,
+    /// "Tentar de novo" a transcrição da última gravação falhada. Quem envia isto
+    /// já confirmou que há uma gravação guardada.
+    Retry,
     ProcessingFinished,
 }
 
@@ -38,17 +41,20 @@ pub enum Action {
     StartRecording,
     StopAndProcess,
     CancelRecording,
+    /// Abortar a transcrição/colagem em curso, sem colar nada.
+    CancelProcessing,
+    /// Voltar a enviar a última gravação falhada.
+    Retry,
+    /// Premiste o atalho a meio do processamento: avisar que ainda está ocupado.
+    Busy,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Machine {
     phase: Phase,
-}
-
-impl Default for Machine {
-    fn default() -> Self {
-        Self { phase: Phase::Idle }
-    }
+    /// A tecla do atalho está em baixo? Serve para distinguir um premir novo da
+    /// auto-repetição do teclado (que envia `Pressed` repetidos sem `Released`).
+    key_down: bool,
 }
 
 impl Machine {
@@ -62,6 +68,12 @@ impl Machine {
     /// pensámos em todas as combinações: os casos "ignorar" estão explícitos no `_`.
     pub fn handle(&mut self, input: Input, now: Instant) -> Option<Action> {
         use {Input::*, Phase::*};
+        let was_down = self.key_down;
+        match input {
+            Pressed => self.key_down = true,
+            Released => self.key_down = false,
+            _ => {}
+        }
         let (next, action) = match (self.phase, input) {
             (Idle, Pressed) => (Holding { since: now }, Some(Action::StartRecording)),
             (Holding { since }, Released) => {
@@ -76,10 +88,16 @@ impl Machine {
             (Idle, Click) => (Latched, Some(Action::StartRecording)),
             (Latched, Click) => (Processing, Some(Action::StopAndProcess)),
             (Holding { .. } | Latched, Cancel) => (Idle, Some(Action::CancelRecording)),
+            (Processing, Cancel) => (Idle, Some(Action::CancelProcessing)),
+            (Idle, Retry) => (Processing, Some(Action::Retry)),
+            // Só um premir novo: se a tecla que parou o modo alternar ainda está
+            // em baixo, a auto-repetição não conta.
+            (Processing, Pressed) if !was_down => (Processing, Some(Action::Busy)),
+            (Processing, Retry) => (Processing, Some(Action::Busy)),
             (Processing, ProcessingFinished) => (Idle, None),
-            // Auto-repetição do teclado (Pressed em Holding), Released depois de
-            // parar, premir ou clicar durante o processamento, clicar com a
-            // tecla em baixo, etc.: não mudam nada.
+            // Auto-repetição do teclado (Pressed em Holding ou a processar),
+            // Released depois de parar, clicar durante o processamento, clicar ou
+            // tentar de novo a gravar, etc.: não mudam nada.
             (phase, _) => (phase, None),
         };
         self.phase = next;
@@ -173,19 +191,81 @@ mod tests {
     }
 
     #[test]
-    fn presses_during_processing_and_stray_events_are_ignored() {
+    fn stray_events_are_ignored() {
         let t0 = Instant::now();
         let mut m = Machine::default();
         assert_eq!(m.handle(Input::Released, t0), None);
         assert_eq!(m.handle(Input::Cancel, t0), None);
         assert_eq!(m.handle(Input::ProcessingFinished, t0), None);
         assert_eq!(m.phase(), Phase::Idle);
+    }
 
+    #[test]
+    fn pressing_during_processing_says_busy_once_per_press() {
+        let t0 = Instant::now();
+        let mut m = Machine::default();
         m.handle(Input::Pressed, t0);
         m.handle(Input::Released, t0 + ms(500));
-        assert_eq!(m.handle(Input::Pressed, t0 + ms(600)), None);
-        assert_eq!(m.handle(Input::Cancel, t0 + ms(650)), None);
         assert_eq!(m.phase(), Phase::Processing);
+        assert_eq!(m.handle(Input::Pressed, t0 + ms(600)), Some(Action::Busy));
+        // A auto-repetição de segurar a tecla não repete o aviso.
+        assert_eq!(m.handle(Input::Pressed, t0 + ms(650)), None);
+        assert_eq!(m.handle(Input::Released, t0 + ms(700)), None);
+        assert_eq!(m.handle(Input::Pressed, t0 + ms(800)), Some(Action::Busy));
+        // Continua a processar: o premir não começou outro ditado.
+        assert_eq!(m.phase(), Phase::Processing);
+    }
+
+    #[test]
+    fn key_still_down_after_stopping_latched_is_not_busy() {
+        let t0 = Instant::now();
+        let mut m = Machine::default();
+        m.handle(Input::Pressed, t0);
+        m.handle(Input::Released, t0 + ms(100));
+        // O premir que termina o modo alternar fica em baixo uns instantes.
+        assert_eq!(
+            m.handle(Input::Pressed, t0 + ms(3000)),
+            Some(Action::StopAndProcess)
+        );
+        assert_eq!(m.handle(Input::Pressed, t0 + ms(3500)), None);
+        assert_eq!(m.handle(Input::Pressed, t0 + ms(3530)), None);
+        assert_eq!(m.handle(Input::Released, t0 + ms(3600)), None);
+        assert_eq!(m.handle(Input::Pressed, t0 + ms(4000)), Some(Action::Busy));
+    }
+
+    #[test]
+    fn cancel_while_processing_aborts() {
+        let t0 = Instant::now();
+        let mut m = Machine::default();
+        m.handle(Input::Pressed, t0);
+        m.handle(Input::Released, t0 + ms(500));
+        assert_eq!(
+            m.handle(Input::Cancel, t0 + ms(900)),
+            Some(Action::CancelProcessing)
+        );
+        assert_eq!(m.phase(), Phase::Idle);
+        // O fim do processamento abortado, se ainda chegar, não muda nada.
+        assert_eq!(m.handle(Input::ProcessingFinished, t0 + ms(950)), None);
+        assert_eq!(m.phase(), Phase::Idle);
+    }
+
+    #[test]
+    fn retry_only_from_idle() {
+        let t0 = Instant::now();
+        let mut m = Machine::default();
+        assert_eq!(m.handle(Input::Retry, t0), Some(Action::Retry));
+        assert_eq!(m.phase(), Phase::Processing);
+        // Pedir outra vez enquanto tenta: "ocupado".
+        assert_eq!(m.handle(Input::Retry, t0 + ms(100)), Some(Action::Busy));
+        // Pode ser cancelado como um ditado normal.
+        assert_eq!(
+            m.handle(Input::Cancel, t0 + ms(200)),
+            Some(Action::CancelProcessing)
+        );
+        // A gravar, o "tentar de novo" é ignorado.
+        m.handle(Input::Pressed, t0 + ms(300));
+        assert_eq!(m.handle(Input::Retry, t0 + ms(400)), None);
+        assert!(matches!(m.phase(), Phase::Holding { .. }));
     }
 
     #[test]

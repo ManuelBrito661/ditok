@@ -1,5 +1,6 @@
-//! Sons curtos ao começar e ao acabar de gravar, para saberes o que se passa sem
-//! olhar para a barra. São sintetizados aqui (senos com um envelope), sem ficheiros.
+//! Sons curtos ao começar e ao acabar de gravar, e quando algo falha ou ainda está
+//! ocupado, para saberes o que se passa sem olhar para a barra. São sintetizados
+//! aqui (senos com um envelope), sem ficheiros.
 //!
 //! Tocam numa thread própria (`ditok-sound`): abrir a saída de áudio demora umas
 //! dezenas de ms e não pode atrasar o microfone. A saída só fica aberta enquanto o
@@ -26,6 +27,10 @@ pub enum Cue {
     Stop,
     /// Gravação cancelada: uma nota grave.
     Cancel,
+    /// O ditado falhou (sem rede, sem microfone…).
+    Error,
+    /// Premiste o atalho enquanto ainda processava o ditado anterior.
+    Busy,
 }
 
 /// Volume das notas (escala cheia = 1). Baixo de propósito: é um aviso, não um alarme.
@@ -143,6 +148,18 @@ pub fn render(cue: Cue, rate: u32) -> Vec<f32> {
             note(&mut out, LOW, NOTE, rate);
         }
         Cue::Cancel => note(&mut out, LOW / 2.0, NOTE * 2, rate),
+        // Duas notas graves a descer (sol → dó), mais compridas: soa a "não deu".
+        Cue::Error => {
+            note(&mut out, HIGH / 2.0, NOTE * 2, rate);
+            silence(&mut out, GAP, rate);
+            note(&mut out, LOW / 2.0, NOTE * 2, rate);
+        }
+        // Dois toques secos e rápidos na mesma nota grave: "espera, ainda estou ocupado".
+        Cue::Busy => {
+            note(&mut out, LOW / 2.0, NOTE / 2, rate);
+            silence(&mut out, GAP / 2, rate);
+            note(&mut out, LOW / 2.0, NOTE / 2, rate);
+        }
     }
     out
 }
@@ -180,13 +197,14 @@ mod tests {
     use crate::audio::vad;
 
     const RATE: u32 = 16_000;
+    const ALL: [Cue; 5] = [Cue::Start, Cue::Stop, Cue::Cancel, Cue::Error, Cue::Busy];
 
     /// Toca os três sons na saída de áudio por omissão, para os ouvir.
     /// `cargo test live_sounds -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn live_sounds() {
-        for cue in [Cue::Start, Cue::Stop, Cue::Cancel] {
+        for cue in ALL {
             let started = std::time::Instant::now();
             play(cue).unwrap();
             println!("{cue:?}: {:?} com a saída aberta", started.elapsed());
@@ -196,7 +214,7 @@ mod tests {
 
     #[test]
     fn sounds_are_short_and_never_clip() {
-        for cue in [Cue::Start, Cue::Stop, Cue::Cancel] {
+        for cue in ALL {
             let s = render(cue, 48_000);
             assert!(s.len() < 48_000 / 4, "{cue:?} tem {} amostras", s.len());
             assert!(s.iter().all(|v| v.abs() <= VOLUME), "{cue:?}");

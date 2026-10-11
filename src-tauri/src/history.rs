@@ -17,6 +17,14 @@ pub struct HistoryEntry {
     pub model: String,
     pub audio_ms: u64,
     pub total_ms: Option<u64>,
+    /// `false` se o texto não foi colado (a janela em foco mudou ou a colagem
+    /// falhou) e ficou só no clipboard. Entradas antigas, sem o campo, foram coladas.
+    #[serde(default = "pasted_by_default")]
+    pub pasted: bool,
+}
+
+fn pasted_by_default() -> bool {
+    true
 }
 
 pub struct HistoryStore {
@@ -86,6 +94,7 @@ mod tests {
             model: "m/m".into(),
             audio_ms: 1000,
             total_ms: Some(800),
+            pasted: true,
         }
     }
 
@@ -102,5 +111,12 @@ mod tests {
         assert!(store.list().is_empty());
         store.clear().unwrap(); // apagar duas vezes não é erro
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn old_entries_without_the_pasted_field_count_as_pasted() {
+        let json = r#"{"at":"2026-10-11T12:00:00Z","text":"olá","raw_text":null,"model":"m","audio_ms":1,"total_ms":null}"#;
+        let e: HistoryEntry = serde_json::from_str(json).unwrap();
+        assert!(e.pasted);
     }
 }

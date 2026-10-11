@@ -9,7 +9,8 @@
 //! - é transparente, sem moldura, por cima de tudo e fora da barra de tarefas.
 //!
 //! O backend envia-lhe eventos (`overlay:state`, `overlay:level`, `overlay:latched`,
-//! `overlay:hover`) e recebe os cliques pelos comandos `overlay_*` em commands.rs.
+//! `overlay:failure`, `overlay:busy`, `overlay:hover`) e recebe os cliques pelos
+//! comandos `overlay_*` em commands.rs.
 //! Toda a animação é CSS na página `overlay.html`.
 
 use std::{
@@ -209,4 +210,21 @@ pub fn emit_latched(app: &AppHandle) {
 /// Nível do microfone (0–1), ~20 vezes por segundo durante a gravação.
 pub fn emit_level(app: &AppHandle, level: f32) {
     let _ = app.emit_to(LABEL, "overlay:level", level);
+}
+
+/// Motivo curto de uma falha ("Sem rede"…) e se há "Tentar de novo". Enviado
+/// antes do estado `failed`.
+#[derive(Clone, serde::Serialize)]
+struct Failure<'a> {
+    label: &'a str,
+    retry: bool,
+}
+
+pub fn emit_failure(app: &AppHandle, label: &str, retry: bool) {
+    let _ = app.emit_to(LABEL, "overlay:failure", Failure { label, retry });
+}
+
+/// Premiste o atalho a meio do processamento: a pílula abana.
+pub fn emit_busy(app: &AppHandle) {
+    let _ = app.emit_to(LABEL, "overlay:busy", ());
 }

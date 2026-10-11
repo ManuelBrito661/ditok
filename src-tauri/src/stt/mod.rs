@@ -50,6 +50,9 @@ pub struct Usage {
 pub enum SttError {
     #[error("chave da API rejeitada ({0}). Confirma a chave guardada no cofre do sistema.")]
     Unauthorized(String),
+    // 403: a chave existe mas o pedido foi recusado (limite da chave, moderação…).
+    #[error("pedido recusado pelo OpenRouter ({0})")]
+    Forbidden(String),
     #[error("sem créditos suficientes na conta ({0})")]
     InsufficientCredits(String),
     #[error(
@@ -90,7 +93,13 @@ impl From<reqwest::Error> for SttError {
                 msg.push_str(&s.to_string());
                 source = s.source();
             }
-            Self::Network(msg)
+            // Só os erros de ligação são "sem rede". Um corpo de resposta que não se
+            // conseguiu ler (a ligação existia) é uma resposta inesperada.
+            if e.is_decode() || e.is_body() {
+                Self::Decode(msg)
+            } else {
+                Self::Network(msg)
+            }
         }
     }
 }
@@ -149,7 +158,8 @@ pub fn error_from_response(status: u16, body: &[u8], model: &str) -> SttError {
     let lower = message.to_lowercase();
 
     match status {
-        401 | 403 => SttError::Unauthorized(message),
+        401 => SttError::Unauthorized(message),
+        403 => SttError::Forbidden(message),
         402 => SttError::InsufficientCredits(message),
         404 => SttError::ModelNotFound {
             model: model.to_owned(),
@@ -242,6 +252,10 @@ mod tests {
         assert!(
             matches!(error_from_response(401, body, "m"), SttError::Unauthorized(m) if m == "No auth credentials found")
         );
+        assert!(matches!(
+            error_from_response(403, b"{}", "m"),
+            SttError::Forbidden(_)
+        ));
         assert!(matches!(
             error_from_response(402, b"{}", "m"),
             SttError::InsufficientCredits(_)

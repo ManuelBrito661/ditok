@@ -144,7 +144,7 @@ pub async fn set_api_key(state: AppStateRef<'_>, key: String) -> CmdResult<Optio
     let info = match openrouter::check_key(&state.http, &key).await {
         Ok(info) => Some(info),
         // Chave rejeitada: não guardamos.
-        Err(e @ SttError::Unauthorized(_)) => return Err(e.into()),
+        Err(e @ (SttError::Unauthorized(_) | SttError::Forbidden(_))) => return Err(e.into()),
         // Sem rede (ou outro erro do servidor): guardamos na mesma e avisamos no log.
         Err(e) => {
             tracing::warn!(error = %e, "não foi possível validar a chave; guardada sem validação");

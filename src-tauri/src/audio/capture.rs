@@ -48,9 +48,7 @@ const INITIAL_SECONDS: usize = 10;
 pub enum AudioError {
     #[error("não foi encontrado nenhum microfone")]
     NoDevice,
-    #[error(
-        "sem permissão para usar o microfone (macOS: Definições do Sistema → Privacidade e Segurança → Microfone)"
-    )]
+    #[error("sem permissão para usar o microfone. {hint}", hint = MIC_PERMISSION_HELP)]
     PermissionDenied,
     #[error("o microfone usa um formato não suportado ({0:?})")]
     UnsupportedFormat(SampleFormat),
@@ -64,9 +62,18 @@ pub enum AudioError {
     ThreadGone,
 }
 
+/// Onde se dá a permissão, em cada sistema.
+#[cfg(target_os = "windows")]
+const MIC_PERMISSION_HELP: &str = "No Windows: Definições → Privacidade e segurança → Microfone; liga \"Acesso ao microfone\" e \"Permitir que as aplicações de ambiente de trabalho acedam ao microfone\".";
+#[cfg(target_os = "macos")]
+const MIC_PERMISSION_HELP: &str =
+    "No macOS: Definições do Sistema → Privacidade e Segurança → Microfone, e liga o Ditok.";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const MIC_PERMISSION_HELP: &str = "Confirma as permissões de áudio do sistema.";
+
 impl From<cpal::Error> for AudioError {
     fn from(e: cpal::Error) -> Self {
-        if e.kind() == cpal::ErrorKind::PermissionDenied {
+        if e.kind() == cpal::ErrorKind::PermissionDenied || is_access_denied(&e.to_string()) {
             Self::PermissionDenied
         } else {
             Self::Device(e)
@@ -74,8 +81,22 @@ impl From<cpal::Error> for AudioError {
     }
 }
 
+/// No Windows, o cpal não traduz o "acesso negado" do WASAPI (E_ACCESSDENIED,
+/// 0x80070005, que é o que acontece com o microfone bloqueado nas definições de
+/// privacidade): chega como erro genérico do backend. Reconhecemo-lo pelo texto,
+/// que pode vir com o código em hexadecimal, em decimal ou traduzido.
+fn is_access_denied(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("0x80070005")
+        || lower.contains("-2147024891")
+        || lower.contains("access is denied")
+        || lower.contains("acesso negado")
+}
+
 /// Resultado de uma gravação, já pronto a enviar.
-#[derive(Debug)]
+/// `Clone` é barato: o WAV é `Bytes` (contagem de referências, não copia o áudio).
+/// É o que permite guardar a gravação de um ditado falhado para o "Tentar de novo".
+#[derive(Debug, Clone)]
 pub struct Recording {
     /// WAV 16 kHz mono PCM16, sem o silêncio do início e do fim. Sem fala, fica a
     /// gravação inteira: não vai ser enviada, mas o WAV de diagnóstico mostra-a.
@@ -403,4 +424,17 @@ where
         },
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_access_denied_from_wasapi() {
+        assert!(is_access_denied("Access is denied. (os error -2147024891)"));
+        assert!(is_access_denied("Acesso negado. (os error -2147024891)"));
+        assert!(is_access_denied("HRESULT 0x80070005"));
+        assert!(!is_access_denied("The device is in use"));
+    }
 }
