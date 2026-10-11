@@ -4,4 +4,4 @@ mod capture;
 pub mod resample;
 pub mod wav;
 
-pub use capture::{Recorder, Recording};
+pub use capture::{AudioError, Recorder, Recording};
