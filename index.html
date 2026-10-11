@@ -19,6 +19,10 @@
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1Z"/></svg>
           Início
         </button>
+        <button type="button" class="nav-link" data-page="dicionario">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v14H6.5A2.5 2.5 0 0 0 4 19.5Zm0 0A2.5 2.5 0 0 0 6.5 22H20v-5"/><path d="M9 8h6"/></svg>
+          Dicionário
+        </button>
         <button type="button" class="nav-link" data-page="metricas">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/></svg>
           Métricas
@@ -83,6 +87,60 @@
             <p class="muted">Experimenta: segura o atalho, diz uma frase e larga.</p>
           </div>
           <div id="history-days" class="days"></div>
+        </section>
+
+        <!-- ============================================================ Dicionário -->
+        <section id="page-dicionario" class="page" aria-labelledby="dict-title" hidden>
+          <header class="page-head">
+            <h1 id="dict-title" class="serif">Dicionário</h1>
+            <p class="muted">
+              Aplicado neste computador logo a seguir à transcrição: não custa nada nem atrasa o ditado.
+              Com a limpeza com IA ligada, as palavras também vão no pedido ao modelo, para as escrever bem.
+            </p>
+          </header>
+
+          <h2 class="section-title">Palavras <span id="dict-count" class="count"></span></h2>
+          <p class="section-desc muted">
+            Nomes, marcas e termos que o modelo escreve mal. À esquerda, como ele os escreve (várias formas separadas
+            por vírgulas: <i>tauri, tori</i>); vazio quer dizer a própria palavra, e serve para acertar as maiúsculas.
+          </p>
+          <div class="list-card">
+            <form id="dict-add" class="pair add-row">
+              <input id="dict-a" placeholder="Como sai (opcional)" aria-label="Como o modelo escreve" spellcheck="false" />
+              <span class="arrow" aria-hidden="true">→</span>
+              <input id="dict-b" placeholder="Como deve ficar" aria-label="Como deve ficar escrito" spellcheck="false" />
+              <button type="submit" class="primary small">Adicionar</button>
+            </form>
+            <ul id="dict-list" class="pairs"></ul>
+          </div>
+
+          <h2 class="section-title">Expansões <span id="snippet-count" class="count"></span></h2>
+          <p class="section-desc muted">
+            Dizes a frase e é colado o texto: <i>o meu email</i> → o teu endereço. O texto nunca é enviado ao modelo de limpeza.
+          </p>
+          <div class="list-card">
+            <form id="snippet-add" class="pair add-row">
+              <input id="snippet-a" placeholder="Frase que dizes" aria-label="Frase que dizes" spellcheck="false" />
+              <span class="arrow" aria-hidden="true">→</span>
+              <textarea id="snippet-b" rows="1" placeholder="Texto colado (Ctrl+Enter acrescenta)" aria-label="Texto que é colado" spellcheck="false"></textarea>
+              <button type="submit" class="primary small">Adicionar</button>
+            </form>
+            <ul id="snippet-list" class="pairs"></ul>
+          </div>
+
+          <h2 class="section-title">Comandos falados</h2>
+          <div class="list-card">
+            <label class="row switch card-row">
+              <span class="row-text">
+                <span class="row-title">"Nova linha" e "novo parágrafo"</span>
+                <span class="row-desc">
+                  Diz o comando entre pausas curtas: "Olá Pedro, nova linha, tudo bem?". No meio de uma frase
+                  ("abriram uma nova linha de metro") fica escrito tal e qual. Em inglês: "new line", "new paragraph".
+                </span>
+              </span>
+              <input id="voice-commands" type="checkbox" role="switch" />
+            </label>
+          </div>
         </section>
 
         <!-- ============================================================ Métricas -->
@@ -260,8 +318,10 @@
           <section role="tabpanel" id="panel-limpeza" aria-labelledby="tab-limpeza" hidden>
             <h3 class="panel-title">Limpeza com IA</h3>
             <p class="muted panel-intro">
-              Depois da transcrição, um modelo de texto corrige a pontuação e remove hesitações ("ééé", "hmm").
-              Acrescenta uma ida à rede a cada ditado. Se falhar ou demorar mais de 6 s, é colado o texto original.
+              Depois da transcrição, um modelo de texto corrige a pontuação, remove hesitações ("ééé", "hmm") e, quando
+              te corriges a meio da frase ("às duas, não, às três"), fica só a correção. Recebe também as palavras do
+              dicionário, mas nunca o texto das expansões.
+              Acrescenta uma ida à rede a cada ditado. Se falhar ou demorar mais de 6 s, é colado o texto sem limpeza.
             </p>
             <div class="rows">
               <label class="row switch">

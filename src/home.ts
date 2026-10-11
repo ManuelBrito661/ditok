@@ -55,7 +55,7 @@ function entryRow(h: HistoryEntry): HTMLLIElement {
   if (h.raw_text) {
     const raw = document.createElement("details");
     const summary = document.createElement("summary");
-    summary.textContent = "Antes da limpeza";
+    summary.textContent = "Transcrição original";
     const p = document.createElement("p");
     p.textContent = h.raw_text;
     raw.append(summary, p);

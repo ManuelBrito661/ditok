@@ -20,6 +20,21 @@ export interface Config {
   history_limit: number;
   save_last_recording: boolean;
   show_overlay: boolean;
+  voice_commands: boolean;
+  dictionary: Replacement[];
+  snippets: Snippet[];
+}
+
+/** Uma palavra do dicionário. `from`: formas separadas por vírgulas; vazio = a própria palavra. */
+export interface Replacement {
+  from: string;
+  to: string;
+}
+
+/** Uma expansão: dizes `trigger` e é colado `text`. */
+export interface Snippet {
+  trigger: string;
+  text: string;
 }
 
 export interface SettingsView {

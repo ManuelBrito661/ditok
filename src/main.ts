@@ -4,12 +4,13 @@
 import "@fontsource/instrument-serif/latin-400.css";
 import mascotUrl from "../design/mascot/parado.svg?inline";
 import { api, errorText, onDictationRecorded } from "./api";
+import { setupDictionary } from "./dictionary-page";
 import { clearHomeHistory, refreshHome, setupHome } from "./home";
 import { renderMemory, renderStats } from "./metrics-page";
 import { openSettings, setupSettings } from "./settings-dialog";
 import { $, app, onViewChange, toast } from "./store";
 
-type Page = "inicio" | "metricas";
+type Page = "inicio" | "dicionario" | "metricas";
 
 function showPage(page: Page) {
   for (const link of document.querySelectorAll<HTMLButtonElement>(".nav-link[data-page]")) {
@@ -67,6 +68,7 @@ async function main() {
   setupNav();
   setupSettings(clearHomeHistory);
   setupHome();
+  setupDictionary();
   onViewChange(renderStatus);
   renderStatus();
 

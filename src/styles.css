@@ -266,6 +266,57 @@ main { overflow-y: auto; padding: 0 48px 64px; }
 }
 .empty .primary { margin-top: 10px; }
 
+/* ---------------------------------------------------------------- dicionário */
+.section-desc { max-width: 620px; margin: -4px 0 12px; font-size: 12.5px; }
+.page-head + .section-title { margin-top: 8px; }
+.count { margin-left: 4px; color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+.list-card {
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--border);
+  overflow: hidden;
+}
+.pairs { margin: 0; padding: 0; list-style: none; }
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.4fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 8px 10px 8px 12px;
+}
+.pairs .pair { border-top: 1px solid var(--border); }
+.pair input, .pair textarea {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.pair textarea {
+  resize: none;
+  field-sizing: content; /* cresce com o texto (Chromium) */
+  max-height: 180px;
+  line-height: 1.45;
+}
+.pair input:hover, .pair textarea:hover { border-color: var(--border); }
+.pair textarea:focus {
+  outline: none;
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 10%, transparent);
+}
+.pair .arrow { padding-top: 7px; color: var(--muted); }
+.add-row { background: var(--surface-2); }
+.add-row input, .add-row textarea { border-color: var(--border-strong); background: var(--surface); }
+.add-row button { margin-top: 2px; }
+.pair .remove { width: 34px; height: 34px; opacity: 0; transition: opacity 0.15s var(--ease); }
+.pair:hover .remove, .pair:focus-within .remove { opacity: 1; }
+.pairs-empty { padding: 14px 22px; border-top: 1px solid var(--border); }
+.row.card-row { padding: 16px 20px; border: 0; }
+
 /* ---------------------------------------------------------------- métricas */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .card {
