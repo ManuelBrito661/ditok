@@ -32,6 +32,12 @@ A barra reage ao rato: ao passares por cima cresce e mostra uma dica com o atalh
 
 O ícone do tray mostra o mesmo estado: parado, a ouvir (vermelho), a processar (laranja), pronto (verde).
 
+### Sons
+
+Duas notas curtas a subir quando começa a ouvir, as mesmas a descer quando pára, e uma nota grave ao cancelar. São geradas pela app (sem ficheiros) e tocam numa thread à parte, por isso não atrasam o microfone. Podem ser desligadas em **Definições → Geral**.
+
+Com colunas em vez de auscultadores, o som de início fica gravado. A deteção de voz sabe que ele tocou e ignora um som curto (até 0,3 s) no primeiro meio segundo, para uma gravação acidental só com o "plim" não ir para o modelo.
+
 ### Silêncio
 
 Antes de enviar, o Ditok procura a voz na gravação. O silêncio do início e do fim é cortado (com uma margem de 0,3 s antes e 0,4 s depois), porque os modelos são cobrados ao segundo. Se não houver voz nenhuma, nada é enviado: quando só recebem silêncio, os modelos de transcrição costumam inventar frases ("Obrigado por assistir.").
@@ -55,7 +61,7 @@ Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. 
 | - | - |
 | Início | ditados, palavras e custo do mês, e o histórico dos últimos ditados com um botão "Copiar" em cada um. Um ditado que não chegou a ser colado também fica lá |
 | Dicionário | palavras, expansões e comandos falados (ver abaixo) |
-| Métricas | latência p50/p90, custo e ditados por mês, últimos ditados, RAM da app e das janelas |
+| Métricas | latência p50/p90, custo e ditados por mês, orçamento, o que resta na chave, últimos ditados, RAM da app e das janelas |
 
 ### Dicionário e expansões
 
@@ -72,10 +78,16 @@ No botão **Definições** da barra lateral. Cada alteração é guardada logo, 
 
 | Separador | O que tem |
 | - | - |
-| Geral | atalho (com deteção de conflitos com outras apps), idioma, arranque com o sistema, mostrar a barra com a mascote, deixar o ditado no clipboard depois de colar (ligado por omissão; desligado, o clipboard volta ao que lá tinhas) |
-| Transcrição | chave do OpenRouter (guardar / testar / apagar), modelo de transcrição com pesquisa e preço, formato de envio (multipart ou JSON) |
+| Geral | atalho (com deteção de conflitos com outras apps), idioma, sons ao começar e acabar, arranque com o sistema, mostrar a barra com a mascote, deixar o ditado no clipboard depois de colar (ligado por omissão; desligado, o clipboard volta ao que lá tinhas) |
+| Transcrição | chave do OpenRouter (guardar / testar / apagar), orçamento mensal, modelo de transcrição com pesquisa e preço, formato de envio (multipart ou JSON) |
 | Limpeza com IA | corrige pontuação, remove hesitações e, quando te corriges a meio da frase ("às duas, não, às três"), fica só a correção, com um modelo de texto (desligada por omissão; se falhar ou demorar mais de 6 s, cola o texto sem limpeza) |
 | Dados e privacidade | histórico (ligado por omissão, só neste computador), guardar a última gravação |
+
+### Orçamento e chave
+
+Em **Definições → Transcrição** podes definir um orçamento mensal em USD. Quando um ditado faz o gasto do mês passar os 80 % aparece uma notificação, e outra ao chegar aos 100 %. Cada aviso aparece uma vez por mês e o Ditok continua a funcionar depois do limite. O gasto é o que o OpenRouter reporta para a transcrição e a limpeza, somado por mês em UTC (como a faturação dele). No Início o valor fica âmbar a partir dos 80 % e vermelho aos 100 %, e nas Métricas há uma barra.
+
+As Métricas mostram também quanto resta na chave do OpenRouter, se lhe tiveres posto um limite de gasto em [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys), com uma estimativa dos minutos de ditado que isso dá ao custo dos teus últimos ditados com o modelo atual. O valor vem de `GET /key`, que é gratuito, e é atualizado ao abrir a janela e depois de cada ditado.
 
 ### Atualizações
 
@@ -177,6 +189,7 @@ src-tauri/src/
   text.rs             comandos falados, dicionário e expansões (no computador)
   cleanup.rs          limpeza opcional com LLM
   paste.rs            clipboard + Ctrl/Cmd+V (+ reposição do clipboard, se pedida), copiar sem colar
+  sound.rs            sons de início e fim, gerados na app
   hotkey.rs           atalho global, troca com deteção de conflitos
   overlay.rs          barra flutuante com a mascote (hover e cliques)
   settings_window.rs  janela principal criada/destruída a pedido
