@@ -27,8 +27,7 @@ const HEIGHT: f64 = 72.0;
 ///   definirmos os nossos, temos de os repetir).
 /// - `--disable-gpu`: desenha por software. Poupa o processo de GPU do WebView2
 ///   (~65 MB medidos), e uma pílula com animações CSS simples não precisa dele.
-pub const BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu --disable-gpu-compositing";
+pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu --disable-gpu-compositing";
 
 /// Distância à barra de tarefas / fundo do ecrã.
 const MARGIN: f64 = 10.0;
