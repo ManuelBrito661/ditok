@@ -58,7 +58,20 @@ async function checkUpdate() {
   });
 }
 
+/// Tira o menu do WebView2 (Anterior, Atualizar, Imprimir…), que denuncia que é
+/// uma página web. Fica nas caixas de texto, onde Copiar/Colar dá jeito, e em
+/// `npm run tauri dev` para continuar a haver "Inspecionar".
+function blockContextMenu() {
+  if (import.meta.env.DEV) return;
+  document.addEventListener("contextmenu", (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("input, textarea, [contenteditable='true']")) return;
+    e.preventDefault();
+  });
+}
+
 async function main() {
+  blockContextMenu();
   $<HTMLImageElement>("brand-mascot").src = mascotUrl;
   try {
     app.view = await api.getSettings();
