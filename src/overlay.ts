@@ -4,10 +4,10 @@
 // Não há polling nem temporizadores a correr em repouso: as animações são CSS.
 
 import { listen } from "@tauri-apps/api/event";
-import parado from "../design/mascot/parado.svg";
-import aOuvir from "../design/mascot/a-ouvir.svg";
-import aProcessar from "../design/mascot/a-processar.svg";
-import pronto from "../design/mascot/pronto.svg";
+import parado from "../design/mascot/parado.svg?inline";
+import aOuvir from "../design/mascot/a-ouvir.svg?inline";
+import aProcessar from "../design/mascot/a-processar.svg?inline";
+import pronto from "../design/mascot/pronto.svg?inline";
 
 type State = "idle" | "recording" | "processing" | "done" | "failed";
 
@@ -32,8 +32,15 @@ const mascot = document.getElementById("mascot") as HTMLImageElement;
 const label = document.getElementById("label")!;
 const barsEl = document.getElementById("bars")!;
 
-// Pré-carrega as quatro poses para a troca ser instantânea.
-for (const src of new Set(Object.values(MASCOT))) new Image().src = src;
+// As poses vêm embutidas (?inline, data URI): a troca não depende da rede, o que
+// importa no "a processar", que dura menos de um segundo. Pré-descodifica-as também.
+const preloaded = [...new Set(Object.values(MASCOT))].map((src) => {
+  const img = new Image();
+  img.src = src;
+  void img.decode().catch(() => {});
+  return img; // manter a referência evita que o browser as descarte
+});
+void preloaded;
 
 // Barras da forma de onda: as mais recentes à direita, a deslizar para a esquerda.
 const bars = Array.from({ length: BAR_COUNT }, () => {
