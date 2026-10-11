@@ -36,6 +36,17 @@ O ícone do tray mostra o mesmo estado: parado, a ouvir (vermelho), a processar 
 
 Antes de enviar, o Ditok procura a voz na gravação. O silêncio do início e do fim é cortado (com uma margem de 0,3 s antes e 0,4 s depois), porque os modelos são cobrados ao segundo. Se não houver voz nenhuma, nada é enviado: quando só recebem silêncio, os modelos de transcrição costumam inventar frases ("Obrigado por assistir.").
 
+### Comandos falados
+
+Diz **"nova linha"** ou **"novo parágrafo"** (em inglês, "new line" e "new paragraph") entre pausas curtas: "Olá Pedro, nova linha, tudo bem?" dá
+
+```
+Olá Pedro
+Tudo bem?
+```
+
+O comando é resolvido no computador, sem IA. Só conta quando está isolado por pausas, que os modelos marcam com uma vírgula ou um ponto: no meio de uma frase ("abriram uma nova linha de metro") fica escrito tal e qual. A vírgula antes do comando e a pontuação depois dele desaparecem, e a frase seguinte começa com maiúscula. Podem ser desligados na página **Dicionário**.
+
 ## A janela
 
 Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua a correr. Tem modo claro e escuro.
@@ -43,7 +54,17 @@ Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. 
 | Página | O que tem |
 | - | - |
 | Início | ditados, palavras e custo do mês, e o histórico dos últimos ditados com um botão "Copiar" em cada um. Um ditado que não chegou a ser colado também fica lá |
+| Dicionário | palavras, expansões e comandos falados (ver abaixo) |
 | Métricas | latência p50/p90, custo e ditados por mês, últimos ditados, RAM da app e das janelas |
+
+### Dicionário e expansões
+
+Aplicados no computador logo a seguir à transcrição, sem rede: não acrescentam custo, e o tempo que levam não se nota (menos de 1 ms com umas dezenas de entradas).
+
+- **Palavras**: corrigem como o modelo escreve um nome ou termo. À esquerda as formas que ele usa, separadas por vírgulas (`tauri, tori` → `Tauri`); vazio quer dizer a própria palavra e serve para acertar as maiúsculas (`Manuel Brito`). Só apanham palavras inteiras, sem distinguir maiúsculas.
+- **Expansões**: dizes a frase e é colado o texto (`o meu email` → o endereço). O texto pode ter várias linhas.
+
+Com a limpeza com IA ligada, as palavras vão no pedido ao modelo, para ele as escrever assim. As expansões não: o modelo recebe um marcador (`{{1}}`) no lugar de cada uma, que é trocado pelo texto depois da limpeza. Assim o teu email ou a tua morada nunca saem do computador, e o modelo não os pode "corrigir". Se o modelo estragar um marcador ou mexer nas mudanças de linha, é colado o texto sem limpeza.
 
 ### Definições
 
@@ -53,7 +74,7 @@ No botão **Definições** da barra lateral. Cada alteração é guardada logo, 
 | - | - |
 | Geral | atalho (com deteção de conflitos com outras apps), idioma, arranque com o sistema, mostrar a barra com a mascote, deixar o ditado no clipboard depois de colar (ligado por omissão; desligado, o clipboard volta ao que lá tinhas) |
 | Transcrição | chave do OpenRouter (guardar / testar / apagar), modelo de transcrição com pesquisa e preço, formato de envio (multipart ou JSON) |
-| Limpeza com IA | corrige pontuação e remove hesitações com um modelo de texto (desligada por omissão; se falhar ou demorar mais de 6 s, cola o texto original) |
+| Limpeza com IA | corrige pontuação, remove hesitações e, quando te corriges a meio da frase ("às duas, não, às três"), fica só a correção, com um modelo de texto (desligada por omissão; se falhar ou demorar mais de 6 s, cola o texto sem limpeza) |
 | Dados e privacidade | histórico (ligado por omissão, só neste computador), guardar a última gravação |
 
 ### Atualizações
@@ -73,7 +94,7 @@ cargo run --bin set-key --features cli
 
 | Ficheiro | Onde (Windows) | O que tem |
 | - | - | - |
-| `config.json` | `%APPDATA%\com.manuelbrito.ditok\` | as definições |
+| `config.json` | `%APPDATA%\com.manuelbrito.ditok\` | as definições, incluindo o dicionário e as expansões |
 | `metrics.jsonl` | `%APPDATA%\com.manuelbrito.ditok\` | uma linha por ditado: tempos, modelo e custo, **sem o texto** |
 | `costs.json` | `%APPDATA%\com.manuelbrito.ditok\` | custo e número de ditados por mês |
 | `history.json` | `%APPDATA%\com.manuelbrito.ditok\` | texto dos últimos ditados (só se o histórico estiver ligado) |
@@ -85,7 +106,7 @@ cargo run --bin set-key --features cli
 - Windows: `%LOCALAPPDATA%\com.manuelbrito.ditok\logs` (um ficheiro por dia, 7 dias)
 - macOS: `~/Library/Logs/com.manuelbrito.ditok`
 
-Cada ditado regista uma linha `ditado` com a duração do áudio enviado e do silêncio cortado, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado) e o custo. Uma gravação sem voz regista uma linha `sem voz na gravação` com o ruído de fundo, o pico e o limiar em dBFS, que servem para afinar a deteção se o teu microfone a enganar. A memória é registada no arranque, com a janela aberta e depois de a fechar.
+Cada ditado regista uma linha `ditado` com a duração do áudio enviado e do silêncio cortado, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado), o custo e quantos comandos, palavras e expansões foram aplicados (o texto nunca vai para os logs). Uma gravação sem voz regista uma linha `sem voz na gravação` com o ruído de fundo, o pico e o limiar em dBFS, que servem para afinar a deteção se o teu microfone a enganar. A memória é registada no arranque, com a janela aberta e depois de a fechar.
 
 ## Desempenho
 
@@ -153,6 +174,7 @@ src-tauri/src/
   dictation/          orquestrador (actor), máquina de estados do atalho, pipeline do ditado
   audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV, nível do microfone
   stt/                trait SttProvider, OpenRouter, cache da lista de modelos
+  text.rs             comandos falados, dicionário e expansões (no computador)
   cleanup.rs          limpeza opcional com LLM
   paste.rs            clipboard + Ctrl/Cmd+V (+ reposição do clipboard, se pedida), copiar sem colar
   hotkey.rs           atalho global, troca com deteção de conflitos
@@ -164,7 +186,7 @@ src-tauri/src/
 src-tauri/Info.plist, Entitlements.plist   permissões do macOS (microfone)
 src/
   main.ts             janela principal: navegação e cartão de atualização
-  home.ts, metrics-page.ts, settings-dialog.ts   Início, Métricas e definições
+  home.ts, dictionary-page.ts, metrics-page.ts, settings-dialog.ts   Início, Dicionário, Métricas e definições
   api.ts, store.ts    tipos dos comandos e estado partilhado
   overlay.ts          barra com a mascote
 design/mascot/        poses da mascote em SVG
