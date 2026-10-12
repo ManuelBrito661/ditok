@@ -402,7 +402,12 @@ export const summaries = {
 // ---------------------------------------------------------------- motor local
 
 export type SttEngine = "cloud" | "local";
-export type LocalModelId = "parakeet-v3" | "whisper-small" | "whisper-turbo";
+export type LocalModelId =
+  | "parakeet-v3"
+  | "whisper-small"
+  | "whisper-turbo"
+  | "whisper-medium"
+  | "whisper-large-v3";
 
 /** Um modelo do catálogo (commands.rs, LocalModelView). */
 export interface LocalModel {

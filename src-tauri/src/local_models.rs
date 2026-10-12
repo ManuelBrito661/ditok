@@ -26,7 +26,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// O modelo escolhido. No JSON: "parakeet-v3", "whisper-small", "whisper-turbo".
+/// O modelo escolhido. No JSON: "parakeet-v3", "whisper-small", "whisper-turbo",
+/// "whisper-medium", "whisper-large-v3".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LocalModelId {
@@ -34,6 +35,8 @@ pub enum LocalModelId {
     ParakeetV3,
     WhisperSmall,
     WhisperTurbo,
+    WhisperMedium,
+    WhisperLargeV3,
 }
 
 /// Que tipo de modelo é (decide como o motor o carrega).
@@ -130,6 +133,42 @@ const WHISPER_TURBO_FILES: &[ModelFile] = &[
     },
 ];
 
+const WHISPER_MEDIUM_FILES: &[ModelFile] = &[
+    ModelFile {
+        name: "medium-encoder.int8.onnx",
+        size: 374_196_283,
+        sha256: "1c54582b4d829de0089f6cb63bbbdb3bf7555398bacaf855fbecf1a84dfd193e",
+    },
+    ModelFile {
+        name: "medium-decoder.int8.onnx",
+        size: 571_059_257,
+        sha256: "595d00a338a365a7bfa0ca7f296cabc639583bef770ab6130df90f49a6412747",
+    },
+    ModelFile {
+        name: "medium-tokens.txt",
+        size: 816_730,
+        sha256: "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+    },
+];
+
+const WHISPER_LARGE_V3_FILES: &[ModelFile] = &[
+    ModelFile {
+        name: "large-v3-encoder.int8.onnx",
+        size: 766_671_985,
+        sha256: "d531cf17248acc43e8c09b472a0877055e770877857a5332fc1304b36534ec85",
+    },
+    ModelFile {
+        name: "large-v3-decoder.int8.onnx",
+        size: 1_008_265_203,
+        sha256: "ebc6bfd88e162a46cb3edee8a7e727e1dcbc65cabecb19e2573695e4d495e1af",
+    },
+    ModelFile {
+        name: "large-v3-tokens.txt",
+        size: 816_730,
+        sha256: "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+    },
+];
+
 pub const CATALOG: &[ModelSpec] = &[
     ModelSpec {
         id: LocalModelId::ParakeetV3,
@@ -168,6 +207,30 @@ pub const CATALOG: &[ModelSpec] = &[
         max_chunk: Duration::from_secs(25),
         ram_mb: 2400,
         files: WHISPER_TURBO_FILES,
+    },
+    ModelSpec {
+        id: LocalModelId::WhisperMedium,
+        label: "Whisper medium",
+        description: "Multilíngue e mais preciso do que o small, mas mais lento. Usa o idioma das definições.",
+        warning: Some("Pesado: cerca de 950 MB de ficheiros. Mais lento do que o Parakeet."),
+        family: Family::Whisper { prefix: "medium" },
+        repo: "csukuangfj/sherpa-onnx-whisper-medium",
+        commit: "8c31d28503847560985df21f90e14f0c736e075e",
+        max_chunk: Duration::from_secs(20),
+        ram_mb: 2000,
+        files: WHISPER_MEDIUM_FILES,
+    },
+    ModelSpec {
+        id: LocalModelId::WhisperLargeV3,
+        label: "Whisper large v3",
+        description: "O Whisper maior e mais preciso, multilíngue. Usa o idioma das definições.",
+        warning: Some("Muito pesado (cerca de 1,8 GB de ficheiros e mais de 3 GB de memória). Lento."),
+        family: Family::Whisper { prefix: "large-v3" },
+        repo: "csukuangfj/sherpa-onnx-whisper-large-v3",
+        commit: "2a6507094dd6020d939d78e3f1834a1d06267fca",
+        max_chunk: Duration::from_secs(15),
+        ram_mb: 3000,
+        files: WHISPER_LARGE_V3_FILES,
     },
 ];
 
@@ -223,6 +286,8 @@ pub fn dir_name(id: LocalModelId) -> &'static str {
         LocalModelId::ParakeetV3 => "parakeet-v3",
         LocalModelId::WhisperSmall => "whisper-small",
         LocalModelId::WhisperTurbo => "whisper-turbo",
+        LocalModelId::WhisperMedium => "whisper-medium",
+        LocalModelId::WhisperLargeV3 => "whisper-large-v3",
     }
 }
 
@@ -628,6 +693,8 @@ mod tests {
             LocalModelId::ParakeetV3,
             LocalModelId::WhisperSmall,
             LocalModelId::WhisperTurbo,
+            LocalModelId::WhisperMedium,
+            LocalModelId::WhisperLargeV3,
         ] {
             assert_eq!(spec(id).id, id);
         }
@@ -638,6 +705,8 @@ mod tests {
         // O Whisper trabalha em janelas de 30 s; o Parakeet gasta RAM com o comprimento.
         assert!(spec(LocalModelId::WhisperSmall).max_chunk < Duration::from_secs(30));
         assert!(spec(LocalModelId::WhisperTurbo).max_chunk < Duration::from_secs(30));
+        assert!(spec(LocalModelId::WhisperMedium).max_chunk < Duration::from_secs(30));
+        assert!(spec(LocalModelId::WhisperLargeV3).max_chunk < Duration::from_secs(30));
         assert!(spec(LocalModelId::ParakeetV3).max_chunk <= Duration::from_secs(30));
     }
 

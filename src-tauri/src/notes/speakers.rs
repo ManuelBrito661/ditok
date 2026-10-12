@@ -214,9 +214,10 @@ pub fn diarize(models_dir: &Path, samples: &[f32]) -> Result<Vec<Segment>, Speak
             ..Default::default()
         },
         // Número de oradores desconhecido: o limiar decide quando dois são o mesmo.
+        // Mais alto junta mais vozes (menos oradores). 0.5 deu 15 oradores em 5 min.
         clustering: FastClusteringConfig {
             num_clusters: -1,
-            threshold: 0.5,
+            threshold: 0.7,
             ..Default::default()
         },
         ..Default::default()

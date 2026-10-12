@@ -25,6 +25,7 @@ use super::{
 };
 use crate::{
     audio::{resample::TARGET_RATE, wav},
+    config::SttEngine,
     metrics::{self, DictationMetrics},
     settings_window,
     state::AppState,
@@ -61,6 +62,10 @@ pub enum NotesError {
     ConsentRequired,
     #[error("falta a chave do OpenRouter (ou escolhe o motor local) para transcrever")]
     NoKey,
+    #[error(
+        "com o motor local, as Notas precisam da separação de oradores: ativa-a nas definições e descarrega os modelos de oradores"
+    )]
+    NeedsSpeakers,
     #[error(transparent)]
     Capture(#[from] CaptureError),
     #[error(transparent)]
@@ -242,6 +247,15 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
     let config = state.config();
     if !config.notes_consent {
         return Err(NotesError::ConsentRequired);
+    }
+    // Com o motor local, a identificação de oradores é obrigatória: sem ela a reunião
+    // ficaria só com "Eu" e "Outros", e o motor local não tem outra forma de as separar.
+    if config.stt_engine == SttEngine::Local
+        && !(config.notes_speakers
+            && super::speakers::AVAILABLE
+            && super::speakers::is_installed(&state.models_dir()))
+    {
+        return Err(NotesError::NeedsSpeakers);
     }
     if state.notes.phase() != Phase::Idle {
         return Err(NotesError::Busy);

@@ -392,6 +392,8 @@ mod tests {
             LocalModelId::ParakeetV3,
             LocalModelId::WhisperSmall,
             LocalModelId::WhisperTurbo,
+            LocalModelId::WhisperMedium,
+            LocalModelId::WhisperLargeV3,
         ] {
             assert_eq!(id_from_slug(&slug(id)), Some(id));
         }
