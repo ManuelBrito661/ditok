@@ -293,7 +293,12 @@ fn audio_thread(
                 if monitor.take().is_some() {
                     tracing::debug!("medidor do microfone parado para gravar");
                 }
-                match Session::open(pressed_at, start_cue, Some(events.clone()), device.as_deref()) {
+                match Session::open(
+                    pressed_at,
+                    start_cue,
+                    Some(events.clone()),
+                    device.as_deref(),
+                ) {
                     Ok(s) => session = Some(s),
                     Err(e) => {
                         tracing::error!(error = %e, "não foi possível abrir o microfone");

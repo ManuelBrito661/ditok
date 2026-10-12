@@ -127,19 +127,20 @@ fn activate<R: Runtime>(
     slot: Slot,
 ) -> Result<(), HotkeyError> {
     match parsed {
-        Parsed::Key(key) => app
-            .global_shortcut()
-            .register(key)
-            .map_err(|source| HotkeyError::Register {
-                shortcut: text.to_owned(),
-                source,
-            }),
-        Parsed::Mods(mods) => set_mods(slot, Some(mods)).map_err(|reason| {
-            HotkeyError::Unavailable {
+        Parsed::Key(key) => {
+            app.global_shortcut()
+                .register(key)
+                .map_err(|source| HotkeyError::Register {
+                    shortcut: text.to_owned(),
+                    source,
+                })
+        }
+        Parsed::Mods(mods) => {
+            set_mods(slot, Some(mods)).map_err(|reason| HotkeyError::Unavailable {
                 shortcut: text.to_owned(),
                 reason,
-            }
-        }),
+            })
+        }
     }
 }
 
@@ -399,10 +400,7 @@ mod tests {
     #[test]
     fn modifier_only_shortcuts_need_two_modifiers_and_fn_is_mac_only() {
         assert!(matches!(parse("Control+Alt"), Ok(Parsed::Mods(_))));
-        assert!(matches!(
-            parse("Control"),
-            Err(HotkeyError::Invalid { .. })
-        ));
+        assert!(matches!(parse("Control"), Err(HotkeyError::Invalid { .. })));
         assert_eq!(parse("Fn").is_ok(), cfg!(target_os = "macos"));
     }
 

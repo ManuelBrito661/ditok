@@ -78,11 +78,7 @@ impl BitOr for Mods {
 pub fn parse(shortcut: &str) -> Option<Mods> {
     let mut mods = Mods::NONE;
     let mut any = false;
-    for part in shortcut
-        .split('+')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-    {
+    for part in shortcut.split('+').map(str::trim).filter(|p| !p.is_empty()) {
         any = true;
         mods = mods
             | match part.to_ascii_lowercase().as_str() {
