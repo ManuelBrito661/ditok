@@ -52,9 +52,9 @@ export async function renderStats() {
       const cost = (r.cost_usd ?? 0) + (r.cleanup_cost_usd ?? 0);
       // Um ficheiro não tem latência: mostra a duração e "ficheiro" no total.
       const audio = r.file ? duration(r.audio_ms / 1000) : ms(r.audio_ms);
-      const total = r.error ? "erro" : r.file ? "ficheiro" : ms(r.total_ms);
+      const total = r.error ? "erro" : r.file ? "ficheiro" : r.summary ? "resumo" : ms(r.total_ms);
       // Um comando é um ditado com uma instrução: o mesmo, com a marca ao lado do modelo.
-      const model = r.command ? `${r.model} · comando` : r.model;
+      const model = r.command ? `${r.model} · comando` : r.summary ? `${r.model} · resumo` : r.model;
       const cells = [dateTime(r.at), model, audio, ms(r.stt_ms), ms(r.cleanup_ms), total,
         usd(r.cost_usd == null && r.cleanup_cost_usd == null ? null : cost)];
       cells.forEach((c, i) => {

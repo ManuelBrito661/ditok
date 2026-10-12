@@ -279,6 +279,20 @@
             </div>
             <p id="fj-saved" class="row-desc"></p>
             <div id="fj-text" class="transcript" tabindex="0" aria-label="Texto transcrito" hidden></div>
+            <div id="fj-summary" class="file-summary" hidden>
+              <div class="file-summary-head">
+                <label for="fs-kind" class="row-title">Resumir</label>
+                <select id="fs-kind" aria-label="Que tipo de resumo"></select>
+                <button id="fs-run" type="button" class="secondary">Resumir</button>
+              </div>
+              <p id="fs-hint" class="row-desc"></p>
+              <div id="fs-result" class="transcript" tabindex="0" aria-label="Resumo" hidden></div>
+              <p id="fs-detail" class="row-desc" hidden></p>
+              <div id="fs-actions" class="file-actions" hidden>
+                <button id="fs-copy" type="button" class="secondary">Copiar resumo</button>
+                <button id="fs-save" type="button" class="secondary">Guardar ao lado (.md)</button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -710,6 +724,23 @@
                 </div>
                 <ul id="cleanup-models" class="model-list" role="listbox" aria-label="Modelos de texto"></ul>
                 <p class="row-desc" id="cleanup-meta"></p>
+              </div>
+              <div class="row stacked">
+                <div class="row-text">
+                  <span class="row-title">Modelo dos resumos</span>
+                  <span class="row-desc">
+                    Resumir uma transcrição (página Ficheiros, ou um ditado comprido no Início) é mais exigente do que
+                    limpar um ditado: um modelo melhor costuma compensar. Só o uso quando carregas em "Resumir".
+                  </span>
+                  <span class="row-desc" id="summary-current"></span>
+                </div>
+                <div class="row-control">
+                  <input id="summary-search" type="search" placeholder="Pesquisar modelos…" aria-label="Pesquisar modelos para os resumos" />
+                  <button id="summary-refresh" type="button" class="secondary">Atualizar lista</button>
+                  <button id="summary-reset" type="button" class="ghost">Usar o da limpeza</button>
+                </div>
+                <ul id="summary-models" class="model-list" role="listbox" aria-label="Modelos de texto para os resumos"></ul>
+                <p class="row-desc" id="summary-meta"></p>
               </div>
             </div>
           </section>

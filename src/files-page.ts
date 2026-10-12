@@ -4,9 +4,10 @@
 // que a janela feche, e ao reabri-la `files.status()` devolve o estado atual.
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { api, errorText, files, onFileJob, type FileJob, type FileProbe } from "./api";
+import { api, errorText, files, onFileJob, summaries, type FileJob, type FileProbe, type SummaryKind } from "./api";
 import { costPerMinute, duration, megabytes, usd } from "./format";
 import { $, app, toast } from "./store";
+import { describeResult, describeText, SUMMARY_KINDS } from "./summary";
 
 let probe: FileProbe | null = null;
 let job: FileJob | null = null;
@@ -141,6 +142,78 @@ function renderJob(j: FileJob) {
   const badge = $("nav-file-progress");
   badge.hidden = !running;
   badge.textContent = indeterminate || fraction == null ? "…" : `${Math.round(fraction * 100)} %`;
+
+  renderSummary(j);
+}
+
+// ---------------------------------------------------------------- resumo
+
+/** O resumo que está no ecrã e o texto de que veio (se o texto muda, o resumo some). */
+let summary: { text: string; source: string } | null = null;
+let summarizing = false;
+
+/** Mostra ou esconde a caixa "Resumir" conforme o trabalho. */
+function renderSummary(j: FileJob) {
+  const ready = j.status !== "running" && !!j.text;
+  $("fj-summary").hidden = !ready;
+  if (!ready) return;
+  const text = j.text ?? "";
+  if (summary && summary.source !== text) summary = null;
+  const { hint, ok } = describeText(text);
+  $("fs-hint").textContent = hint;
+  $<HTMLButtonElement>("fs-run").disabled = !ok || summarizing;
+  $("fs-run").textContent = summarizing ? "A resumir…" : summary ? "Resumir outra vez" : "Resumir";
+  $("fs-result").textContent = summary?.text ?? ""; // textContent: o resumo nunca é interpretado como HTML
+  $("fs-result").hidden = !summary;
+  $("fs-actions").hidden = !summary;
+}
+
+async function runSummary() {
+  if (!job?.text || summarizing) return;
+  const source = job.text;
+  const kind = $<HTMLSelectElement>("fs-kind").value as SummaryKind;
+  summarizing = true;
+  renderSummary(job);
+  try {
+    const out = await summaries.run(source, kind);
+    summary = { text: out.text, source };
+    $("fs-detail").textContent = describeResult(out);
+    $("fs-detail").hidden = false;
+  } catch (e) {
+    toast(`Não consegui resumir: ${errorText(e)}`, "error");
+  } finally {
+    summarizing = false;
+    if (job) renderSummary(job);
+  }
+}
+
+function setupSummary() {
+  $("fs-kind").replaceChildren(
+    ...SUMMARY_KINDS.map(({ value, label }) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }),
+  );
+  $("fs-run").addEventListener("click", () => void runSummary());
+  $("fs-copy").addEventListener("click", async () => {
+    if (!summary) return;
+    try {
+      await api.copyText(summary.text);
+      toast("Resumo copiado");
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  });
+  $("fs-save").addEventListener("click", async () => {
+    if (!summary) return;
+    try {
+      toast(`Guardado em ${await summaries.saveBesideFile(summary.text)}`);
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  });
 }
 
 function onJob(j: FileJob | null) {
@@ -219,8 +292,11 @@ export async function setupFiles(showPage: () => void) {
   });
   $("fj-new").addEventListener("click", async () => {
     await files.clear().catch(() => {});
+    summary = null;
+    $("fs-detail").hidden = true;
     onJob(null);
   });
+  setupSummary();
 
   await onFileJob(onJob);
   onJob(await files.status().catch(() => null));

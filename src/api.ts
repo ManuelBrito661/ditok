@@ -31,6 +31,8 @@ export interface Config {
   quick_history_shortcut: string;
   /** Palavras por minuto que escreves à mão (só para estimar o tempo poupado). */
   typing_wpm: number;
+  /** Modelo de texto dos resumos; vazio = o da limpeza. */
+  summary_model: string;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -180,6 +182,8 @@ export interface MetricsRow {
   file?: boolean;
   /** Modo comando: `cleanup_*` são o pedido ao LLM com a instrução. */
   command?: boolean;
+  /** Um resumo (summarize.rs): só interessa o custo. */
+  summary?: boolean;
 }
 
 export interface Stats {
@@ -364,3 +368,23 @@ export const files = {
 export function onFileJob(handler: (job: FileJob) => void): Promise<UnlistenFn> {
   return listen<FileJob>("file:job", (e) => handler(e.payload));
 }
+
+// ---------------------------------------------------------------- resumos
+
+/** O que se quer do resumo (summarize.rs, Kind). */
+export type SummaryKind = "short" | "keypoints" | "meeting" | "lesson";
+
+/** Um resumo pronto (commands.rs, SummaryOut). */
+export interface SummaryOut {
+  text: string;
+  model: string;
+  cost_usd: number | null;
+  seconds: number;
+}
+
+export const summaries = {
+  /** O texto vai ao OpenRouter; o custo entra nas métricas. */
+  run: (text: string, kind: SummaryKind) => invoke<SummaryOut>("summarize_text", { text, kind }),
+  /** Guarda o resumo (Markdown) ao lado do ficheiro transcrito. */
+  saveBesideFile: (text: string) => invoke<string>("file_save_summary", { text }),
+};

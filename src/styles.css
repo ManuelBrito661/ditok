@@ -1009,3 +1009,9 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .entry-teach .pair { grid-template-columns: minmax(0, 1fr); padding: 8px; border-radius: var(--radius-sm); }
 .entry-teach .arrow { display: none; }
 .entry-teach .pair button { justify-self: start; }
+
+/* ---------------------------------------------------------------- resumos */
+.file-summary { display: grid; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.file-summary-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.file-summary-head select { min-width: 0; width: auto; }
+.file-summary .transcript { white-space: pre-wrap; }

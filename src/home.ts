@@ -5,7 +5,7 @@ import mascotUrl from "../design/mascot/parado.svg?inline";
 import listeningMascotUrl from "../design/mascot/a-ouvir.svg?inline";
 import thinkingMascotUrl from "../design/mascot/a-processar.svg?inline";
 import readyMascotUrl from "../design/mascot/pronto.svg?inline";
-import { api, errorText, type HistoryItem, type Stats, type UsageSummary } from "./api";
+import { api, errorText, summaries, type HistoryItem, type Stats, type UsageSummary } from "./api";
 import {
   budgetLevel,
   dayLabel,
@@ -20,6 +20,7 @@ import {
 } from "./format";
 import { addDictionaryEntry, countWordIn, suggestFrom } from "./dictionary-add";
 import { openSettings } from "./settings-dialog";
+import { describeResult, summaryModel, wordCount } from "./summary";
 import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 
 /** Quantos ditados se desenham de cada vez (com "Mostrar mais" para o resto). */
@@ -267,6 +268,26 @@ function editorFor(h: HistoryItem): HTMLDivElement {
   return box;
 }
 
+/** Os resumos pedidos nesta sessão (só em memória), por ditado, e os que estão a correr. */
+const entrySummaries = new Map<string, { text: string; detail: string }>();
+const summarizingIds = new Set<string>();
+/** Só vale a pena resumir um ditado com algum comprimento. */
+const MIN_WORDS_TO_SUMMARIZE = 150;
+
+async function summarizeEntry(h: HistoryItem) {
+  summarizingIds.add(h.id);
+  renderHistory();
+  try {
+    const out = await summaries.run(h.text, "keypoints");
+    entrySummaries.set(h.id, { text: out.text, detail: describeResult(out) });
+  } catch (e) {
+    toast(`Não consegui resumir: ${errorText(e)}`, "error");
+  } finally {
+    summarizingIds.delete(h.id);
+    renderHistory();
+  }
+}
+
 function smallButton(label: string, action: string, className = "ghost small"): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
@@ -353,8 +374,33 @@ function entryRow(h: HistoryItem): HTMLLIElement {
     again.addEventListener("click", () => void reprocess(h));
     links.append(again);
   }
+  // Um ditado comprido pode resumir-se em pontos-chave (o texto vai ao OpenRouter).
+  if (!h.instruction && editing?.id !== h.id && wordCount(h.text) >= MIN_WORDS_TO_SUMMARIZE) {
+    const busy = summarizingIds.has(h.id);
+    const done = entrySummaries.has(h.id);
+    const sum = smallButton(busy ? "A resumir…" : done ? "Resumir outra vez" : "Resumir", "summarize");
+    sum.title = `Pontos-chave deste ditado, com ${summaryModel()}`;
+    sum.disabled = busy;
+    sum.addEventListener("click", () => void summarizeEntry(h));
+    links.append(sum);
+  }
   // Os botões ficam antes do painel do original, logo por baixo do texto.
   if (links.childElementCount) body.insertBefore(links, meta.nextSibling);
+
+  const summary = entrySummaries.get(h.id);
+  if (summary) {
+    const panel = document.createElement("div");
+    panel.className = "entry-raw";
+    const label = document.createElement("p");
+    label.className = "entry-raw-label";
+    label.textContent = `Pontos-chave · ${summary.detail}`;
+    const text = document.createElement("p");
+    text.textContent = summary.text;
+    const copySummary = smallButton("Copiar resumo", "copy-summary", "secondary small");
+    copySummary.addEventListener("click", () => copy(summary.text, copySummary, "Copiar resumo"));
+    panel.append(label, text, copySummary);
+    body.append(panel);
+  }
 
   const actions = document.createElement("div");
   actions.className = "entry-actions";

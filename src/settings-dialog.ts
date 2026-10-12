@@ -252,7 +252,11 @@ function price(m: ModelInfo, kind: ModelKind): string {
 }
 
 /** Um seletor de modelos com pesquisa (transcrição ou limpeza). */
-function modelPicker(kind: ModelKind, prefix: "stt" | "cleanup", field: "stt_model" | "cleanup_model") {
+function modelPicker(
+  kind: ModelKind,
+  prefix: "stt" | "cleanup" | "summary",
+  field: "stt_model" | "cleanup_model" | "summary_model",
+) {
   const list = $<HTMLUListElement>(`${prefix}-models`);
   const search = $<HTMLInputElement>(`${prefix}-search`);
   const meta = $(`${prefix}-meta`);
@@ -261,7 +265,10 @@ function modelPicker(kind: ModelKind, prefix: "stt" | "cleanup", field: "stt_mod
 
   const render = () => {
     const current = app.view.config[field];
-    $(`${prefix}-current`).textContent = `Atual: ${current}`;
+    // Os resumos sem modelo próprio usam o da limpeza.
+    $(`${prefix}-current`).textContent = current
+      ? `Atual: ${current}`
+      : `Atual: o mesmo da limpeza (${app.view.config.cleanup_model})`;
     if (!data) return;
     const q = search.value.trim().toLowerCase();
     const matches = data.models.filter((m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
@@ -448,8 +455,10 @@ export function setupSettings(onHistoryCleared: () => void) {
   onViewChange(renderControls);
   renderControls();
   // As listas de modelos só são pedidas quando o modal abre pela primeira vez.
+  $("summary-reset").addEventListener("click", () => void save({ summary_model: "" }));
   models = [
     modelPicker("transcription", "stt", "stt_model"),
     modelPicker("text", "cleanup", "cleanup_model"),
+    modelPicker("text", "summary", "summary_model"),
   ];
 }
