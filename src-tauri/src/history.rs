@@ -1,5 +1,5 @@
 //! Histórico opcional dos últimos ditados (com o texto), só em disco local
-//! (`app_data_dir/history.json`). Desligado por omissão.
+//! (`app_data_dir/history.json`). Ligado por omissão (`Config::history_enabled`).
 //!
 //! Opcionalmente (`Config::keep_audio`), também o áudio dos últimos
 //! [`AUDIO_KEEP`] ditados, em `app_data_dir/audio/<id>.wav`, para os poder
@@ -276,12 +276,37 @@ impl HistoryStore {
     }
 
     fn read(&self) -> Vec<HistoryEntry> {
-        let mut entries: Vec<HistoryEntry> = std::fs::read(&self.path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let mut entries = match std::fs::read(&self.path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                self.set_aside_unreadable(&e);
+                Vec::new()
+            }),
+            // Sem ficheiro ainda (ou sem permissão para o ler): lista vazia. Só um
+            // ficheiro que lemos e não percebemos merece ser posto de parte.
+            Err(_) => Vec::new(),
+        };
         fill_ids(&mut entries);
         entries
+    }
+
+    /// Um `history.json` que não é JSON válido (disco cheio a meio de uma
+    /// escrita, edição à mão) não pode ser tratado como "vazio": o próximo
+    /// `push` escrevia por cima e perdia-se tudo. Move-se para `history.json.bak`
+    /// (a cópia anterior, se houver, é substituída) e o histórico recomeça.
+    fn set_aside_unreadable(&self, why: &serde_json::Error) {
+        let backup = self.path.with_extension("json.bak");
+        match std::fs::rename(&self.path, &backup) {
+            Ok(()) => tracing::warn!(
+                error = %why,
+                backup = %backup.display(),
+                "history.json ilegível; guardado como .bak e histórico recomeçado"
+            ),
+            Err(e) => tracing::warn!(
+                error = %why,
+                rename_error = %e,
+                "history.json ilegível e não foi possível pô-lo de parte"
+            ),
+        }
     }
 
     fn write(&self, entries: &[HistoryEntry]) -> std::io::Result<()> {
@@ -456,6 +481,41 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_history_is_backed_up_not_overwritten() {
+        let dir = temp_dir("corrupt");
+        std::fs::create_dir_all(&dir).unwrap();
+        let garbage = b"[{\"text\": \"cortado a meio";
+        std::fs::write(dir.join("history.json"), garbage).unwrap();
+        let store = HistoryStore::new(dir.clone());
+
+        // Ler não falha: o histórico recomeça vazio...
+        assert!(store.list().is_empty());
+        // ...mas o ficheiro estragado não se perdeu.
+        assert_eq!(
+            std::fs::read(dir.join("history.json.bak")).unwrap(),
+            garbage
+        );
+
+        // E o próximo ditado já escreve um histórico novo, sem tocar no .bak.
+        store.push(entry("novo"), 10).unwrap();
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(
+            std::fs::read(dir.join("history.json.bak")).unwrap(),
+            garbage
+        );
+        store.clear().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_history_file_is_not_backed_up() {
+        let dir = temp_dir("missing");
+        let store = HistoryStore::new(dir.clone());
+        assert!(store.list().is_empty());
+        assert!(!dir.join("history.json.bak").exists());
+    }
+
+    #[test]
     fn keeps_only_the_latest_entries_newest_first() {
         let dir = temp_dir("latest");
         let store = HistoryStore::new(dir.clone());
@@ -496,7 +556,13 @@ mod tests {
 
     #[test]
     fn ids_are_validated() {
-        for ok in ["1760184000000000000", "-5", "abc_DEF-123", "COM10", "CONSOLE"] {
+        for ok in [
+            "1760184000000000000",
+            "-5",
+            "abc_DEF-123",
+            "COM10",
+            "CONSOLE",
+        ] {
             assert!(is_valid_id(ok), "{ok}");
         }
         for bad in [
