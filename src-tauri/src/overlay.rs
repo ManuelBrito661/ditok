@@ -28,7 +28,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
+    WindowEvent, webview::PageLoadEvent,
 };
 
 use crate::{state::AppState, tray::TrayState};
@@ -62,6 +62,9 @@ const HOVER_POLL: Duration = Duration::from_millis(60);
 /// Margem à volta da pílula que ainda conta como "por cima" (a pílula em repouso
 /// tem poucos píxeis de altura).
 const HOVER_PAD: f64 = 6.0;
+/// Se a barra fica a menos disto do topo do monitor, a dica vai para baixo da
+/// pílula: por cima, saía do ecrã e a pílula não chegava ao topo.
+const TIP_BELOW_WITHIN: f64 = 60.0;
 
 /// Retângulo da pílula em píxeis lógicos, relativo à janela. Enviado pela página
 /// sempre que a pílula muda de tamanho.
@@ -108,6 +111,13 @@ pub fn create(app: &AppHandle) {
         .focused(false)
         .focusable(false)
         .additional_browser_args(BROWSER_ARGS)
+        // A página só ouve `overlay:tip` depois de carregar: no fim, diz-lhe onde
+        // ficou a dica (uma posição guardada pode já pedir o layout de baixo).
+        .on_page_load(|window, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                sync_tip(window.app_handle(), &window);
+            }
+        })
         .build();
 
     match built {
@@ -192,10 +202,30 @@ fn save_position_soon(app: &AppHandle, pos: PhysicalPosition<i32>) {
             if let Err(e) = result {
                 tracing::warn!(error = %e, "não foi possível guardar a posição da barra");
             }
+            // Só depois de a barra parar: a dica muda de lado conforme o sítio final.
+            if let Some(window) = app.get_webview_window(LABEL) {
+                sync_tip(&app, &window);
+            }
         });
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "a posição da barra não foi guardada");
     }
+}
+
+/// Diz à página se a dica vai por baixo (`overlay:tip`). Só avisa quando a barra
+/// está no topo do monitor, por isso é barato chamá-la depois de cada movimento.
+fn sync_tip(app: &AppHandle, window: &WebviewWindow) {
+    let _ = app.emit_to(LABEL, "overlay:tip", tip_below(window));
+}
+
+/// A barra está tão no topo do monitor onde está que a dica por cima sairia do ecrã.
+fn tip_below(window: &WebviewWindow) -> bool {
+    let (Ok(pos), Ok(Some(monitor))) = (window.outer_position(), window.current_monitor()) else {
+        return false;
+    };
+    let area = monitor.work_area();
+    let room = TIP_BELOW_WITHIN * monitor.scale_factor();
+    f64::from(pos.y - area.position.y) < room
 }
 
 /// A posição guardada, se a barra ainda cabe num monitor (basta um pedaço dela

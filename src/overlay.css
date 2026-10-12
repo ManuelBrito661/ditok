@@ -19,6 +19,12 @@ body {
   padding-bottom: 4px;
   box-sizing: border-box;
 }
+/* Pílula encostada ao topo do ecrã: a dica vai para baixo dela (overlay:tip). */
+body.tip-below {
+  flex-direction: column-reverse;
+  padding-top: 4px;
+  padding-bottom: 0;
+}
 
 #pill {
   --ink: #0d0d0c;

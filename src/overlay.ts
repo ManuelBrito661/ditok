@@ -367,6 +367,12 @@ void listen<"dictation" | "command">("overlay:mode", (e) => {
 });
 void listen<boolean>("overlay:selection", (e) => onSelection(e.payload));
 void listen<boolean>("overlay:hover", (e) => onHover(e.payload));
+// Pílula no topo do ecrã: a dica desce para baixo dela. A pílula muda de sítio na
+// janela, por isso a área de clique tem de ser medida outra vez.
+void listen<boolean>("overlay:tip", (e) => {
+  document.body.classList.toggle("tip-below", e.payload);
+  reportHitRect();
+});
 void listen<Status>("overlay:notice", (e) => onStatus(e.payload));
 // A barra pode nascer depois do último aviso: pede o estado atual.
 void api.overlayStatus().then(onStatus, () => {});
