@@ -75,6 +75,25 @@ impl MetricsStore {
         m: &DictationMetrics,
         budget: Option<f64>,
     ) -> std::io::Result<Option<BudgetAlert>> {
+        self.write(m, budget, true)
+    }
+
+    /// Um "Reprocessar": regista a linha e o custo, mas não conta como ditado novo
+    /// (o ditado já estava no número).
+    pub fn record_reprocess(
+        &self,
+        m: &DictationMetrics,
+        budget: Option<f64>,
+    ) -> std::io::Result<Option<BudgetAlert>> {
+        self.write(m, budget, false)
+    }
+
+    fn write(
+        &self,
+        m: &DictationMetrics,
+        budget: Option<f64>,
+        new_dictation: bool,
+    ) -> std::io::Result<Option<BudgetAlert>> {
         std::fs::create_dir_all(&self.dir)?;
         let mut line = serde_json::to_vec(m).map_err(std::io::Error::other)?;
         line.push(b'\n');
@@ -87,7 +106,7 @@ impl MetricsStore {
         // O custo conta sempre que houve cobrança (mesmo que a colagem tenha
         // falhado depois); o número de ditados só conta os que colaram texto.
         let cost = m.cost_usd.unwrap_or(0.0) + m.cleanup_cost_usd.unwrap_or(0.0);
-        let counted = u64::from(m.error.is_none() && m.total_ms.is_some());
+        let counted = u64::from(new_dictation && m.error.is_none() && m.total_ms.is_some());
         if cost <= 0.0 && counted == 0 {
             return Ok(None);
         }

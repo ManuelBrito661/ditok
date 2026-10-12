@@ -78,8 +78,9 @@ function renderStats() {
   $("s-words").textContent = app.view.config.history_enabled && historyState === "ready" ? words.toLocaleString("pt-PT") : "—";
 }
 
-async function copy(text: string, button: HTMLButtonElement) {
-  const label = button.textContent;
+/** `label` é o rótulo original do botão: com dois cliques seguidos, o texto do
+ *  botão já seria "Copiado" e ficava preso nele. */
+async function copy(text: string, button: HTMLButtonElement, label: string) {
   try {
     await api.copyText(text); // pelo backend: o clipboard do WebView nem sempre está disponível
     button.textContent = "Copiado";
@@ -200,8 +201,9 @@ function entryRow(h: HistoryItem): HTMLLIElement {
     label.textContent = h.instruction ? "Texto selecionado" : "Transcrição antes da limpeza";
     const raw = document.createElement("p");
     raw.textContent = h.raw_text;
-    const copyRaw = smallButton(`Copiar ${noun}`, "copy-raw", "secondary small");
-    copyRaw.addEventListener("click", () => copy(h.raw_text ?? "", copyRaw));
+    const copyLabel = `Copiar ${noun}`;
+    const copyRaw = smallButton(copyLabel, "copy-raw", "secondary small");
+    copyRaw.addEventListener("click", () => copy(h.raw_text ?? "", copyRaw, copyLabel));
     panel.append(label, raw, copyRaw);
     body.append(panel);
   }
@@ -220,7 +222,7 @@ function entryRow(h: HistoryItem): HTMLLIElement {
   const actions = document.createElement("div");
   actions.className = "entry-actions";
   const button = smallButton("Copiar", "copy", "secondary small");
-  button.addEventListener("click", () => copy(h.text, button));
+  button.addEventListener("click", () => copy(h.text, button, "Copiar"));
   const del = document.createElement("button");
   del.type = "button";
   del.className = "icon-button";

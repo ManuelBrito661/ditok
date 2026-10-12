@@ -140,7 +140,12 @@ pub async fn save_settings(
     let audio_turned_off = current.keep_audio && !config.keep_audio;
     let new_shortcut = config.shortcut.clone();
     let state_ = Arc::clone(&state);
-    let saved = blocking(move || state_.replace_config(config)).await?;
+    // Um erro do próprio `blocking` (a tarefa falhou) também tem de desfazer os
+    // atalhos, por isso não se usa `?` aqui.
+    let saved: CmdResult<()> = match blocking(move || state_.replace_config(config)).await {
+        Ok(saved) => saved.map(drop).map_err(CommandError::from),
+        Err(e) => Err(e),
+    };
     if let Err(e) = saved {
         // Não conseguimos gravar: repõe o atalho antigo para que o que está ativo
         // continue igual ao que está no disco.
@@ -156,7 +161,7 @@ pub async fn save_settings(
         if now_ok != was_ok {
             state.set_shortcut_ok(now_ok);
         }
-        return Err(e.into());
+        return Err(e);
     }
     // Avisa a barra e o tray (atalho novo, sons) mesmo que o estado do atalho
     // não tenha mudado.
@@ -370,20 +375,22 @@ pub async fn delete_history_entry(
     let state = Arc::clone(&state);
     let state_ = Arc::clone(&state);
     let id_ = id.clone();
-    let removed = blocking(move || state_.history.remove(&id_)).await??;
-    if removed.is_some() {
-        tracing::info!("ditado apagado do histórico");
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(UNDO_AUDIO_FOR).await;
-            let _ = blocking(move || {
-                if let Err(e) = state.history.drop_pending_audio(&id) {
-                    tracing::warn!(error = %e, "não foi possível apagar o áudio do ditado");
-                }
-            })
-            .await;
-        });
-    }
-    Ok(removed)
+    let Some((removed, token)) = blocking(move || state_.history.remove(&id_)).await?? else {
+        return Ok(None);
+    };
+    tracing::info!("ditado apagado do histórico");
+    // O `token` identifica este apagamento: se o ditado for apagado outra vez (e
+    // desfeito), este temporizador não apaga o áudio desse novo "Desfazer".
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(UNDO_AUDIO_FOR).await;
+        let _ = blocking(move || {
+            if let Err(e) = state.history.drop_pending_audio(&id, token) {
+                tracing::warn!(error = %e, "não foi possível apagar o áudio do ditado");
+            }
+        })
+        .await;
+    });
+    Ok(Some(removed))
 }
 
 /// "Desfazer" depois de apagar uma entrada.

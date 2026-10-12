@@ -336,6 +336,11 @@ async fn transcribe_and_paste(
                 };
                 let text = cleaned.unwrap_or(local.text);
                 m.chars = text.chars().count();
+                // O custo da limpeza já está em `m`: o guarda tem de o levar, para
+                // que um cancelamento a seguir o registe.
+                if let Some(guard) = &mut stt_guard {
+                    guard.metrics = Some(m.clone());
+                }
                 // Ponto sem retorno: daqui em diante o Esc já não cancela (a thread
                 // de colagem não se pode parar a meio). Se já foi cancelado, pára aqui.
                 if !commit.try_commit() {
@@ -371,6 +376,7 @@ async fn transcribe_and_paste(
                         app: target.app.clone(),
                         style: cleanup::shown_style(config.cleanup_level, style),
                         instruction: None,
+                        style_used: Some(style),
                     });
                 }
                 outcome
@@ -422,10 +428,13 @@ fn record_in_background(
         if let Some(entry) = history_entry {
             // Os comandos não se reprocessam (precisavam da mesma seleção): o
             // áudio deles não serve para nada.
-            let keep_audio = config.keep_audio && entry.instruction.is_none();
+            let is_command = entry.instruction.is_some();
             match state.history.push(entry, config.history_limit) {
-                Ok(id) if keep_audio => {
-                    if let Err(e) = state.history.save_audio(&id, &rec.wav) {
+                // A opção é lida outra vez dentro do `save_audio_if`, com o lock
+                // trancado: se foi desligada a meio do ditado, não fica WAV.
+                Ok(id) if !is_command => {
+                    let keep = || state.config().keep_audio;
+                    if let Err(e) = state.history.save_audio_if(&id, &rec.wav, keep) {
                         tracing::warn!(error = %e, "não foi possível guardar o áudio do ditado");
                     }
                 }
@@ -572,6 +581,11 @@ pub async fn command(
                         m.cleanup_cost_usd = answer.cost;
                         let text = answer.text;
                         m.chars = text.chars().count();
+                        // Como no ditado: o guarda leva o custo do LLM, se o comando
+                        // for cancelado a seguir.
+                        if let Some(guard) = &mut stt_guard {
+                            guard.metrics = Some(m.clone());
+                        }
                         // Ponto sem retorno, como no ditado.
                         if !commit.try_commit() {
                             tracing::info!("comando cancelado antes de colar");
@@ -579,8 +593,9 @@ pub async fn command(
                         }
                         // A colagem fica com o clipboard de antes da cópia: é
                         // esse que se repõe (ou não, com "deixar no clipboard").
+                        // Sem cópia, lê-se o clipboard atual.
                         let before = match selection.take() {
-                            Some(captured) => paste::Before::Known(captured.into_previous()),
+                            Some(captured) => captured.into_before(),
                             None => paste::Before::ReadNow,
                         };
                         let _ = state
@@ -610,6 +625,7 @@ pub async fn command(
                                 app: target.app.clone(),
                                 style: None,
                                 instruction: Some(instruction),
+                                style_used: None,
                             });
                         }
                         outcome
@@ -665,10 +681,11 @@ pub async fn reprocess(
     let started = Instant::now();
     let config = state.config();
     let rules = state.text_rules();
-    // O estilo do ditado original. Só fica guardado quando mudou alguma coisa;
-    // sem ele, o da app onde foi ditado (o mesmo critério do ditado).
+    // O estilo do ditado original, como foi usado. Entradas antigas, sem ele,
+    // ficam com o da app onde foi ditado (o que se sabe hoje).
     let style = original
-        .style
+        .style_used
+        .or(original.style)
         .unwrap_or_else(|| config.style_for(original.app.as_deref()));
     let plan = cleanup::plan(config.cleanup_level, style);
 
@@ -756,7 +773,15 @@ pub async fn reprocess(
     );
     let budget = config.monthly_budget_usd;
     // Espera-se pela escrita para a página de métricas, ao atualizar, já a ver.
-    let _ = tauri::async_runtime::spawn_blocking(move || record_metrics(&state, &m, budget)).await;
+    // Não conta como ditado novo: só o custo e a linha.
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        match state.metrics.record_reprocess(&m, budget) {
+            Ok(Some(alert)) => state.notify(&alert.message()),
+            Ok(None) => {}
+            Err(e) => tracing::warn!(error = %e, "não foi possível guardar as métricas"),
+        }
+    })
+    .await;
     result
 }
 
