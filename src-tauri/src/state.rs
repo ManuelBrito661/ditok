@@ -21,6 +21,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::{
     config::Config, dictation::DictationEvent, files::FileJobs, history::HistoryStore, hotkey,
     metrics::MetricsStore, overlay, secrets, stt::openrouter::OpenRouter, text::TextRules, tray,
+    usage::UsageStore,
 };
 
 /// Emitido para a janela principal quando as definições mudam por fora dela (ex.:
@@ -61,6 +62,7 @@ pub struct AppState {
     pub log_dir: PathBuf,
     pub http: reqwest::Client,
     pub metrics: MetricsStore,
+    pub usage: UsageStore,
     pub history: HistoryStore,
     /// O ficheiro a ser transcrito (ou o último), ver `files.rs`.
     pub files: FileJobs,
@@ -116,6 +118,7 @@ impl AppState {
             app,
             current: RwLock::new(Current::new(config)),
             metrics: MetricsStore::new(dirs.data.clone()),
+            usage: UsageStore::new(dirs.data.clone()),
             history: HistoryStore::new(dirs.data.clone()),
             files: FileJobs::default(),
             config_dir: dirs.config,

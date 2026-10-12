@@ -24,6 +24,7 @@ mod sysmem;
 mod text;
 mod tray;
 mod updater;
+mod usage;
 
 use std::{
     sync::Arc,
@@ -149,6 +150,10 @@ pub fn run() {
             ));
             // Os comandos da janela recebem o mesmo `Arc` via `State<Arc<AppState>>`.
             app.manage(Arc::clone(&state));
+            // Passa as contas antigas para as estatísticas de uso e apara metrics.jsonl
+            // (fora da thread de arranque: lê um ficheiro).
+            let usage_state = Arc::clone(&state);
+            tauri::async_runtime::spawn_blocking(move || usage_state.usage.startup());
             // O menu do tray nasce com a linha do atalho certa; isto só a marca
             // "ocupado" se for o caso (a barra pede o estado quando carregar).
             state.set_key_set(key_set);
@@ -250,6 +255,8 @@ pub fn run() {
             commands::file_save_beside,
             commands::dictionary_export,
             commands::dictionary_import_preview,
+            commands::usage_summary,
+            commands::usage_clear,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,

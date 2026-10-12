@@ -885,3 +885,29 @@ pub async fn dictionary_import_preview(
     .await??;
     Ok(Some(preview))
 }
+
+// ---------------------------------------------------------------- estatísticas de uso
+
+/// O resumo para a página Métricas: palavras, sequência, mapa de calor, apps.
+#[tauri::command]
+pub async fn usage_summary(state: AppStateRef<'_>) -> CmdResult<crate::usage::UsageSummary> {
+    let state = Arc::clone(&state);
+    blocking(move || {
+        let days = state.usage.load();
+        crate::usage::summarize(
+            &days,
+            chrono::Local::now().date_naive(),
+            state.config().typing_wpm,
+        )
+    })
+    .await
+}
+
+/// "Apagar estatísticas": zera os dias. Os custos e as métricas de tempo ficam.
+#[tauri::command]
+pub async fn usage_clear(state: AppStateRef<'_>) -> CmdResult<()> {
+    let state = Arc::clone(&state);
+    blocking(move || state.usage.clear()).await??;
+    tracing::info!("estatísticas de uso apagadas");
+    Ok(())
+}

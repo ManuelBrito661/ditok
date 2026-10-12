@@ -140,6 +140,16 @@ impl Drop for SttMetricsGuard {
 
 /// Bloqueante. Guarda as métricas e avisa se o orçamento foi ultrapassado.
 fn record_metrics(state: &AppState, m: &DictationMetrics, budget: Option<f64>) {
+    // As estatísticas de uso contam o que correu bem e chegou a ser colado ou copiado.
+    if m.error.is_none() && m.total_ms.is_some() {
+        let day = crate::usage::local_day(m.at);
+        if let Err(e) = state
+            .usage
+            .record(day, m.words as u64, m.audio_ms, m.app.as_deref())
+        {
+            tracing::warn!(error = %e, "não foi possível guardar as estatísticas de uso");
+        }
+    }
     match state.metrics.record(m, budget) {
         Ok(Some(alert)) => {
             tracing::info!(?alert, "aviso de orçamento");
@@ -281,6 +291,7 @@ async fn transcribe_and_paste(
         language: config.language.as_deref(),
     };
     let mut m = new_metrics(stt, &config, &rec, release_to_wav, false);
+    m.app = target.app.as_deref().map(crate::usage::app_key);
     let mut history_entry = None;
     let mut applied = Applied::default();
     let mut stt_guard: Option<SttMetricsGuard> = None;
@@ -335,7 +346,7 @@ async fn transcribe_and_paste(
                     None
                 };
                 let text = cleaned.unwrap_or(local.text);
-                m.chars = text.chars().count();
+                m.set_text(&text);
                 // O custo da limpeza já está em `m`: o guarda tem de o levar, para
                 // que um cancelamento a seguir o registe.
                 if let Some(guard) = &mut stt_guard {
@@ -474,6 +485,8 @@ fn new_metrics(
         cost_usd: None,
         cleanup_cost_usd: None,
         chars: 0,
+        words: 0,
+        app: None,
         generation_id: None,
         file: false,
         command,
@@ -517,6 +530,7 @@ pub async fn command(
         language: config.language.as_deref(),
     };
     let mut m = new_metrics(stt, &config, &rec, release_to_wav, true);
+    m.app = target.app.as_deref().map(crate::usage::app_key);
     let mut history_entry = None;
     let mut stt_guard: Option<SttMetricsGuard> = None;
 
@@ -580,6 +594,8 @@ pub async fn command(
                         m.cleanup_ms = Some(ms(answer.elapsed));
                         m.cleanup_cost_usd = answer.cost;
                         let text = answer.text;
+                        // Só os carateres: o texto é a seleção reescrita, não palavras ditadas
+                        // (as estatísticas contam o ditado, não o que o modelo escreve).
                         m.chars = text.chars().count();
                         // Como no ditado: o guarda leva o custo do LLM, se o comando
                         // for cancelado a seguir.
@@ -710,6 +726,8 @@ pub async fn reprocess(
         cost_usd: None,
         cleanup_cost_usd: None,
         chars: 0,
+        words: 0,
+        app: None,
         generation_id: None,
         file: false,
         command: false,
@@ -749,7 +767,7 @@ pub async fn reprocess(
                     None
                 };
                 let text = cleaned.unwrap_or(local.text);
-                m.chars = text.chars().count();
+                m.set_text(&text);
                 m.total_ms = Some(ms(started.elapsed()));
                 Ok(Reprocessed {
                     raw_text: (text != raw).then_some(raw),

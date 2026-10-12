@@ -310,6 +310,8 @@ async fn run(
         cost_usd: (outcome.cost > 0.0).then_some(outcome.cost),
         cleanup_cost_usd: None,
         chars,
+        words: 0,
+        app: None,
         generation_id: None,
         error: (status == Status::Failed)
             .then(|| message.clone())

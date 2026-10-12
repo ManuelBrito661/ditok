@@ -1115,6 +1115,7 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "bytes",
+ "chrono",
  "cpal",
  "enigo",
  "keyring",

@@ -66,6 +66,9 @@ pub struct Config {
     /// (ver `quick_history.rs`). Vazio = desligado: um atalho global "rouba" a
     /// combinação às outras apps, por isso não há nenhum por omissão.
     pub quick_history_shortcut: String,
+    /// Quantas palavras por minuto escreves à mão; só serve para estimar o tempo
+    /// que o ditado te poupa (página Métricas).
+    pub typing_wpm: u32,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -214,6 +217,7 @@ impl Default for Config {
             voice_commands: true,
             spoken_punctuation: true,
             quick_history_shortcut: String::new(),
+            typing_wpm: 40,
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,
@@ -257,6 +261,8 @@ pub enum ConfigError {
     SameShortcut,
     #[error("o atalho do histórico rápido tem de ser diferente dos de ditado e de comando")]
     QuickShortcutClash,
+    #[error("a velocidade a escrever tem de estar entre 5 e 300 palavras por minuto")]
+    TypingSpeed,
 }
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
@@ -322,6 +328,9 @@ impl Config {
         // Com o modo desligado, o atalho guardado não é registado: pode repetir-se.
         if self.command_enabled && hotkey::same_shortcut(&self.shortcut, &self.command_shortcut) {
             return Err(ConfigError::SameShortcut);
+        }
+        if !(5..=300).contains(&self.typing_wpm) {
+            return Err(ConfigError::TypingSpeed);
         }
         let quick = self.quick_history_shortcut.trim();
         if !quick.is_empty()

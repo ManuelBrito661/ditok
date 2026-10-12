@@ -37,6 +37,12 @@ pub struct DictationMetrics {
     pub cost_usd: Option<f64>,
     pub cleanup_cost_usd: Option<f64>,
     pub chars: usize,
+    /// Palavras do texto colado (ver `set_text`). 0 no modo comando: o texto é a
+    /// seleção reescrita, não palavras ditadas.
+    pub words: usize,
+    /// A app onde o ditado começou (nome normalizado, ver `usage::app_key`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
     pub generation_id: Option<String>,
     pub error: Option<String>,
     /// Transcrição de um ficheiro (`files.rs`), não um ditado: não conta para os
@@ -53,6 +59,21 @@ pub struct DictationMetrics {
 pub struct MonthTotal {
     pub cost_usd: f64,
     pub dictations: u64,
+}
+
+impl DictationMetrics {
+    /// O único sítio que conta o texto: carateres e palavras vêm sempre do mesmo cálculo.
+    pub fn set_text(&mut self, text: &str) {
+        self.chars = text.chars().count();
+        self.words = count_words(text);
+    }
+}
+
+/// Palavras separadas por espaços. "Olá-mundo" conta uma; um número, uma.
+pub fn count_words(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|w| w.chars().any(char::is_alphanumeric))
+        .count()
 }
 
 pub struct MetricsStore {
@@ -171,6 +192,9 @@ pub struct MetricsRow {
     pub file: bool,
     #[serde(default)]
     pub command: bool,
+    /// Só as linhas escritas depois de existir o campo; as antigas têm 0.
+    #[serde(default)]
+    pub chars: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -304,6 +328,8 @@ mod tests {
             cost_usd: cost,
             cleanup_cost_usd: None,
             chars: 80,
+            words: 14,
+            app: None,
             generation_id: Some("gen-1".into()),
             file: false,
             command: false,
