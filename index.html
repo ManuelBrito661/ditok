@@ -387,12 +387,25 @@
               <button id="nd-back" type="button" class="ghost">Voltar</button>
             </div>
             <p id="nd-meta" class="muted"></p>
-            <div class="notes-names">
-              <label>O teu nome <input id="nd-mic" type="text" maxlength="80" /></label>
-              <label>Os outros <input id="nd-system" type="text" maxlength="80" /></label>
+            <details class="nd-names">
+              <summary>Nomes dos intervenientes</summary>
+              <div class="notes-names">
+                <label>O teu nome <input id="nd-mic" type="text" maxlength="80" /></label>
+                <label>Os outros <input id="nd-system" type="text" maxlength="80" /></label>
+              </div>
+              <div id="nd-speakers" class="notes-names" hidden></div>
+            </details>
+            <div class="nd-toolbar">
+              <div class="nd-search">
+                <input id="nd-search" type="search" placeholder="Procurar na transcrição…" aria-label="Procurar na transcrição" autocomplete="off" />
+                <span id="nd-count" class="nd-count" aria-live="polite"></span>
+                <button id="nd-prev" type="button" class="ghost nd-step" aria-label="Resultado anterior" disabled>↑</button>
+                <button id="nd-next" type="button" class="ghost nd-step" aria-label="Resultado seguinte" disabled>↓</button>
+              </div>
+              <label class="notes-check"><input id="nd-times" type="checkbox" checked /> Mostrar horas</label>
             </div>
-            <div id="nd-speakers" class="notes-names" hidden></div>
-            <div id="nd-text" class="transcript notes-transcript" tabindex="0" aria-label="Transcrição"></div>
+            <div id="nd-chips" class="nd-chips" role="group" aria-label="Filtrar por interveniente"></div>
+            <div id="nd-text" class="transcript notes-transcript nd-transcript" tabindex="0" aria-label="Transcrição"></div>
             <div class="file-summary">
               <div class="file-summary-head">
                 <label for="nd-kind" class="row-title">Resumir</label>
