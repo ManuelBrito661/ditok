@@ -3,6 +3,7 @@ mod cleanup;
 mod command;
 mod commands;
 mod config;
+mod dict_io;
 mod dictation;
 mod files;
 mod focus;
@@ -233,6 +234,8 @@ pub fn run() {
             commands::file_status,
             commands::file_clear,
             commands::file_save_beside,
+            commands::dictionary_export,
+            commands::dictionary_import_preview,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,

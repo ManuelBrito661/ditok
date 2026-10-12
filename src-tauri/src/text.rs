@@ -33,7 +33,7 @@ pub struct Replacement {
 
 impl Replacement {
     /// As formas a procurar no texto.
-    fn variants(&self) -> Vec<&str> {
+    pub(crate) fn variants(&self) -> Vec<&str> {
         let variants: Vec<&str> = self
             .from
             .split(',')

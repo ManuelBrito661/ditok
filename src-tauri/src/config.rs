@@ -253,9 +253,9 @@ pub enum ConfigError {
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
 /// config.json editado à mão não pôr o regex a compilar durante segundos.
-const MAX_ENTRIES: usize = 1000;
-const MAX_PHRASE_CHARS: usize = 200;
-const MAX_SNIPPET_CHARS: usize = 5000;
+pub(crate) const MAX_ENTRIES: usize = 1000;
+pub(crate) const MAX_PHRASE_CHARS: usize = 200;
+pub(crate) const MAX_SNIPPET_CHARS: usize = 5000;
 const MAX_STYLES: usize = 200;
 /// Um nome de ficheiro no Windows não passa de 260 caracteres (MAX_PATH).
 const MAX_APP_CHARS: usize = 260;

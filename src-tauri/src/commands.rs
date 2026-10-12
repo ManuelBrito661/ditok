@@ -17,6 +17,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::{
     audio::{self, InputDevice, Recorder, decode},
     config::Config,
+    dict_io,
     dictation::{DictationEvent, pipeline},
     files::{self, JobView},
     history::{self, HistoryEntry, HistoryItem},
@@ -688,4 +689,133 @@ pub async fn file_save_beside(state: AppStateRef<'_>) -> CmdResult<String> {
     let path = blocking(move || state.files.save_beside()).await??;
     tracing::info!(path = %path.display(), "transcrição guardada ao lado do original");
     Ok(path.display().to_string())
+}
+
+// ---------------------------------------------------------------- dicionário
+
+/// O diálogo do sistema para escolher onde guardar. `None` se cancelaste.
+async fn ask_save_path(
+    app: &AppHandle,
+    title: &str,
+    file_name: &str,
+    filter: (&str, &[&str]),
+) -> Option<PathBuf> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .set_file_name(file_name)
+        .add_filter(filter.0, filter.1);
+    if let Some(window) = app.get_webview_window(settings_window::LABEL) {
+        dialog = dialog.set_parent(&window);
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.save_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    rx.await.ok().flatten().and_then(|p| p.into_path().ok())
+}
+
+/// O diálogo do sistema para escolher um ficheiro. `None` se cancelaste.
+async fn ask_open_path(app: &AppHandle, title: &str, filter: (&str, &[&str])) -> Option<PathBuf> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .add_filter(filter.0, filter.1);
+    if let Some(window) = app.get_webview_window(settings_window::LABEL) {
+        dialog = dialog.set_parent(&window);
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.pick_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    rx.await.ok().flatten().and_then(|p| p.into_path().ok())
+}
+
+/// Guarda o dicionário (e, se pedido, as expansões) num ficheiro à escolha.
+/// Devolve o caminho, ou `None` se cancelaste o diálogo.
+#[tauri::command]
+pub async fn dictionary_export(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    format: dict_io::Format,
+    with_snippets: bool,
+) -> CmdResult<Option<String>> {
+    let config = state.config();
+    let name = format!("ditok-dicionario.{}", format.extension());
+    let Some(path) = ask_save_path(
+        &app,
+        "Exportar o dicionário",
+        &name,
+        ("Dicionário", &[format.extension()]),
+    )
+    .await
+    else {
+        return Ok(None);
+    };
+    let target = path.clone();
+    blocking(move || -> CmdResult<()> {
+        let bytes = dict_io::export(&config.dictionary, &config.snippets, format, with_snippets);
+        std::fs::write(&target, bytes)?;
+        Ok(())
+    })
+    .await??;
+    tracing::info!(path = %path.display(), ?format, with_snippets, "dicionário exportado");
+    Ok(Some(path.display().to_string()))
+}
+
+/// O que um ficheiro de dicionário faria às tuas listas, nos dois modos de resolver
+/// conflitos. Nada é gravado: quem grava é a UI, depois de confirmares.
+#[derive(Serialize)]
+pub struct ImportPreview {
+    file_name: String,
+    format: dict_io::Format,
+    /// Entradas do ficheiro que não servem (vazias ou compridas demais).
+    invalid: usize,
+    keep: dict_io::Merged,
+    replace: dict_io::Merged,
+}
+
+/// Escolhe um ficheiro, lê-o e mostra o que mudava. `None` se cancelaste.
+#[tauri::command]
+pub async fn dictionary_import_preview(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+) -> CmdResult<Option<ImportPreview>> {
+    let Some(path) = ask_open_path(
+        &app,
+        "Importar para o dicionário",
+        ("Dicionário (JSON, CSV, TXT)", &["json", "csv", "txt"]),
+    )
+    .await
+    else {
+        return Ok(None);
+    };
+    let config = state.config();
+    let preview = blocking(move || -> CmdResult<ImportPreview> {
+        let format = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(dict_io::Format::from_extension)
+            .ok_or("Formato não suportado: usa um ficheiro .json, .csv ou .txt")?;
+        if std::fs::metadata(&path)?.len() > dict_io::MAX_FILE_BYTES {
+            return Err(dict_io::IoError::TooBig.into());
+        }
+        let parsed = dict_io::parse(&std::fs::read(&path)?, format)?;
+        let merge = |mode| dict_io::merge(&config.dictionary, &config.snippets, &parsed, mode);
+        let keep = merge(dict_io::ImportMode::Keep)?;
+        let replace = merge(dict_io::ImportMode::Replace)?;
+        Ok(ImportPreview {
+            file_name: path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            format,
+            invalid: keep.invalid,
+            keep,
+            replace,
+        })
+    })
+    .await??;
+    Ok(Some(preview))
 }
