@@ -53,6 +53,11 @@ pub struct DictationMetrics {
     /// instrução. Conta como um ditado (número, custo e latência).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub command: bool,
+    /// Um resumo (`summarize.rs`): só interessa o custo (em `cleanup_cost_usd`) e o
+    /// tempo (`cleanup_ms`). Não é um ditado: sem `total_ms`, não conta no número de
+    /// ditados nem nos percentis.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub summary: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -62,6 +67,35 @@ pub struct MonthTotal {
 }
 
 impl DictationMetrics {
+    /// As métricas de um resumo (`summarize.rs`): o custo vai para os campos da
+    /// limpeza, o tempo também, e sem `total_ms` não é contado como ditado.
+    pub fn for_summary(model: &str, chars: usize, elapsed_ms: u64, cost: Option<f64>) -> Self {
+        Self {
+            at: now(),
+            provider: "openrouter",
+            model: model.to_owned(),
+            transport: None,
+            audio_ms: 0,
+            wav_bytes: 0,
+            mic_start_ms: None,
+            release_to_wav_ms: 0,
+            stt_ms: None,
+            cleanup_ms: Some(elapsed_ms),
+            paste_ms: None,
+            total_ms: None,
+            cost_usd: None,
+            cleanup_cost_usd: cost,
+            chars,
+            words: 0,
+            app: None,
+            generation_id: None,
+            error: None,
+            file: false,
+            command: false,
+            summary: true,
+        }
+    }
+
     /// O único sítio que conta o texto: carateres e palavras vêm sempre do mesmo cálculo.
     pub fn set_text(&mut self, text: &str) {
         self.chars = text.chars().count();
@@ -158,7 +192,11 @@ impl MetricsStore {
             .collect();
         rows.reverse(); // mais recente primeiro
 
-        let ok: Vec<&MetricsRow> = rows.iter().filter(|r| r.error.is_none()).collect();
+        // Os ficheiros e os resumos têm custo, mas não latência de ditado.
+        let ok: Vec<&MetricsRow> = rows
+            .iter()
+            .filter(|r| r.error.is_none() && !r.file && !r.summary)
+            .collect();
         let pick = |f: fn(&MetricsRow) -> Option<u64>| {
             percentiles(ok.iter().filter_map(|r| f(r)).collect())
         };
@@ -192,6 +230,8 @@ pub struct MetricsRow {
     pub file: bool,
     #[serde(default)]
     pub command: bool,
+    #[serde(default)]
+    pub summary: bool,
     /// Só as linhas escritas depois de existir o campo; as antigas têm 0.
     #[serde(default)]
     pub chars: usize,
@@ -333,6 +373,7 @@ mod tests {
             generation_id: Some("gen-1".into()),
             file: false,
             command: false,
+            summary: false,
             error: error.map(str::to_owned),
         }
     }
@@ -384,6 +425,41 @@ mod tests {
             "mais recente primeiro"
         );
         assert_eq!(stats.total.map(|p| p.count), Some(2));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn summary_metrics_flag_excluded_from_percentiles() {
+        let dir = std::env::temp_dir().join(format!("ditok-summary-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MetricsStore::new(dir.clone());
+        store.record(&sample(Some(0.0001), None), None).unwrap();
+
+        // Um resumo: custa dinheiro (na linha do custo da limpeza) mas não tem
+        // `total_ms`, por isso não é um ditado.
+        let mut summary = sample(None, None);
+        summary.summary = true;
+        summary.total_ms = None;
+        summary.cleanup_cost_usd = Some(0.002);
+        summary.cleanup_ms = Some(9000);
+        store.record(&summary, None).unwrap();
+
+        let totals = store.months();
+        let month = totals["2026-10"];
+        assert_eq!(month.dictations, 1, "o resumo não conta como ditado");
+        assert!((month.cost_usd - 0.0021).abs() < 1e-12, "mas o custo soma");
+
+        let stats = store.stats(10);
+        assert_eq!(stats.recent.len(), 2);
+        assert!(
+            stats.recent[0].summary,
+            "a linha lê-se de volta com a marca"
+        );
+        assert_eq!(
+            stats.cleanup, None,
+            "os 9 s do resumo não entram nos percentis da limpeza"
+        );
+        assert_eq!(stats.total.map(|p| p.count), Some(1));
         let _ = std::fs::remove_dir_all(dir);
     }
 

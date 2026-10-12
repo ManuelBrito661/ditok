@@ -136,6 +136,19 @@ impl FileJobs {
         Ok(target)
     }
 
+    /// Grava um resumo (Markdown) ao lado do ficheiro original, como
+    /// `<nome> resumo.md`, sem substituir nenhum ficheiro que lá esteja. Bloqueante.
+    pub fn save_summary_beside(&self, summary: &str) -> Result<PathBuf, JobError> {
+        let source = {
+            let current = self.lock();
+            current.as_ref().ok_or(JobError::NoText)?.path.clone()
+        };
+        let dir = source.parent().unwrap_or(Path::new("."));
+        let target = unique_path_ext(dir, &format!("{} resumo", stem(&source)), "md");
+        std::fs::write(&target, summary)?;
+        Ok(target)
+    }
+
     /// Muda a vista e avisa a janela (se estiver aberta).
     fn update(&self, app: &tauri::AppHandle, f: impl FnOnce(&mut JobView)) {
         let view = {
@@ -318,6 +331,7 @@ async fn run(
             .flatten(),
         file: true,
         command: false,
+        summary: false,
     };
     tauri::async_runtime::spawn_blocking(move || {
         match state.metrics.record(&m, config.monthly_budget_usd) {
@@ -589,12 +603,17 @@ fn stem(path: &Path) -> String {
 
 /// `dir/stem.txt`, ou `dir/stem (2).txt`, … se já existir.
 fn unique_path(dir: &Path, stem: &str) -> PathBuf {
-    let first = dir.join(format!("{stem}.txt"));
+    unique_path_ext(dir, stem, "txt")
+}
+
+/// O mesmo com outra extensão (o resumo vai para `.md`).
+fn unique_path_ext(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}.{ext}"));
     if !first.exists() {
         return first;
     }
     (2..)
-        .map(|n| dir.join(format!("{stem} ({n}).txt")))
+        .map(|n| dir.join(format!("{stem} ({n}).{ext}")))
         .find(|p| !p.exists())
         .unwrap_or(first)
 }

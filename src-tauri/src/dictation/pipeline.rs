@@ -491,6 +491,7 @@ fn new_metrics(
         generation_id: None,
         file: false,
         command,
+        summary: false,
         error: None,
     }
 }
@@ -733,6 +734,7 @@ pub async fn reprocess(
         generation_id: None,
         file: false,
         command: false,
+        summary: false,
         error: None,
     };
 

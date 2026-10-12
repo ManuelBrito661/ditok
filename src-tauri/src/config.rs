@@ -69,6 +69,8 @@ pub struct Config {
     /// Quantas palavras por minuto escreves à mão; só serve para estimar o tempo
     /// que o ditado te poupa (página Métricas).
     pub typing_wpm: u32,
+    /// Modelo de texto dos resumos; vazio = o da limpeza (`cleanup_model`).
+    pub summary_model: String,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -218,6 +220,7 @@ impl Default for Config {
             spoken_punctuation: true,
             quick_history_shortcut: String::new(),
             typing_wpm: 40,
+            summary_model: String::new(),
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,
@@ -263,6 +266,10 @@ pub enum ConfigError {
     QuickShortcutClash,
     #[error("a velocidade a escrever tem de estar entre 5 e 300 palavras por minuto")]
     TypingSpeed,
+    #[error(
+        "o modelo dos resumos tem de ser o slug completo, com \"/\" (ex.: {DEFAULT_CLEANUP_MODEL}), ou ficar vazio"
+    )]
+    SummaryModel,
 }
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
@@ -329,6 +336,10 @@ impl Config {
         if self.command_enabled && hotkey::same_shortcut(&self.shortcut, &self.command_shortcut) {
             return Err(ConfigError::SameShortcut);
         }
+        let summary = self.summary_model.trim();
+        if !summary.is_empty() && !slug_ok(summary) {
+            return Err(ConfigError::SummaryModel);
+        }
         if !(5..=300).contains(&self.typing_wpm) {
             return Err(ConfigError::TypingSpeed);
         }
@@ -357,6 +368,16 @@ impl Config {
             }
         }
         Ok(())
+    }
+
+    /// O modelo dos resumos: o escolhido, ou o da limpeza se estiver vazio.
+    pub fn effective_summary_model(&self) -> &str {
+        let model = self.summary_model.trim();
+        if model.is_empty() {
+            &self.cleanup_model
+        } else {
+            model
+        }
     }
 
     /// O estilo para a app onde o ditado começou. Sem app conhecida (macOS, ou
@@ -624,6 +645,20 @@ mod tests {
             ..Config::default()
         };
         assert!(off.validate().is_ok());
+    }
+
+    #[test]
+    fn summary_model_falls_back_to_the_cleanup_model() {
+        let mut c = Config::default();
+        assert!(c.summary_model.is_empty());
+        assert_eq!(c.effective_summary_model(), c.cleanup_model);
+        c.summary_model = "  anthropic/claude-haiku-4.5 ".into();
+        assert_eq!(c.effective_summary_model(), "anthropic/claude-haiku-4.5");
+        assert!(c.validate().is_ok());
+        c.summary_model = "sem barra".into();
+        assert!(matches!(c.validate(), Err(ConfigError::SummaryModel)));
+        c.summary_model = "   ".into();
+        assert!(c.validate().is_ok(), "só espaços conta como vazio");
     }
 
     #[test]

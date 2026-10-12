@@ -927,3 +927,68 @@ pub async fn usage_clear(state: AppStateRef<'_>) -> CmdResult<()> {
     tracing::info!("estatísticas de uso apagadas");
     Ok(())
 }
+
+// ---------------------------------------------------------------- resumos
+
+/// Um resumo pronto, com o que custou.
+#[derive(Serialize)]
+pub struct SummaryOut {
+    text: String,
+    model: String,
+    cost_usd: Option<f64>,
+    seconds: f64,
+}
+
+/// Resume um texto (a transcrição de um ficheiro, um ditado comprido) com o modelo
+/// dos resumos. O texto vai ao OpenRouter: quem chama (a janela) só o faz quando
+/// carregas em "Resumir". O custo entra nas métricas e no orçamento do mês.
+#[tauri::command]
+pub async fn summarize_text(
+    state: AppStateRef<'_>,
+    text: String,
+    kind: crate::summarize::Kind,
+) -> CmdResult<SummaryOut> {
+    let config = state.config();
+    let state_ = Arc::clone(&state);
+    let openrouter = blocking(move || state_.load_openrouter())
+        .await??
+        .ok_or(MISSING_KEY)?;
+    let model = config.effective_summary_model().to_owned();
+    let summary = crate::summarize::summarize(&openrouter, &model, kind, &text).await?;
+    let metrics = crate::metrics::DictationMetrics::for_summary(
+        &model,
+        text.chars().count(),
+        summary.elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+        summary.cost,
+    );
+    let budget = config.monthly_budget_usd;
+    let state_ = Arc::clone(&state);
+    match blocking(move || state_.metrics.record(&metrics, budget)).await? {
+        Ok(Some(alert)) => state.notify(&alert.message()),
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "não foi possível guardar as métricas do resumo"),
+    }
+    tracing::info!(
+        ?kind,
+        model = %model,
+        chars = text.chars().count(),
+        seconds = summary.elapsed.as_secs_f64(),
+        cost_usd = summary.cost,
+        "resumo"
+    );
+    Ok(SummaryOut {
+        text: summary.text,
+        model,
+        cost_usd: summary.cost,
+        seconds: summary.elapsed.as_secs_f64(),
+    })
+}
+
+/// Guarda o resumo (Markdown) ao lado do ficheiro transcrito; devolve o caminho.
+#[tauri::command]
+pub async fn file_save_summary(state: AppStateRef<'_>, text: String) -> CmdResult<String> {
+    let state = Arc::clone(&state);
+    let path = blocking(move || state.files.save_summary_beside(&text)).await??;
+    tracing::info!(path = %path.display(), "resumo guardado ao lado do original");
+    Ok(path.display().to_string())
+}

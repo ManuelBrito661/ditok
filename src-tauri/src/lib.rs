@@ -20,6 +20,7 @@ mod settings_window;
 mod sound;
 mod state;
 mod stt;
+mod summarize;
 mod sysmem;
 mod text;
 mod tray;
@@ -258,6 +259,8 @@ pub fn run() {
             commands::usage_summary,
             commands::usage_clear,
             commands::correct_history_entry,
+            commands::summarize_text,
+            commands::file_save_summary,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,
