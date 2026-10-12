@@ -36,6 +36,8 @@ pub const DEFAULT_COMMAND_SHORTCUT: &str = "CommandOrControl+Shift+Alt+Space";
 /// corre noutra thread e só recebe o atalho premido: compara-o com isto para
 /// saber o modo. Um atómico chega (é só um número) e dispensa um `Mutex`.
 static COMMAND_ID: AtomicU64 = AtomicU64::new(NO_COMMAND);
+/// O mesmo para o atalho do histórico rápido.
+static QUICK_ID: AtomicU64 = AtomicU64::new(NO_COMMAND);
 /// Fora do intervalo de um `u32`, por isso nunca é o `id()` de um atalho.
 const NO_COMMAND: u64 = u64::MAX;
 
@@ -84,6 +86,11 @@ pub fn plugin<R: Runtime>(tx: UnboundedSender<DictationEvent>) -> TauriPlugin<R>
                     return;
                 }
                 DictationEvent::Cancel
+            } else if u64::from(shortcut.id()) == QUICK_ID.load(Ordering::Relaxed) {
+                if !pressed {
+                    return;
+                }
+                DictationEvent::QuickHistory
             } else {
                 let mode = if u64::from(shortcut.id()) == COMMAND_ID.load(Ordering::Relaxed) {
                     Mode::Command
@@ -275,6 +282,58 @@ pub fn change_command<R: Runtime>(
     Ok(())
 }
 
+/// Regista o atalho do histórico rápido (no arranque).
+pub fn register_quick<R: Runtime>(app: &AppHandle<R>, shortcut: &str) -> Result<(), HotkeyError> {
+    change_quick(app, None, Some(shortcut))
+}
+
+/// Troca o atalho do histórico rápido: `old` é o que está registado agora e `new`
+/// o que passa a estar (`None` = desligar). Como nos outros, regista o novo antes
+/// de largar o antigo. Só aceita combinações com tecla: os atalhos só de
+/// modificadores (`modkeys`) têm dois lugares, o do ditado e o do comando.
+pub fn change_quick<R: Runtime>(
+    app: &AppHandle<R>,
+    old: Option<&str>,
+    new: Option<&str>,
+) -> Result<(), HotkeyError> {
+    let old_key = old.and_then(parse_loose).and_then(|p| match p {
+        Parsed::Key(key) => Some(key),
+        Parsed::Mods(_) => None,
+    });
+    let new_key = new.map(parse_quick).transpose()?;
+    if old_key == new_key {
+        return Ok(());
+    }
+    if let Some(key) = new_key {
+        app.global_shortcut()
+            .register(key)
+            .map_err(|source| HotkeyError::Register {
+                shortcut: new.unwrap_or_default().to_owned(),
+                source,
+            })?;
+    }
+    if let Some(key) = old_key
+        && let Err(e) = app.global_shortcut().unregister(key)
+    {
+        tracing::warn!(error = %e, "não foi possível largar o atalho antigo do histórico rápido");
+    }
+    let id = new_key.map_or(NO_COMMAND, |key| u64::from(key.id()));
+    QUICK_ID.store(id, Ordering::Relaxed);
+    tracing::info!(?old, ?new, "atalho do histórico rápido");
+    Ok(())
+}
+
+fn parse_quick(shortcut: &str) -> Result<Shortcut, HotkeyError> {
+    match parse(shortcut)? {
+        Parsed::Key(key) => Ok(key),
+        Parsed::Mods(_) => Err(HotkeyError::Invalid {
+            shortcut: shortcut.to_owned(),
+            reason: "o histórico rápido precisa de uma tecla (ex.: Ctrl+Shift+H), não só de modificadores"
+                .into(),
+        }),
+    }
+}
+
 /// Os dois textos são o mesmo atalho? ("Control+Shift+Space" e
 /// "CommandOrControl+Shift+Space" são, no Windows.) Textos inválidos nunca são
 /// iguais: a validação deles é feita ao registar.
@@ -410,6 +469,20 @@ mod tests {
         assert!(!same_shortcut("Control+Super", "Control+Alt"));
         assert!(!same_shortcut("Control+Super", "Control+Shift+Space"));
         assert!(!same_shortcut(DEFAULT_SHORTCUT, DEFAULT_COMMAND_SHORTCUT));
+    }
+
+    #[test]
+    fn quick_history_needs_a_key_not_only_modifiers() {
+        assert!(parse_quick("Control+Shift+KeyH").is_ok());
+        assert!(parse_quick("F13").is_ok());
+        assert!(matches!(
+            parse_quick("Control+Alt"),
+            Err(HotkeyError::Invalid { .. })
+        ));
+        assert!(matches!(
+            parse_quick("KeyH"),
+            Err(HotkeyError::Invalid { .. })
+        ));
     }
 
     #[test]

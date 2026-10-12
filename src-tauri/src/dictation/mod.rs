@@ -75,6 +75,10 @@ pub enum DictationEvent {
     LastText(String),
     /// "Colar o último ditado" no menu do tray ou da barra.
     PasteLast,
+    /// O atalho do histórico rápido: abre o menu com os últimos ditados.
+    QuickHistory,
+    /// Um ditado escolhido no histórico rápido: cola-o onde estavas.
+    PasteText(String),
     /// A colagem pedida por `PasteLast` acabou.
     PastedAgain(Outcome),
     /// O histórico foi apagado: o último ditado também é esquecido.
@@ -257,6 +261,19 @@ impl Orchestrator {
             }
             DictationEvent::PasteLast => {
                 self.paste_last();
+                return;
+            }
+            DictationEvent::QuickHistory => {
+                // A meio de um ditado o atalho não faz nada: o alvo seria o próprio menu.
+                if self.machine.phase() == Phase::Idle {
+                    crate::quick_history::open(&app);
+                } else {
+                    tracing::info!("histórico rápido pedido a meio de um ditado; ignorado");
+                }
+                return;
+            }
+            DictationEvent::PasteText(text) => {
+                self.paste_text(text);
                 return;
             }
             DictationEvent::PastedAgain(outcome) => {
@@ -482,14 +499,20 @@ impl Orchestrator {
     /// menu; se não houver nenhuma (ex.: o menu foi aberto pelo teclado), fica só
     /// no clipboard e a barra diz "Copiado".
     fn paste_last(&mut self) {
-        if self.machine.phase() != Phase::Idle {
-            tracing::info!("colar o último ditado pedido a meio de um ditado; ignorado");
-            return;
-        }
         let Some(text) = self.last_text.clone() else {
             tracing::debug!("colar o último ditado pedido sem ditado guardado");
             return;
         };
+        self.paste_text(text);
+    }
+
+    /// Cola `text` (o último ditado ou uma entrada do histórico rápido) na janela
+    /// onde estavas antes de abrir o menu.
+    fn paste_text(&mut self, text: String) {
+        if self.machine.phase() != Phase::Idle {
+            tracing::info!("colagem pedida a meio de um ditado; ignorada");
+            return;
+        }
         let target = crate::tray::take_menu_target().or_else(focus::foreground_for_retry);
         let state = Arc::clone(&self.deps.state);
         let tx = self.tx.clone();

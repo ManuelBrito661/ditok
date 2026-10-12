@@ -77,6 +77,8 @@ pub struct SettingsView {
     shortcut_ok: bool,
     /// O atalho de comando está registado (ou o modo está desligado).
     command_ok: bool,
+    /// O atalho do histórico rápido está registado (ou não há atalho).
+    quick_ok: bool,
     autostart: bool,
     paths: Paths,
 }
@@ -89,6 +91,7 @@ async fn settings_view(app: &AppHandle, state: &Arc<AppState>) -> CmdResult<Sett
         api_key_set,
         shortcut_ok: state.shortcut_ok(),
         command_ok: state.command_ok(),
+        quick_ok: state.quick_ok(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         paths: Paths {
             config: Config::path(&state.config_dir).display().to_string(),
@@ -113,6 +116,13 @@ pub async fn save_settings(
     let current = state.config();
     // O atalho de comando primeiro: se falhar, ainda não mexemos em nada.
     let command = apply_command_shortcut(&app, &state, &current, &config)?;
+    let quick = match apply_quick_shortcut(&app, &state, &current, &config) {
+        Ok(quick) => quick,
+        Err(e) => {
+            command.undo(&app, &state);
+            return Err(e.into());
+        }
+    };
     // O atalho estava a funcionar antes desta gravação? (Se não, o antigo não
     // está registado e não há nada para largar nem para repor.)
     let was_ok = state.shortcut_ok();
@@ -126,6 +136,7 @@ pub async fn save_settings(
         };
         if let Err(e) = changed {
             command.undo(&app, &state);
+            quick.undo(&app, &state);
             return Err(e.into());
         }
         now_ok = true;
@@ -159,6 +170,7 @@ pub async fn save_settings(
             }
         }
         command.undo(&app, &state);
+        quick.undo(&app, &state);
         if now_ok != was_ok {
             state.set_shortcut_ok(now_ok);
         }
@@ -245,6 +257,60 @@ fn apply_command_shortcut(
     };
     state.set_command_ok(now_ok);
     Ok(CommandChange {
+        before,
+        after,
+        was_ok,
+    })
+}
+
+/// O que `apply_quick_shortcut` mudou, para o poder desfazer (como `CommandChange`).
+struct QuickChange {
+    /// Atalho registado antes e depois (`None` = nenhum).
+    before: Option<String>,
+    after: Option<String>,
+    was_ok: bool,
+}
+
+impl QuickChange {
+    fn undo(&self, app: &AppHandle, state: &AppState) {
+        if self.before != self.after
+            && let Err(e) = hotkey::change_quick(app, self.after.as_deref(), self.before.as_deref())
+        {
+            tracing::warn!(error = %e, "não foi possível repor o atalho do histórico rápido");
+        }
+        state.set_quick_ok(self.was_ok);
+    }
+}
+
+/// O atalho do histórico rápido: vazio no config é "desligado". Como no comando,
+/// um atalho novo ocupado por outra app é um erro; o mesmo atalho, antes ocupado,
+/// só volta a ser tentado em silêncio.
+fn apply_quick_shortcut(
+    app: &AppHandle,
+    state: &AppState,
+    current: &Config,
+    config: &Config,
+) -> Result<QuickChange, hotkey::HotkeyError> {
+    let non_empty = |s: &str| Some(s.trim().to_owned()).filter(|s| !s.is_empty());
+    let was_ok = state.quick_ok();
+    let saved = non_empty(&current.quick_history_shortcut);
+    // O que está mesmo registado agora: com o atalho ocupado, nada.
+    let before = saved.clone().filter(|_| was_ok);
+    let wanted = non_empty(&config.quick_history_shortcut);
+    let (after, now_ok) = if before == wanted {
+        (before.clone(), was_ok || wanted.is_none())
+    } else if wanted.is_some() && wanted == saved {
+        // Estava ocupado e continua igual: tenta outra vez, sem erro se falhar.
+        match hotkey::change_quick(app, None, wanted.as_deref()) {
+            Ok(()) => (wanted, true),
+            Err(_) => (None, false),
+        }
+    } else {
+        hotkey::change_quick(app, before.as_deref(), wanted.as_deref())?;
+        (wanted, true)
+    };
+    state.set_quick_ok(now_ok);
+    Ok(QuickChange {
         before,
         after,
         was_ok,

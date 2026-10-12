@@ -14,6 +14,7 @@ mod metrics;
 mod modkeys;
 mod overlay;
 mod paste;
+mod quick_history;
 pub mod secrets;
 mod settings_window;
 mod sound;
@@ -121,6 +122,18 @@ pub fn run() {
                     }
                 };
 
+            // O histórico rápido é opcional: sem atalho no config, nada a registar; com
+            // o atalho ocupado, fica só o aviso nas definições.
+            let quick = config.quick_history_shortcut.trim().to_owned();
+            let quick_ok = quick.is_empty()
+                || match hotkey::register_quick(app.handle(), &quick) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "sem atalho do histórico rápido");
+                        false
+                    }
+                };
+
             let dirs = state::Dirs {
                 config: config_dir,
                 data: paths.app_data_dir()?,
@@ -140,6 +153,7 @@ pub fn run() {
             // "ocupado" se for o caso (a barra pede o estado quando carregar).
             state.set_key_set(key_set);
             state.set_command_ok(command_ok);
+            state.set_quick_ok(quick_ok);
             state.set_shortcut_ok(shortcut_ok);
             if !shortcut_ok {
                 let shortcut = hotkey::pretty(&state.config().shortcut);

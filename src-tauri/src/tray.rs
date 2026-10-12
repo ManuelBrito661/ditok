@@ -273,6 +273,13 @@ impl Tray {
                         let _ = events.send(DictationEvent::Retry);
                     }
                     MENU_MUTE => toggle_sounds(app),
+                    // Uma linha do histórico rápido (menu aberto por `quick_history::open`).
+                    id if id.starts_with(crate::quick_history::ID_PREFIX) => {
+                        crate::quick_history::chosen(
+                            app,
+                            &id[crate::quick_history::ID_PREFIX.len()..],
+                        );
+                    }
                     MENU_QUIT => {
                         tracing::info!("menu: sair");
                         // `exit(0)` passa um código ao ExitRequested; é assim que o

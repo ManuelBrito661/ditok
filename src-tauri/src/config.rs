@@ -61,6 +61,11 @@ pub struct Config {
     /// "vírgula", "ponto de interrogação", "abre aspas"… viram a pontuação (ver
     /// `text.rs`). Um config.json antigo, sem o campo, recebe o valor por omissão.
     pub spoken_punctuation: bool,
+    /// Histórico rápido: com este atalho (uma combinação com tecla) abre-se um menu
+    /// junto ao cursor com os últimos ditados, e o escolhido é colado onde estavas
+    /// (ver `quick_history.rs`). Vazio = desligado: um atalho global "rouba" a
+    /// combinação às outras apps, por isso não há nenhum por omissão.
+    pub quick_history_shortcut: String,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -208,6 +213,7 @@ impl Default for Config {
             show_overlay: true,
             voice_commands: true,
             spoken_punctuation: true,
+            quick_history_shortcut: String::new(),
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,
@@ -249,6 +255,8 @@ pub enum ConfigError {
     TooManyStyles,
     #[error("o atalho de comando tem de ser diferente do atalho de ditado")]
     SameShortcut,
+    #[error("o atalho do histórico rápido tem de ser diferente dos de ditado e de comando")]
+    QuickShortcutClash,
 }
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
@@ -314,6 +322,13 @@ impl Config {
         // Com o modo desligado, o atalho guardado não é registado: pode repetir-se.
         if self.command_enabled && hotkey::same_shortcut(&self.shortcut, &self.command_shortcut) {
             return Err(ConfigError::SameShortcut);
+        }
+        let quick = self.quick_history_shortcut.trim();
+        if !quick.is_empty()
+            && (hotkey::same_shortcut(quick, &self.shortcut)
+                || (self.command_enabled && hotkey::same_shortcut(quick, &self.command_shortcut)))
+        {
+            return Err(ConfigError::QuickShortcutClash);
         }
         if self.styles.len() > MAX_STYLES {
             return Err(ConfigError::TooManyStyles);
@@ -600,6 +615,31 @@ mod tests {
             ..Config::default()
         };
         assert!(off.validate().is_ok());
+    }
+
+    #[test]
+    fn quick_history_is_off_by_default_and_must_differ_from_the_other_shortcuts() {
+        let c = Config::default();
+        assert!(
+            c.quick_history_shortcut.is_empty(),
+            "sem atalho por omissão"
+        );
+        assert!(c.validate().is_ok());
+        let clash = Config {
+            quick_history_shortcut: c.command_shortcut.clone(),
+            ..Config::default()
+        };
+        assert!(matches!(
+            clash.validate(),
+            Err(ConfigError::QuickShortcutClash)
+        ));
+        // Com o modo comando desligado, o atalho dele não está registado: pode repetir-se.
+        let free = Config {
+            quick_history_shortcut: c.command_shortcut.clone(),
+            command_enabled: false,
+            ..Config::default()
+        };
+        assert!(free.validate().is_ok());
     }
 
     #[test]

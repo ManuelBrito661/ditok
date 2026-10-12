@@ -42,6 +42,10 @@ pub struct Status {
     pub command_label: Option<String>,
     /// `false` só quando o modo comando está ligado e outra app tem o atalho.
     pub command_ok: bool,
+    /// O atalho do histórico rápido, legível; `None` sem atalho.
+    pub quick_label: Option<String>,
+    /// `false` só quando há atalho do histórico rápido e outra app o tem.
+    pub quick_ok: bool,
 }
 
 pub struct AppState {
@@ -68,6 +72,8 @@ pub struct AppState {
     shortcut_ok: AtomicBool,
     /// O atalho de comando não está em falta (desligado conta como "ok").
     command_ok: AtomicBool,
+    /// O atalho do histórico rápido não está em falta (sem atalho conta como "ok").
+    quick_ok: AtomicBool,
     /// As últimas apps onde ditaste, mais recente primeiro. Só em memória (nunca
     /// em disco): servem para a janela de definições propor "Usar esta app" sem
     /// teres de saber o nome do executável. Um `Mutex` chega: é tocado uma vez
@@ -121,6 +127,7 @@ impl AppState {
             key_set: AtomicBool::new(false),
             shortcut_ok: AtomicBool::new(true),
             command_ok: AtomicBool::new(true),
+            quick_ok: AtomicBool::new(true),
             recent_apps: Mutex::new(VecDeque::new()),
         }
     }
@@ -137,6 +144,10 @@ impl AppState {
                 .command_enabled
                 .then(|| hotkey::pretty(&config.command_shortcut)),
             command_ok: self.command_ok(),
+            quick_label: Some(config.quick_history_shortcut.trim())
+                .filter(|s| !s.is_empty())
+                .map(hotkey::pretty),
+            quick_ok: self.quick_ok(),
         }
     }
 
@@ -152,6 +163,15 @@ impl AppState {
     /// coisas de uma vez e avisam uma só vez).
     pub fn set_command_ok(&self, ok: bool) {
         self.command_ok.store(ok, Ordering::Relaxed);
+    }
+
+    pub fn quick_ok(&self) -> bool {
+        self.quick_ok.load(Ordering::Relaxed)
+    }
+
+    /// Como `set_command_ok`: só guarda; quem chama faz `publish`.
+    pub fn set_quick_ok(&self, ok: bool) {
+        self.quick_ok.store(ok, Ordering::Relaxed);
     }
 
     pub fn set_key_set(&self, set: bool) {
