@@ -19,8 +19,16 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::Config, dictation::DictationEvent, files::FileJobs, history::HistoryStore, hotkey,
-    metrics::MetricsStore, overlay, secrets, stt::openrouter::OpenRouter, text::TextRules, tray,
+    config::Config,
+    dictation::DictationEvent,
+    files::FileJobs,
+    history::HistoryStore,
+    hotkey,
+    metrics::MetricsStore,
+    overlay, secrets,
+    stt::{Providers, openrouter::OpenRouter},
+    text::TextRules,
+    tray,
     usage::UsageStore,
 };
 
@@ -225,6 +233,15 @@ impl AppState {
         new.config.save(&self.config_dir)?;
         *guard = new;
         Ok(Arc::clone(&guard.config))
+    }
+
+    /// Os clientes de um ditado (transcrição e texto). Sem chave, `Ok(None)`.
+    pub fn load_providers(&self) -> Result<Option<Providers>, secrets::SecretError> {
+        Ok(self.load_openrouter()?.map(|llm| Providers {
+            // O mesmo cliente a fazer de `dyn SttProvider` (coerção de `Arc`).
+            stt: llm.clone(),
+            llm,
+        }))
     }
 
     /// Cria o cliente do OpenRouter se a chave existir no cofre. `Ok(None)` = sem chave.

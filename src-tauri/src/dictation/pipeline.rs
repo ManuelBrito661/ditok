@@ -25,7 +25,7 @@ use crate::{
     metrics::{self, DictationMetrics},
     paste,
     state::AppState,
-    stt::{SttError, SttProvider, SttRequest, openrouter::OpenRouter},
+    stt::{Providers, SttError, SttProvider, SttRequest, openrouter::OpenRouter},
     text::{Applied, Processed, TextRules},
 };
 
@@ -169,7 +169,7 @@ fn record_metrics(state: &AppState, m: &DictationMetrics, budget: Option<f64>) {
 /// ainda for ela, ver `focus.rs`) e a app dona dela (decide o estilo).
 pub async fn process(
     state: Arc<AppState>,
-    openrouter: Arc<OpenRouter>,
+    providers: Providers,
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
     target: focus::Target,
@@ -181,7 +181,7 @@ pub async fn process(
     };
     transcribe_and_paste(
         state,
-        openrouter,
+        providers,
         rec,
         released_at,
         release_to_wav,
@@ -244,7 +244,7 @@ async fn ready_recording(
 /// métricas contam a partir de agora (o tempo de gravação já passou há muito).
 pub async fn retry(
     state: Arc<AppState>,
-    openrouter: Arc<OpenRouter>,
+    providers: Providers,
     rec: Recording,
     target: focus::Target,
     commit: Commit,
@@ -255,7 +255,7 @@ pub async fn retry(
     );
     transcribe_and_paste(
         state,
-        openrouter,
+        providers,
         rec,
         Instant::now(),
         Duration::ZERO,
@@ -268,7 +268,7 @@ pub async fn retry(
 /// Do pedido STT à colagem, para uma gravação que já sabemos ter voz.
 async fn transcribe_and_paste(
     state: Arc<AppState>,
-    openrouter: Arc<OpenRouter>,
+    providers: Providers,
     rec: Recording,
     released_at: Instant,
     release_to_wav: Duration,
@@ -285,7 +285,7 @@ async fn transcribe_and_paste(
 
     // O pipeline fala com o STT através do trait; o tipo concreto só é preciso
     // para a limpeza, que é uma funcionalidade específica do OpenRouter.
-    let stt: &dyn SttProvider = &*openrouter;
+    let stt: &dyn SttProvider = &*providers.stt;
     let req = SttRequest {
         model: &config.stt_model,
         language: config.language.as_deref(),
@@ -333,7 +333,7 @@ async fn transcribe_and_paste(
                     && let Some(input) = local.cleanup_input()
                 {
                     clean_with_llm(
-                        &openrouter,
+                        &providers.llm,
                         &config.cleanup_model,
                         plan,
                         &rules,
@@ -505,7 +505,7 @@ fn new_metrics(
 /// clipboard já mexido pela cópia da seleção (ver `selection.rs`).
 pub async fn command(
     state: Arc<AppState>,
-    openrouter: Arc<OpenRouter>,
+    providers: Providers,
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
     target: focus::Target,
@@ -526,7 +526,7 @@ pub async fn command(
         return Outcome::failed(FailReason::NoModel);
     }
 
-    let stt: &dyn SttProvider = &*openrouter;
+    let stt: &dyn SttProvider = &*providers.stt;
     let req = SttRequest {
         model: &config.stt_model,
         language: config.language.as_deref(),
@@ -581,7 +581,8 @@ pub async fn command(
                     selection_chars = chars,
                     "a pedir o comando ao LLM"
                 );
-                match command::run(&openrouter, &model, &instruction, selected.as_deref()).await {
+                match command::run(&providers.llm, &model, &instruction, selected.as_deref()).await
+                {
                     Err(e) => {
                         tracing::error!(error = %e, model, "comando falhou");
                         state.notify(&format!("O comando falhou: {e}"));
@@ -693,7 +694,7 @@ pub struct Reprocessed {
 /// `Err` traz uma frase pronta a mostrar.
 pub async fn reprocess(
     state: Arc<AppState>,
-    openrouter: Arc<OpenRouter>,
+    providers: Providers,
     wav: bytes::Bytes,
     original: &HistoryEntry,
 ) -> Result<Reprocessed, String> {
@@ -708,7 +709,7 @@ pub async fn reprocess(
         .unwrap_or_else(|| config.style_for(original.app.as_deref()));
     let plan = cleanup::plan(config.cleanup_level, style);
 
-    let stt: &dyn SttProvider = &*openrouter;
+    let stt: &dyn SttProvider = &*providers.stt;
     let req = SttRequest {
         model: &config.stt_model,
         language: config.language.as_deref(),
@@ -758,7 +759,7 @@ pub async fn reprocess(
                     && let Some(input) = local.cleanup_input()
                 {
                     clean_with_llm(
-                        &openrouter,
+                        &providers.llm,
                         &config.cleanup_model,
                         plan,
                         &rules,

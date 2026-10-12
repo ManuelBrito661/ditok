@@ -496,10 +496,10 @@ pub async fn reprocess_history_entry(
     })
     .await??;
     let state_ = Arc::clone(&state);
-    let openrouter = blocking(move || state_.load_openrouter())
+    let providers = blocking(move || state_.load_providers())
         .await??
         .ok_or(MISSING_KEY)?;
-    let new = pipeline::reprocess(Arc::clone(&state), openrouter, wav.into(), &entry).await?;
+    let new = pipeline::reprocess(Arc::clone(&state), providers, wav.into(), &entry).await?;
     let state_ = Arc::clone(&state);
     let updated = blocking(move || {
         state_.history.update(&id, |e| {
@@ -741,12 +741,12 @@ pub async fn file_pick(app: AppHandle) -> CmdResult<Option<String>> {
 pub async fn file_start(state: AppStateRef<'_>, path: String) -> CmdResult<JobView> {
     let path = PathBuf::from(path);
     let state_ = Arc::clone(&state);
-    let openrouter = blocking(move || state_.load_openrouter())
+    let providers = blocking(move || state_.load_providers())
         .await??
         .ok_or(MISSING_KEY)?;
     let probe_path = path.clone();
     let info = blocking(move || decode::probe(&probe_path)).await??;
-    Ok(files::start(state.inner(), openrouter, path, info)?)
+    Ok(files::start(state.inner(), providers.stt, path, info)?)
 }
 
 #[tauri::command]

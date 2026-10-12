@@ -4,6 +4,7 @@
 //! deste áudio". Cada provider (OpenRouter, Groq, …) implementa-o à sua maneira e o
 //! resto do código não muda quando se acrescenta um novo.
 
+pub mod job;
 pub mod models;
 pub mod openrouter;
 
@@ -118,6 +119,18 @@ pub trait SttProvider: Send + Sync {
         audio: Bytes,
         req: &SttRequest<'_>,
     ) -> Result<Transcription, SttError>;
+}
+
+/// O que um ditado precisa para falar com o exterior: quem transcreve e quem
+/// trata o texto (limpeza, comandos, resumos). Hoje são o mesmo cliente do
+/// OpenRouter, mas são coisas diferentes: um motor de transcrição local não tem
+/// de substituir o LLM, e o `stt` já é um `dyn SttProvider` para isso mesmo.
+///
+/// `Clone` é barato: são dois `Arc`.
+#[derive(Clone)]
+pub struct Providers {
+    pub stt: std::sync::Arc<dyn SttProvider>,
+    pub llm: std::sync::Arc<openrouter::OpenRouter>,
 }
 
 /// Cliente HTTP partilhado por todos os providers. O `reqwest::Client` mantém um

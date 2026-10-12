@@ -25,7 +25,7 @@ use crate::{
     focus, hotkey,
     sound::{Cue, Sounds},
     state::{AppState, MISSING_KEY},
-    stt::{SttProvider, openrouter::OpenRouter},
+    stt::Providers,
     tray::{Tray, TrayState},
 };
 use failure::FailReason;
@@ -123,7 +123,7 @@ struct Orchestrator {
     machine: Machine,
     /// Criado já se a chave existir; senão, volta a tentar-se a cada ditado (assim
     /// podes guardar a chave sem reiniciar a app).
-    openrouter: Option<Arc<OpenRouter>>,
+    providers: Option<Providers>,
     /// Janela em primeiro plano quando a gravação começou (é lá que se cola) e a
     /// app dona dela (decide o estilo).
     target: focus::Target,
@@ -162,7 +162,7 @@ async fn run(
     tx: UnboundedSender<DictationEvent>,
     mut rx: UnboundedReceiver<DictationEvent>,
 ) {
-    let openrouter = load_openrouter(&deps.state);
+    let providers = load_providers(&deps.state);
     // O ditado mais recente do histórico (ler o ficheiro é disco: `spawn_blocking`).
     let state = Arc::clone(&deps.state);
     let last_text = tauri::async_runtime::spawn_blocking(move || {
@@ -180,7 +180,7 @@ async fn run(
         deps,
         tx,
         machine: Machine::default(),
-        openrouter,
+        providers,
         target: focus::Target::default(),
         selection: None,
         job: None,
@@ -246,7 +246,7 @@ impl Orchestrator {
             DictationEvent::ProviderChanged => {
                 // Um ditado em curso já tem o seu `Arc` e termina com o cliente antigo;
                 // o próximo cria um novo.
-                self.openrouter = None;
+                self.providers = None;
                 return;
             }
             DictationEvent::LastText(text) => {
@@ -366,11 +366,11 @@ impl Orchestrator {
 
     fn start_recording(&mut self, at: Instant, mode: Mode) {
         let app = self.deps.state.app.clone();
-        if self.openrouter.is_none() {
-            self.openrouter = load_openrouter(&self.deps.state);
+        if self.providers.is_none() {
+            self.providers = load_providers(&self.deps.state);
         }
         sync_key_set(&self.deps.state);
-        let Some(provider) = &self.openrouter else {
+        let Some(provider) = &self.providers else {
             // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
             self.machine.handle(Input::Cancel, at);
             self.deps.state.notify(MISSING_KEY);
@@ -406,8 +406,8 @@ impl Orchestrator {
         self.selection = None;
         // A barra segue o monitor onde está o cursor (como no Wispr Flow).
         crate::overlay::reposition_for(&app);
-        let provider = Arc::clone(provider);
-        tauri::async_runtime::spawn(async move { provider.prewarm().await });
+        let stt = Arc::clone(&provider.stt);
+        tauri::async_runtime::spawn(async move { stt.prewarm().await });
         self.retry_offered = false;
         self.deps.tray.set(TrayState::Recording);
         hotkey::set_cancel_enabled(&app, true);
@@ -422,7 +422,7 @@ impl Orchestrator {
         // O Esc continua registado: também cancela durante o processamento.
         self.deps.tray.set(TrayState::Processing);
 
-        let Some(provider) = self.openrouter.clone() else {
+        let Some(provider) = self.providers.clone() else {
             // Só acontece se a chave mudou a meio da gravação; o compilador
             // obriga-nos a decidir o que fazer.
             self.selection = None;
@@ -470,13 +470,13 @@ impl Orchestrator {
     /// estilo é o da app dela, porque é lá que o texto vai parar.
     fn retry(&mut self) {
         let app = self.deps.state.app.clone();
-        if self.openrouter.is_none() {
-            self.openrouter = load_openrouter(&self.deps.state);
+        if self.providers.is_none() {
+            self.providers = load_providers(&self.deps.state);
         }
         // `clone` barato (o WAV é `Bytes`): se cancelares, a gravação continua guardada.
-        let (Some(provider), Some(rec)) = (self.openrouter.clone(), self.failed.clone()) else {
+        let (Some(provider), Some(rec)) = (self.providers.clone(), self.failed.clone()) else {
             self.machine.handle(Input::Cancel, Instant::now());
-            if self.openrouter.is_none() {
+            if self.providers.is_none() {
                 self.deps.state.notify(MISSING_KEY);
                 self.show_failure(FailReason::NoKey, false);
             }
@@ -669,10 +669,10 @@ fn sync_key_set(state: &AppState) {
     }
 }
 
-fn load_openrouter(state: &AppState) -> Option<Arc<OpenRouter>> {
-    match state.load_openrouter() {
+fn load_providers(state: &AppState) -> Option<Providers> {
+    match state.load_providers() {
         Ok(Some(p)) => {
-            tracing::info!(provider = p.name(), "provider de STT pronto");
+            tracing::info!(provider = p.stt.name(), "provider de STT pronto");
             Some(p)
         }
         Ok(None) => {
