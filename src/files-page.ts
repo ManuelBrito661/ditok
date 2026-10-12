@@ -52,8 +52,18 @@ async function renderConfirm(p: FileProbe) {
   const model = app.view.config.stt_model;
   $("fc-name").textContent = p.name;
   $("fc-meta").textContent = [p.duration_s != null ? duration(p.duration_s) : "duração desconhecida", megabytes(p.size_bytes)].join(" · ");
-  $("fc-estimate").textContent = "A estimar o custo…";
   $("fc-warning").hidden = true;
+
+  // Com o motor local não há custo: só quanto tempo leva, que depende do computador.
+  if (app.view.config.stt_engine === "local") {
+    // Velocidades medidas num portátil de 8 núcleos (vezes o tempo real), com folga.
+    const speed = { "parakeet-v3": 12, "whisper-small": 3, "whisper-turbo": 2.5 }[app.view.config.local_model];
+    const minutes = p.duration_s != null ? Math.max(1, Math.round(p.duration_s / speed / 60)) : null;
+    $("fc-estimate").textContent =
+      `Neste computador, sem custo${minutes != null ? `: leva cerca de ${minutes} min` : ""} (depende do teu computador).`;
+    return;
+  }
+  $("fc-estimate").textContent = "A estimar o custo…";
 
   const stats = await api.getStats().catch(() => null);
   const cost = p.duration_s != null ? await estimate(p.duration_s, stats?.recent ?? []) : null;
