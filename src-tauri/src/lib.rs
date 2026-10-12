@@ -84,11 +84,18 @@ pub fn run() {
             let show_window = !config.onboarding_done || !key_set;
 
             let tray = tray::Tray::new(app.handle(), tx.clone(), &config)?;
+            // `Invalid` = o texto do atalho no config não se lê (não é culpa de outra app).
+            let mut shortcut_invalid = false;
             let shortcut_ok = match hotkey::register_dictation(app.handle(), &config.shortcut) {
                 Ok(()) => true,
                 Err(e) => {
                     tracing::error!(error = %e, "sem atalho de ditado");
-                    tray.set_tooltip("Ditok: atalho ocupado por outra app");
+                    shortcut_invalid = matches!(e, hotkey::HotkeyError::Invalid { .. });
+                    tray.set_tooltip(if shortcut_invalid {
+                        "Ditok: atalho inválido no config"
+                    } else {
+                        "Ditok: atalho ocupado por outra app"
+                    });
                     false
                 }
             };
@@ -125,10 +132,14 @@ pub fn run() {
             state.set_command_ok(command_ok);
             state.set_shortcut_ok(shortcut_ok);
             if !shortcut_ok {
-                state.notify(&format!(
-                    "Não consegui usar o atalho {}: outra app já o ocupa. Clica na barra ou abre o Ditok para escolher outro.",
-                    hotkey::pretty(&state.config().shortcut)
-                ));
+                let shortcut = hotkey::pretty(&state.config().shortcut);
+                state.notify(&if shortcut_invalid {
+                    format!("O atalho {shortcut} do config não é válido. Escolhe outro nas Definições.")
+                } else {
+                    format!(
+                        "Não consegui usar o atalho {shortcut}: outra app já o ocupa. Clica na barra ou abre o Ditok para escolher outro."
+                    )
+                });
             }
             if state.config().show_overlay {
                 // Criar um WebView demora ~300 ms. Fazemo-lo numa thread à parte,

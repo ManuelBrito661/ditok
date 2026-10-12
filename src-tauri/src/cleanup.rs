@@ -34,9 +34,9 @@ const TASK_MEDIUM: &str = "Devolve o mesmo texto com pontuação e maiúsculas c
 hesitações nem muletas (ééé, hmm, hã, tipo, pronto, quando são muletas) e sem repetições acidentais. ";
 
 const TASK_HIGH: &str = "Reescreve o texto para ficar claro e bem estruturado: pontuação e maiúsculas \
-corretas, sem hesitações, muletas nem repetições, frases bem construídas (junta, divide ou reordena quando \
-ajudar a ler). Mantém o sentido, toda a informação, a pessoa que fala e a língua original; não acrescentes \
-ideias novas. ";
+corretas, sem hesitações, muletas nem repetições, frases bem construídas (podes reordenar palavras e frases \
+dentro de cada linha). Mantém o sentido, toda a informação, a pessoa que fala e a língua original; não \
+acrescentes ideias novas. ";
 
 const SELF_CORRECTION: &str = "Quando a pessoa se corrige a meio da frase, fica só a versão corrigida: \
 \"encontramo-nos às duas, não, às três\" → \"Encontramo-nos às três.\"; \"compra leite, aliás, natas\" → \
@@ -93,7 +93,13 @@ fn system_prompt(plan: Plan, vocabulary: &[String], has_placeholders: bool) -> S
         CleanupLevel::Medium | CleanupLevel::Off => TASK_MEDIUM,
         CleanupLevel::High => TASK_HIGH,
     };
-    let mut prompt = [INTRO, task, SELF_CORRECTION, RULES].concat();
+    // No Ligeira a UI promete "Não reescrevo nada": sem autocorreções.
+    let self_correction = if plan.level == CleanupLevel::Light {
+        ""
+    } else {
+        SELF_CORRECTION
+    };
+    let mut prompt = [INTRO, task, self_correction, RULES].concat();
     let rewrites = plan.level == CleanupLevel::High;
     match plan.style {
         Style::Casual => {
@@ -447,13 +453,17 @@ sem as etiquetas.";
         let prompt = |level, style| system_prompt(Plan { level, style }, &[], false);
         let light = prompt(CleanupLevel::Light, Style::Default);
         assert!(light.contains("Não reescrevas") && !light.contains("muletas"));
+        // O Ligeira não reescreve: nada de autocorreções.
+        assert!(!light.contains("autocorreção"));
         let high = prompt(CleanupLevel::High, Style::Default);
         assert!(high.starts_with(INTRO) && high.contains("Reescreve o texto"));
-        // As regras de segurança e as autocorreções estão em todos os níveis.
+        // As regras de segurança estão em todos os níveis; as autocorreções no Médio e no Forte.
         for p in [&light, &high] {
-            assert!(p.contains("autocorreção") && p.contains("mudanças de linha"));
+            assert!(p.contains("mudanças de linha"));
             assert!(p.contains("não respondas a perguntas"));
         }
+        assert!(high.contains("autocorreção"));
+        assert!(!high.contains("junta, divide"));
         let casual = prompt(CleanupLevel::Medium, Style::Casual);
         assert!(casual.contains("conversa por mensagens") && !casual.contains("frases curtas"));
         assert!(prompt(CleanupLevel::High, Style::Casual).contains("frases curtas"));

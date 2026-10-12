@@ -20,6 +20,59 @@ function rules(): StyleRule[] {
   return app.view.config.styles;
 }
 
+/** Gravações em fila: cada uma parte da lista que já inclui as anteriores (senão
+ *  duas mudanças seguidas perdiam uma). */
+let queue: Promise<unknown> = Promise.resolve();
+
+/** Aplica `change` à lista atual e grava; `null` = não há nada a gravar. */
+function edit(change: (list: StyleRule[]) => StyleRule[] | null): Promise<boolean> {
+  const run = queue.then(async () => {
+    const next = change(rules().slice());
+    return next ? save({ styles: next }) : false;
+  });
+  queue = run.catch(() => false);
+  return run;
+}
+
+/** Uma regra apagada, com o que é preciso para o "Desfazer". */
+interface Removed {
+  rule: StyleRule;
+  /** A app da regra seguinte, à data do apagar (o Desfazer repõe antes dela). */
+  next?: string;
+  index: number;
+}
+
+/** Apaga a regra desta app (pelo nome, não pelo índice). */
+async function removeRule(name: string): Promise<Removed | null> {
+  const key = appKey(name);
+  const found: { value?: Removed } = {};
+  await edit((list) => {
+    const index = list.findIndex((r) => appKey(r.app) === key);
+    if (index < 0) return null;
+    found.value = { rule: list[index], next: list[index + 1]?.app, index };
+    return list.filter((_, i) => i !== index);
+  });
+  return found.value ?? null;
+}
+
+async function restoreRule({ rule, next, index }: Removed) {
+  const key = appKey(rule.app);
+  const place = { at: 0 };
+  const ok = await edit((list) => {
+    // Se entretanto voltaste a criar uma regra para a mesma app, não a duplico.
+    if (list.some((r) => appKey(r.app) === key)) {
+      toast(`Já há um estilo para ${rule.app}: muda-o na lista.`, "error");
+      return null;
+    }
+    const after = next ? list.findIndex((r) => appKey(r.app) === appKey(next)) : -1;
+    place.at = after >= 0 ? after : Math.min(index, list.length);
+    const copy = list.slice();
+    copy.splice(place.at, 0, rule);
+    return copy;
+  });
+  if (ok) $("style-list").children[place.at]?.querySelector<HTMLElement>("select")?.focus();
+}
+
 function styleSelect(value: Style, label: string): HTMLSelectElement {
   const select = document.createElement("select");
   select.setAttribute("aria-label", label);
@@ -33,7 +86,7 @@ function styleSelect(value: Style, label: string): HTMLSelectElement {
   return select;
 }
 
-function row(rule: StyleRule, index: number): HTMLLIElement {
+function row(rule: StyleRule): HTMLLIElement {
   const li = document.createElement("li");
   li.className = "style-row";
 
@@ -41,12 +94,14 @@ function row(rule: StyleRule, index: number): HTMLLIElement {
   name.className = "style-app";
   name.textContent = rule.app; // textContent: nunca interpretado como HTML
 
+  const key = appKey(rule.app);
   const select = styleSelect(rule.style, `Estilo para ${rule.app}`);
-  select.addEventListener("change", async () => {
-    const next = rules().slice();
-    next[index] = { ...rule, style: select.value as Style };
-    rendered = JSON.stringify(next);
-    await save({ styles: next });
+  select.addEventListener("change", () => {
+    const style = select.value as Style;
+    void edit((list) => {
+      const i = list.findIndex((r) => appKey(r.app) === key);
+      return i < 0 ? null : list.map((r, j) => (j === i ? { ...r, style } : r));
+    });
   });
 
   const remove = document.createElement("button");
@@ -55,23 +110,11 @@ function row(rule: StyleRule, index: number): HTMLLIElement {
   remove.setAttribute("aria-label", `Apagar o estilo de ${rule.app}`);
   remove.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`;
   remove.addEventListener("click", async () => {
-    const removed = rules()[index];
-    // A regra seguinte: o "Desfazer" repõe antes dela, mesmo que entretanto se
-    // tenha acrescentado outra no topo (como no dicionário).
-    const next = rules()[index + 1];
-    if (!(await save({ styles: rules().filter((_, i) => i !== index) }))) return;
-    const undo = toast(`Estilo de ${removed.app} apagado`, "ok", {
+    const gone = await removeRule(rule.app);
+    if (!gone) return;
+    const undo = toast(`Estilo de ${gone.rule.app} apagado`, "ok", {
       label: "Desfazer",
-      run: async () => {
-        const list = rules().slice();
-        // Se entretanto voltaste a criar uma regra para a mesma app, não a duplico.
-        if (list.some((r) => appKey(r.app) === appKey(removed.app))) return;
-        const at = next ? list.findIndex((r) => r.app === next.app) : -1;
-        const pos = at >= 0 ? at : Math.min(index, list.length);
-        list.splice(pos, 0, removed);
-        if (!(await save({ styles: list }))) return;
-        $("style-list").children[pos]?.querySelector<HTMLElement>("select")?.focus();
-      },
+      run: () => void restoreRule(gone),
     });
     // O botão "Apagar" desapareceu com a linha: o foco vai para o "Desfazer".
     undo?.focus();
@@ -164,7 +207,8 @@ export function setupStyles() {
       return invalid(`"${name}" já tem um estilo: muda-o na lista.`);
     }
     // As novas ficam no topo, logo por baixo do formulário, onde se vêem.
-    if (await save({ styles: [{ app: name, style: select.value as Style }, ...rules()] })) {
+    const style = select.value as Style;
+    if (await edit((list) => [{ app: name, style }, ...list])) {
       input.value = "";
       input.focus();
     }

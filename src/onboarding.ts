@@ -22,6 +22,8 @@ const HEARD_LEVEL = 0.55;
 const dialog = () => $<HTMLDialogElement>("onboarding");
 let step: Step = "key";
 let keepalive: number | undefined;
+/** O medidor deve estar ligado (fica `false` ao sair do passo ou fechar o guia). */
+let meterWanted = false;
 let smoothed = 0;
 let heard = false;
 
@@ -110,6 +112,7 @@ async function saveKey(): Promise<boolean> {
 // ---------------------------------------------------------------- 2. microfone
 
 async function startMeter() {
+  meterWanted = true;
   heard = false;
   smoothed = 0;
   renderLevel(0);
@@ -117,7 +120,8 @@ async function startMeter() {
   msg.textContent = "A abrir o microfone…";
   msg.className = "ob-msg";
   const devices = await loadDevices($<HTMLSelectElement>("ob-device"));
-  if (step !== "mic") return; // saíste do passo enquanto a lista carregava
+  // Saíste do passo ou fechaste o guia (Saltar) enquanto a lista carregava: não ligues o medidor.
+  if (!meterWanted || step !== "mic" || !dialog().open) return;
   if (!devices.length) {
     msg.textContent = "Não encontrei nenhum microfone. Liga um e volta a este passo.";
     msg.className = "ob-msg error";
@@ -128,6 +132,9 @@ async function startMeter() {
 }
 
 function stopMeter() {
+  // Antes do `return` de baixo: se o medidor ainda não chegou a abrir (a lista de
+  // microfones está a carregar), `startMeter` vê isto e não o liga.
+  meterWanted = false;
   if (keepalive === undefined) return;
   window.clearInterval(keepalive);
   keepalive = undefined;

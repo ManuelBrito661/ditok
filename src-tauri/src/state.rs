@@ -159,6 +159,10 @@ impl AppState {
         self.publish();
     }
 
+    pub fn key_set(&self) -> bool {
+        self.key_set.load(Ordering::Relaxed)
+    }
+
     pub fn set_shortcut_ok(&self, ok: bool) {
         self.shortcut_ok.store(ok, Ordering::Relaxed);
         self.publish();

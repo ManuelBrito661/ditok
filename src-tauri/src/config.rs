@@ -335,8 +335,9 @@ impl Config {
     }
 
     /// Lê o ficheiro; se não existir, cria-o com os valores por omissão. Se estiver
-    /// inválido, usa os valores por omissão sem o reescrever (para não perderes o que
-    /// escreveste) e regista o erro.
+    /// inválido, copia-o para config.json.bak e usa os valores por omissão (o
+    /// próximo save reescreve o config.json, por isso a cópia guarda o que escreveste)
+    /// e regista o erro.
     pub fn load_or_create(config_dir: &Path) -> Self {
         let path = Self::path(config_dir);
         match std::fs::read(&path) {
@@ -344,6 +345,7 @@ impl Config {
                 Ok(config) => config,
                 Err(e) => {
                     tracing::error!(path = %path.display(), error = %e, "config.json inválido; a usar valores por omissão");
+                    Self::backup_invalid(config_dir);
                     Self::default()
                 }
             },
@@ -356,8 +358,21 @@ impl Config {
             }
             Err(e) => {
                 tracing::error!(path = %path.display(), error = %e, "não foi possível ler config.json");
+                Self::backup_invalid(config_dir);
                 Self::default()
             }
+        }
+    }
+
+    /// Copia o config.json ilegível para config.json.bak antes de os valores por
+    /// omissão o substituírem. Se a cópia falhar, só regista o aviso.
+    fn backup_invalid(config_dir: &Path) {
+        let path = Self::path(config_dir);
+        let backup = config_dir.join("config.json.bak");
+        if let Err(e) = std::fs::copy(&path, &backup) {
+            tracing::warn!(error = %e, "não foi possível copiar o config.json inválido para config.json.bak");
+        } else {
+            tracing::warn!(backup = %backup.display(), "config.json inválido copiado para config.json.bak");
         }
     }
 
@@ -567,6 +582,22 @@ mod tests {
         assert!(
             !Config::predates_onboarding(&dir),
             "versão nova, com o campo"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Um config.json inválido não se perde: fica copiado para config.json.bak.
+    #[test]
+    fn invalid_config_is_backed_up_before_defaults() {
+        let dir = std::env::temp_dir().join(format!("ditok-bak-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let broken = r#"{"sounds": false, "transport": "#;
+        std::fs::write(Config::path(&dir), broken).unwrap();
+        let loaded = Config::load_or_create(&dir);
+        assert_eq!(loaded, Config::default());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("config.json.bak")).unwrap(),
+            broken
         );
         let _ = std::fs::remove_dir_all(dir);
     }

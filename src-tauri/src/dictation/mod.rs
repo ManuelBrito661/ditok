@@ -352,6 +352,7 @@ impl Orchestrator {
         if self.openrouter.is_none() {
             self.openrouter = load_openrouter(&self.deps.state);
         }
+        sync_key_set(&self.deps.state);
         let Some(provider) = &self.openrouter else {
             // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
             self.machine.handle(Input::Cancel, at);
@@ -629,6 +630,19 @@ impl Orchestrator {
                 tracing::warn!(%reason, "falha de áudio sem gravação em curso");
             }
         }
+    }
+}
+
+/// A chave pode ter sido trocada ou apagada fora da app (bin/set-key.rs): a barra
+/// e o tray seguem o cofre ao começar um ditado. Se não der para ler, fica como está.
+fn sync_key_set(state: &AppState) {
+    let Ok(key) = crate::secrets::get() else {
+        return;
+    };
+    let set = key.is_some();
+    if state.key_set() != set {
+        tracing::info!(set, "a chave mudou fora da app; a atualizar o estado");
+        state.set_key_set(set); // publica a barra e o tray
     }
 }
 

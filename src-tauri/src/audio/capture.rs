@@ -15,7 +15,7 @@
 use std::{
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
     thread,
@@ -257,7 +257,12 @@ fn audio_thread(
                         // Só as amostras que acabaram de chegar: o nível "de agora".
                         level(resample::level(&s.samples[new_from..]));
                     } else if let Some(m) = monitor.as_mut() {
-                        if Instant::now() >= m.until {
+                        if m.session.failed.load(Ordering::Relaxed) {
+                            // O stream do medidor morreu (microfone desligado): a janela é avisada.
+                            tracing::warn!("medidor do microfone: o stream falhou");
+                            monitor = None;
+                            mic(MicEvent::Failed("o microfone foi desligado".into()));
+                        } else if Instant::now() >= m.until {
                             tracing::debug!("medidor do microfone parado (não foi renovado)");
                             monitor = None; // largar a sessão fecha o microfone
                         } else {
@@ -288,7 +293,7 @@ fn audio_thread(
                 if monitor.take().is_some() {
                     tracing::debug!("medidor do microfone parado para gravar");
                 }
-                match Session::open(pressed_at, start_cue, events.clone(), device.as_deref()) {
+                match Session::open(pressed_at, start_cue, Some(events.clone()), device.as_deref()) {
                     Ok(s) => session = Some(s),
                     Err(e) => {
                         tracing::error!(error = %e, "não foi possível abrir o microfone");
@@ -323,7 +328,8 @@ fn audio_thread(
                     continue;
                 }
                 monitor = None; // outro microfone: fecha o anterior antes de abrir
-                match Session::open(Instant::now(), false, events.clone(), device.as_deref()) {
+                // Sem `events`: um erro do medidor não é um erro do ditado (ver `failed`).
+                match Session::open(Instant::now(), false, None, device.as_deref()) {
                     Ok(s) => {
                         tracing::debug!(device = %s.device, "medidor do microfone ligado");
                         mic(MicEvent::Opened(s.device.clone()));
@@ -360,6 +366,9 @@ struct Session {
     start_cue: bool,
     first_callback: Arc<OnceLock<Instant>>,
     dropped: Arc<AtomicUsize>,
+    /// Ligada pelo callback de erro do stream (que não é um soluço). O medidor
+    /// vê-a para largar o microfone e avisar a janela.
+    failed: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -369,7 +378,7 @@ impl Session {
     fn open(
         pressed_at: Instant,
         start_cue: bool,
-        events: UnboundedSender<DictationEvent>,
+        events: Option<UnboundedSender<DictationEvent>>,
         wanted: Option<&str>,
     ) -> Result<Self, AudioError> {
         // Pedimos o dispositivo no momento (e não no arranque): se trocares de
@@ -399,7 +408,7 @@ impl Session {
         device: &cpal::Device,
         pressed_at: Instant,
         start_cue: bool,
-        events: UnboundedSender<DictationEvent>,
+        events: Option<UnboundedSender<DictationEvent>>,
     ) -> Result<Self, AudioError> {
         let name = device_name(device).unwrap_or_else(|| "desconhecido".to_owned());
         let supported = device.default_input_config()?;
@@ -413,10 +422,12 @@ impl Session {
         // valor; `OnceLock`/`AtomicUsize` porque permitem escrever sem `Mutex`.
         let first_callback = Arc::new(OnceLock::new());
         let dropped = Arc::new(AtomicUsize::new(0));
+        let failed = Arc::new(AtomicBool::new(false));
         let shared = Shared {
             producer,
             first_callback: first_callback.clone(),
             dropped: dropped.clone(),
+            failed: failed.clone(),
             events,
         };
 
@@ -444,6 +455,7 @@ impl Session {
             start_cue,
             first_callback,
             dropped,
+            failed,
         })
     }
 
@@ -549,7 +561,9 @@ struct Shared {
     producer: rtrb::Producer<f32>,
     first_callback: Arc<OnceLock<Instant>>,
     dropped: Arc<AtomicUsize>,
-    events: UnboundedSender<DictationEvent>,
+    failed: Arc<AtomicBool>,
+    /// `None` no medidor: um erro dele não cancela um ditado.
+    events: Option<UnboundedSender<DictationEvent>>,
 }
 
 fn build<T>(
@@ -566,6 +580,7 @@ where
         mut producer,
         first_callback,
         dropped,
+        failed,
         events,
     } = shared;
 
@@ -581,17 +596,24 @@ where
                 }
             });
         },
-        move |err| match err.kind() {
-            // Um "xrun" pontual é comum no arranque do stream (sobretudo com
-            // dispositivos virtuais) e não perde o que já está no ring buffer.
-            cpal::ErrorKind::Xrun => tracing::warn!("soluço no stream de áudio (xrun)"),
-            cpal::ErrorKind::DeviceNotAvailable => {
-                tracing::error!(error = %err, "microfone indisponível");
-                let _ = events.send(DictationEvent::AudioFailed(
-                    "o microfone foi desligado".into(),
-                ));
+        move |err| {
+            match err.kind() {
+                // Um "xrun" pontual é comum no arranque do stream (sobretudo com
+                // dispositivos virtuais) e não perde o que já está no ring buffer.
+                cpal::ErrorKind::Xrun => tracing::warn!("soluço no stream de áudio (xrun)"),
+                cpal::ErrorKind::DeviceNotAvailable => {
+                    tracing::error!(error = %err, "microfone indisponível");
+                    if let Some(events) = &events {
+                        let _ = events.send(DictationEvent::AudioFailed(
+                            "o microfone foi desligado".into(),
+                        ));
+                    }
+                }
+                _ => tracing::error!(error = %err, "erro no stream de áudio"),
             }
-            _ => tracing::error!(error = %err, "erro no stream de áudio"),
+            if !matches!(err.kind(), cpal::ErrorKind::Xrun) {
+                failed.store(true, Ordering::Relaxed);
+            }
         },
         None,
     )
