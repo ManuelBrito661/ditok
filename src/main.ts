@@ -8,11 +8,12 @@ import { setupDictionary } from "./dictionary-page";
 import { setupFiles } from "./files-page";
 import { clearHomeHistory, refreshHome, setupHome } from "./home";
 import { renderMemory, renderStats, renderUsage, scrollHeatToEnd, setupMetrics } from "./metrics-page";
+import { renderNotesHint, setupNotes } from "./notes-page";
 import { isOnboardingOpen, openOnboarding, setupOnboarding } from "./onboarding";
 import { openKeySettings, openSettings, openShortcutSettings, setupSettings } from "./settings-dialog";
 import { $, app, notifyViewChange, onViewChange, refreshKey, toast } from "./store";
 
-type Page = "inicio" | "dicionario" | "ficheiros" | "metricas";
+type Page = "inicio" | "dicionario" | "ficheiros" | "notas" | "metricas";
 
 /** Muda de página. `focus`: leva o foco para o título da nova página, para quem
  *  usa teclado ou leitor de ecrã saber que mudou (não quando a mudança é automática). */
@@ -138,6 +139,7 @@ async function main() {
   setupMetrics();
   setupOnboarding();
   onViewChange(renderStatus);
+  onViewChange(renderNotesHint);
   renderStatus();
 
   // Primeira execução: o guia por cima de tudo. Depois, se a janela foi aberta
@@ -157,6 +159,7 @@ async function main() {
   // Em paralelo: nenhuma destas chamadas depende das outras.
   await Promise.allSettled([
     setupFiles(() => showPage("ficheiros")),
+    setupNotes(),
     refreshHome(),
     renderStats(),
     renderUsage(),

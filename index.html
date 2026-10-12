@@ -28,6 +28,11 @@
           Ficheiros
           <span id="nav-file-progress" class="nav-badge" hidden></span>
         </button>
+        <button type="button" class="nav-link" data-page="notas">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          Notas
+          <span id="nav-notes-rec" class="nav-badge rec" hidden>●</span>
+        </button>
         <button type="button" class="nav-link" data-page="metricas">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/></svg>
           Métricas
@@ -292,6 +297,83 @@
                 <button id="fs-copy" type="button" class="secondary">Copiar resumo</button>
                 <button id="fs-save" type="button" class="secondary">Guardar ao lado (.md)</button>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ Notas -->
+        <section id="page-notas" class="page" aria-labelledby="notes-title" hidden>
+          <header class="page-head">
+            <h1 id="notes-title" class="serif" tabindex="-1">Notas de reuniões</h1>
+            <p class="muted">
+              Grava o teu microfone e o áudio do computador (a outra pessoa numa chamada, uma aula online) e
+              transcreve à medida que se fala. Distingue "Eu" de "Outros"; não distingue cada pessoa de "Outros".
+            </p>
+          </header>
+
+          <div id="notes-idle" class="file-card">
+            <div class="notes-start">
+              <label for="notes-mode" class="row-title">O que gravar</label>
+              <select id="notes-mode">
+                <option value="meeting">Reunião ou chamada: microfone e áudio do computador</option>
+                <option value="system-only">Só o áudio do computador (vídeo, aula online)</option>
+                <option value="in-person">Conversa presencial: só o microfone</option>
+              </select>
+              <button id="notes-start" type="button" class="primary">Começar a gravar</button>
+            </div>
+            <p id="notes-cost" class="row-desc"></p>
+            <p class="row-desc">Com colunas, o microfone apanha também o som da outra pessoa. Com auscultadores fica tudo limpo.</p>
+          </div>
+
+          <div id="notes-live" class="file-card" hidden>
+            <div class="file-head">
+              <strong class="notes-rec"><span class="rec-dot" aria-hidden="true"></span> <span id="notes-live-title">A gravar</span></strong>
+              <span id="notes-live-time" class="pill run" role="timer"></span>
+            </div>
+            <div class="notes-levels" aria-hidden="true">
+              <span>Eu <span class="meter"><span id="lvl-mic"></span></span></span>
+              <span>Outros <span class="meter"><span id="lvl-system"></span></span></span>
+            </div>
+            <p id="notes-live-detail" class="row-desc"></p>
+            <p id="notes-live-warning" class="file-warning" hidden></p>
+            <div class="file-actions">
+              <button id="notes-stop" type="button" class="secondary danger">Parar</button>
+            </div>
+            <div id="notes-live-text" class="transcript notes-transcript" tabindex="0" aria-label="Transcrição ao vivo" aria-live="off"></div>
+          </div>
+
+          <div id="notes-list-box">
+            <h2 class="section-title">Gravações</h2>
+            <ul id="notes-list" class="notes-list"></ul>
+            <p id="notes-empty" class="muted" hidden>Ainda não gravaste nenhuma reunião.</p>
+          </div>
+
+          <div id="notes-detail" class="file-card" hidden>
+            <div class="file-head">
+              <input id="nd-title" type="text" class="notes-title-input" aria-label="Título" maxlength="80" />
+              <button id="nd-back" type="button" class="ghost">Voltar</button>
+            </div>
+            <p id="nd-meta" class="muted"></p>
+            <div class="notes-names">
+              <label>O teu nome <input id="nd-mic" type="text" maxlength="80" /></label>
+              <label>Os outros <input id="nd-system" type="text" maxlength="80" /></label>
+            </div>
+            <div id="nd-text" class="transcript notes-transcript" tabindex="0" aria-label="Transcrição"></div>
+            <div class="file-summary">
+              <div class="file-summary-head">
+                <label for="nd-kind" class="row-title">Resumir</label>
+                <select id="nd-kind" aria-label="Que tipo de resumo"></select>
+                <button id="nd-run" type="button" class="secondary">Resumir</button>
+              </div>
+              <p id="nd-hint" class="row-desc"></p>
+              <div id="nd-summary" class="transcript" tabindex="0" aria-label="Resumo" hidden></div>
+              <p id="nd-detail" class="row-desc" hidden></p>
+            </div>
+            <div class="file-actions">
+              <button id="nd-copy" type="button" class="secondary">Copiar texto</button>
+              <button id="nd-md" type="button" class="secondary">Exportar (.md)</button>
+              <button id="nd-txt" type="button" class="secondary">Exportar (.txt)</button>
+              <button id="nd-delete" type="button" class="secondary danger">Apagar</button>
             </div>
           </div>
         </section>
@@ -939,6 +1021,22 @@
           <button id="ob-next" type="button" class="primary">Continuar</button>
         </footer>
       </div>
+    </dialog>
+
+    <!-- ============================================================ Aviso das notas -->
+    <dialog id="notes-consent" class="confirm" aria-labelledby="nc-title" aria-describedby="nc-text">
+      <form method="dialog" class="confirm-box">
+        <h2 id="nc-title">Antes de gravar uma conversa</h2>
+        <p id="nc-text">
+          Gravar uma chamada ou uma reunião é gravar outras pessoas. Em muitos sítios (e em muitas empresas e escolas)
+          é preciso avisá-las e ter o seu acordo. A responsabilidade é tua. O Ditok não guarda o áudio: só o texto,
+          neste computador. O áudio é enviado ao serviço de transcrição que escolheste, ou fica aqui com o motor local.
+        </p>
+        <div class="confirm-actions">
+          <button type="submit" value="cancel" class="ghost" autofocus>Cancelar</button>
+          <button type="submit" value="ok" class="primary">Percebo, avisar sempre antes de gravar</button>
+        </div>
+      </form>
     </dialog>
 
     <!-- ============================================================ Confirmação (ações destrutivas) -->

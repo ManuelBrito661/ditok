@@ -39,6 +39,7 @@ export interface Config {
   local_model: LocalModelId;
   /** Minutos sem ditar até o modelo local ser largado da memória. */
   local_idle_minutes: number;
+  notes_consent: boolean;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -442,4 +443,89 @@ export const localModels = {
 
 export function onLocalModelProgress(handler: (p: LocalModelProgress) => void): Promise<UnlistenFn> {
   return listen<LocalModelProgress>("local-models:progress", (e) => handler(e.payload));
+}
+
+// ---------------------------------------------------------------- notas de reuniões (notes/)
+
+export type NotesMode = "meeting" | "system-only" | "in-person";
+export type NotesTrack = "mic" | "system";
+export type NotesPhase = "idle" | "recording" | "finishing";
+
+/** Estado da gravação em curso (notes/session.rs, StateView). */
+export interface NotesState {
+  phase: NotesPhase;
+  id: string | null;
+  title: string | null;
+  mode: NotesMode | null;
+  /** Milissegundos desde 1970 (para contar o tempo). */
+  started_ms: number | null;
+  cost_usd: number;
+  lines: number;
+  system_mute: boolean;
+  mic_device: string | null;
+  system_device: string | null;
+  lost: string[];
+  error: string | null;
+}
+
+export interface NotesMeta {
+  id: string;
+  title: string;
+  started_at: string;
+  ended_at: string | null;
+  mode: NotesMode;
+  model: string;
+  cost_usd: number;
+  audio_ms: number;
+  interrupted: boolean;
+  finished: boolean;
+  mic_name: string;
+  system_name: string;
+}
+
+export interface NotesLine {
+  track: NotesTrack;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  failed: boolean;
+}
+
+export interface NotesOut {
+  meta: NotesMeta;
+  lines: NotesLine[];
+  summary: string | null;
+}
+
+export const notes = {
+  state: () => invoke<NotesState>("notes_state"),
+  acceptConsent: () => invoke<void>("notes_accept_consent"),
+  start: (mode: NotesMode) => invoke<NotesState>("notes_start", { mode }),
+  stop: () => invoke<NotesState>("notes_stop"),
+  list: () => invoke<NotesMeta[]>("notes_list"),
+  get: (id: string) => invoke<NotesOut>("notes_get", { id }),
+  remove: (id: string) => invoke<void>("notes_delete", { id }),
+  rename: (id: string, patch: { title?: string; micName?: string; systemName?: string }) =>
+    invoke<NotesMeta>("notes_rename", {
+      id,
+      title: patch.title ?? null,
+      micName: patch.micName ?? null,
+      systemName: patch.systemName ?? null,
+    }),
+  text: (id: string) => invoke<string>("notes_text", { id }),
+  saveSummary: (id: string, summary: string) => invoke<void>("notes_save_summary", { id, summary }),
+  /** Pergunta onde guardar; `null` se cancelaste. */
+  exportTo: (id: string, markdown: boolean) => invoke<string | null>("notes_export", { id, markdown }),
+};
+
+export function onNotesState(handler: (s: NotesState) => void): Promise<UnlistenFn> {
+  return listen<NotesState>("notes:state", (e) => handler(e.payload));
+}
+
+export function onNotesLine(handler: (e: { id: string; line: NotesLine; cost_usd: number }) => void): Promise<UnlistenFn> {
+  return listen<{ id: string; line: NotesLine; cost_usd: number }>("notes:line", (e) => handler(e.payload));
+}
+
+export function onNotesLevel(handler: (e: { track: NotesTrack; level: number }) => void): Promise<UnlistenFn> {
+  return listen<{ track: NotesTrack; level: number }>("notes:level", (e) => handler(e.payload));
 }
