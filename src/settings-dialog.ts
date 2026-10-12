@@ -13,6 +13,7 @@ import {
 } from "./api";
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
 import { ago, heldModifiers, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
+import { setupLocalEngine } from "./local-engine";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
 import { refreshRecentApps, setupStyles } from "./styles-panel";
 
@@ -452,6 +453,7 @@ export function setupSettings(onHistoryCleared: () => void) {
   setupKey();
   bindSimpleControls(onHistoryCleared);
   setupStyles();
+  setupLocalEngine();
   onViewChange(renderControls);
   renderControls();
   // As listas de modelos só são pedidas quando o modal abre pela primeira vez.

@@ -619,6 +619,42 @@
             <div class="rows">
               <div class="row stacked">
                 <div class="row-text">
+                  <span id="engine-label" class="row-title">Onde se transcreve</span>
+                </div>
+                <div class="choices" role="radiogroup" aria-labelledby="engine-label">
+                  <div class="choice">
+                    <input type="radio" id="engine-cloud" name="stt-engine" value="cloud" aria-describedby="engine-cloud-desc" />
+                    <label for="engine-cloud" class="choice-title">Na nuvem</label>
+                    <p id="engine-cloud-desc" class="choice-desc">O OpenRouter, com a tua chave. Precisa de rede e custa uns cêntimos por hora de fala.</p>
+                  </div>
+                  <div class="choice">
+                    <input type="radio" id="engine-local" name="stt-engine" value="local" aria-describedby="engine-local-desc" />
+                    <label for="engine-local" class="choice-title">Neste computador</label>
+                    <p id="engine-local-desc" class="choice-desc">O áudio não sai daqui e não custa nada. Descarrega-se um modelo (centenas de MB) e, enquanto ditas, usa 1 a 2 GB de memória.</p>
+                  </div>
+                </div>
+                <p id="engine-unavailable" class="error" hidden>Esta versão do Ditok foi compilada sem o motor local.</p>
+              </div>
+
+              <div id="local-engine" class="row stacked" hidden>
+                <div class="row-text">
+                  <span class="row-title">Modelos neste computador</span>
+                  <span class="row-desc">
+                    Só se carrega um modelo quando ditas e larga-se da memória quando estás parado, por isso o Ditok em
+                    repouso continua leve. A limpeza com IA, o modo comando e os resumos continuam a precisar de rede e
+                    de chave: para ficar mesmo offline, desliga a limpeza (ou usa o estilo Literal).
+                  </span>
+                </div>
+                <ul id="local-models" class="local-models"></ul>
+                <p id="local-error" class="error" role="alert" hidden></p>
+                <div class="row-control">
+                  <label for="local-idle" class="row-desc">Largar o modelo da memória ao fim de</label>
+                  <input id="local-idle" type="number" min="1" max="240" step="1" inputmode="numeric" />
+                  <span class="row-desc">minutos sem ditar</span>
+                </div>
+              </div>
+              <div class="row stacked">
+                <div class="row-text">
                   <span class="row-title">Chave do OpenRouter <span id="key-status" class="pill"></span></span>
                   <span class="row-desc">Guardo-a no cofre do sistema. Nunca a mostro nem a gravo em ficheiros.</span>
                   <span id="key-info" class="row-desc"></span>
@@ -645,9 +681,9 @@
                 </div>
               </div>
 
-              <div class="row stacked">
+              <div class="row stacked" id="stt-model-row">
                 <div class="row-text">
-                  <span class="row-title">Modelo de transcrição</span>
+                  <span class="row-title">Modelo de transcrição na nuvem</span>
                   <span class="row-desc" id="stt-current"></span>
                 </div>
                 <div class="row-control">

@@ -39,7 +39,9 @@ function setupNav() {
 
 /** Ponto verde/âmbar na barra lateral: o ditado está pronto a usar? */
 function renderStatus() {
-  const { api_key_set: key, shortcut_ok: shortcut } = app.view;
+  const { shortcut_ok: shortcut } = app.view;
+  // Com o motor local ditar não precisa de chave.
+  const key = app.view.api_key_set || app.view.config.stt_engine === "local";
   $("status-dot").className = `dot ${key && shortcut ? "ok" : "warn"}`;
   $("status-text").textContent = !key ? "Falta a chave" : !shortcut ? "Atalho ocupado" : "Pronto a ditar";
 }

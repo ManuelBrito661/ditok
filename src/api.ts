@@ -33,6 +33,12 @@ export interface Config {
   typing_wpm: number;
   /** Modelo de texto dos resumos; vazio = o da limpeza. */
   summary_model: string;
+  /** Quem transcreve: a nuvem (OpenRouter) ou o motor local. */
+  stt_engine: SttEngine;
+  /** O modelo do motor local. */
+  local_model: LocalModelId;
+  /** Minutos sem ditar até o modelo local ser largado da memória. */
+  local_idle_minutes: number;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -388,3 +394,52 @@ export const summaries = {
   /** Guarda o resumo (Markdown) ao lado do ficheiro transcrito. */
   saveBesideFile: (text: string) => invoke<string>("file_save_summary", { text }),
 };
+
+// ---------------------------------------------------------------- motor local
+
+export type SttEngine = "cloud" | "local";
+export type LocalModelId = "parakeet-v3" | "whisper-small" | "whisper-turbo";
+
+/** Um modelo do catálogo (commands.rs, LocalModelView). */
+export interface LocalModel {
+  id: LocalModelId;
+  label: string;
+  description: string;
+  warning: string | null;
+  size_bytes: number;
+  /** Memória aproximada com o modelo carregado. */
+  ram_mb: number;
+  installed: boolean;
+  /** Já descarregado (uma descarga parada retoma daí). */
+  downloaded_bytes: number;
+}
+
+export interface LocalModelsView {
+  /** Esta versão da app inclui o motor local? */
+  available: boolean;
+  /** O modelo está carregado em memória agora. */
+  loaded: boolean;
+  downloading: LocalModelId | null;
+  models: LocalModel[];
+}
+
+/** O progresso de uma descarga (local_models.rs, Progress). */
+export interface LocalModelProgress {
+  id: LocalModelId;
+  file: string;
+  done: number;
+  total: number;
+  state: "downloading" | "verifying" | "done" | "cancelled" | "error";
+  message: string | null;
+}
+
+export const localModels = {
+  list: () => invoke<LocalModelsView>("local_models_list"),
+  download: (id: LocalModelId) => invoke<void>("local_model_download", { id }),
+  cancel: () => invoke<void>("local_model_cancel"),
+  remove: (id: LocalModelId) => invoke<void>("local_model_delete", { id }),
+};
+
+export function onLocalModelProgress(handler: (p: LocalModelProgress) => void): Promise<UnlistenFn> {
+  return listen<LocalModelProgress>("local-models:progress", (e) => handler(e.payload));
+}

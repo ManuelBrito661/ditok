@@ -15,8 +15,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # O motor de transcrição local (sherpa-onnx, estático) entra no instalador do
+          # Windows. No macOS fica de fora até o job "local" do ci.yml provar que
+          # compila lá (ainda nunca foi compilado nesse sistema).
           - platform: windows-latest
-            args: ""
+            args: "--features local"
           - platform: macos-latest
             args: "--target universal-apple-darwin"
     runs-on: ${{ matrix.platform }}

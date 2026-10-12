@@ -472,7 +472,8 @@ function renderHistory() {
 
 function renderView() {
   renderKeys($("promo-keys"), app.view.config.shortcut);
-  $("key-banner").hidden = app.view.api_key_set;
+  // Com o motor local ditar não precisa de chave (só a limpeza e os comandos).
+  $("key-banner").hidden = app.view.api_key_set || app.view.config.stt_engine === "local";
   renderHistory();
   renderStats();
 }

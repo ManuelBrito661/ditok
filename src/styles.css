@@ -1015,3 +1015,25 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .file-summary-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .file-summary-head select { min-width: 0; width: auto; }
 .file-summary .transcript { white-space: pre-wrap; }
+
+/* ---------------------------------------------------------------- motor local */
+.local-models { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.local-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.local-model-text { display: grid; gap: 2px; min-width: 0; }
+.local-model-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 190px; }
+.local-model-actions .meter { flex: 1 1 140px; }
+.local-warning { color: var(--amber-text); }
+#local-idle { width: 76px; }
+.engine-choice-note { margin-top: 4px; }
+@media (max-width: 720px) {
+  .local-model { grid-template-columns: minmax(0, 1fr); }
+  .local-model-actions { justify-content: flex-start; }
+}

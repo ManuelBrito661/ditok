@@ -62,3 +62,41 @@ jobs:
         working-directory: src-tauri
         continue-on-error: true
         run: cargo clippy --all-targets -- -D warnings
+
+  # O motor de transcrição local (sherpa-onnx): informativo, não bloqueia. O build
+  # descarrega a biblioteca pré-compilada do GitHub; no macOS ainda nunca foi
+  # compilado, e é este job que o diz antes de pôr o motor na release do Mac.
+  local:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.platform }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: local
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Frontend
+        run: pnpm build
+
+      - name: Compilar e testar com o motor local
+        working-directory: src-tauri
+        run: cargo test --features local
