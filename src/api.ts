@@ -27,6 +27,8 @@ export interface Config {
   show_overlay: boolean;
   voice_commands: boolean;
   spoken_punctuation: boolean;
+  /** Atalho do histórico rápido (menu com os últimos ditados); vazio = desligado. */
+  quick_history_shortcut: string;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -101,6 +103,8 @@ export interface SettingsView {
   shortcut_ok: boolean;
   /** `false`: o modo comando está ligado mas outra app ocupou o atalho. */
   command_ok: boolean;
+  /** `false`: o atalho do histórico rápido está ocupado por outra app. */
+  quick_ok: boolean;
   autostart: boolean;
   paths: { config: string; data: string; logs: string };
 }

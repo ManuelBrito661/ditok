@@ -512,6 +512,27 @@
                 </div>
               </div>
             </div>
+
+            <h4 class="section-title">Histórico rápido</h4>
+            <p class="muted panel-intro">
+              Um atalho abre um menu junto ao cursor com os últimos 9 ditados. Escolhe um (clique, setas e Enter, ou a
+              tecla 1 a 9) e colo-o onde estavas. Precisa do histórico ligado.
+            </p>
+            <div class="rows">
+              <div class="row" id="quick-history-row">
+                <div class="row-text">
+                  <span id="quick-history-label" class="row-title">Atalho do histórico rápido</span>
+                  <span class="row-desc">Uma combinação com tecla (ex.: Ctrl+Shift+H). Não há nenhuma por omissão: fica com ela quem a escolher, e deixa de funcionar nas outras apps. "Remover" desliga-o.</span>
+                  <p id="quick-history-busy" class="error" hidden>Outra app está a usar este atalho, por isso o histórico rápido não funciona. Escolhe outro em "Mudar".</p>
+                  <p id="quick-history-error" class="error" hidden></p>
+                </div>
+                <div class="row-control">
+                  <span id="quick-history-display" class="keys" aria-labelledby="quick-history-label"></span>
+                  <button id="quick-history-record" type="button" class="secondary">Mudar</button>
+                  <button id="quick-history-reset" type="button" class="ghost">Remover</button>
+                </div>
+              </div>
+            </div>
           </section>
 
           <!-- Transcrição -->

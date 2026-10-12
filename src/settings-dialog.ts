@@ -86,11 +86,20 @@ function setupTabs() {
 // ---------------------------------------------------------------- atalho
 
 /** Qual dos captadores de atalho está à espera de teclas (só um de cada vez). */
-let recordingShortcut: "shortcut" | "command_shortcut" | null = null;
+let recordingShortcut: "shortcut" | "command_shortcut" | "quick_history_shortcut" | null = null;
+
+/** Mostra o atalho em teclas, ou "Nenhum" quando não há (o do histórico rápido começa assim). */
+function showShortcut(el: HTMLElement, shortcut: string) {
+  if (shortcut) renderKeys(el, shortcut);
+  else el.textContent = "Nenhum";
+}
 
 /** O captador de atalho ("Mudar" → prime a combinação), para o de ditado e o de
  *  comando. `prefix` é o início dos ids no HTML; `field`, o campo do Config. */
-function setupShortcut(prefix: "shortcut" | "command-shortcut", field: "shortcut" | "command_shortcut") {
+function setupShortcut(
+  prefix: "shortcut" | "command-shortcut" | "quick-history",
+  field: "shortcut" | "command_shortcut" | "quick_history_shortcut",
+) {
   const button = $<HTMLButtonElement>(`${prefix}-record`);
   const display = $(`${prefix}-display`);
   const error = $(`${prefix}-error`);
@@ -104,7 +113,7 @@ function setupShortcut(prefix: "shortcut" | "command-shortcut", field: "shortcut
     peak = [];
     button.textContent = "Mudar";
     display.classList.remove("recording");
-    renderKeys(display, app.view.config[field]);
+    showShortcut(display, app.view.config[field]);
     window.removeEventListener("keydown", onKey, true);
     window.removeEventListener("keyup", onKeyUp, true);
   };
@@ -330,12 +339,14 @@ function renderControls() {
   const c = app.view.config;
   if (recordingShortcut !== "shortcut") renderKeys($("shortcut-display"), c.shortcut);
   if (recordingShortcut !== "command_shortcut") renderKeys($("command-shortcut-display"), c.command_shortcut);
+  if (recordingShortcut !== "quick_history_shortcut") showShortcut($("quick-history-display"), c.quick_history_shortcut);
   // Outra app ocupou o atalho: diz porquê ele não funciona até escolheres outro.
   $("shortcut-busy").hidden = app.view.shortcut_ok;
   $<HTMLInputElement>("command-enabled").checked = c.command_enabled;
   $("command-shortcut-busy").hidden = !c.command_enabled || app.view.command_ok;
   // Desligado, o atalho fica à vista (e pode ser mudado), mas esbatido.
   $("command-shortcut-row").classList.toggle("is-off", !c.command_enabled);
+  $("quick-history-busy").hidden = !c.quick_history_shortcut || app.view.quick_ok;
   syncDeviceSelect($<HTMLSelectElement>("input-device"));
   $<HTMLSelectElement>("language").value = c.language ?? "";
   $<HTMLInputElement>("autostart").checked = app.view.autostart;
@@ -430,6 +441,7 @@ export function setupSettings(onHistoryCleared: () => void) {
   setupTabs();
   setupShortcut("shortcut", "shortcut");
   setupShortcut("command-shortcut", "command_shortcut");
+  setupShortcut("quick-history", "quick_history_shortcut");
   setupKey();
   bindSimpleControls(onHistoryCleared);
   setupStyles();
