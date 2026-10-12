@@ -435,6 +435,12 @@ fn migrate(value: &mut serde_json::Value) {
         };
         obj.insert("cleanup_level".into(), level.into());
     }
+    // Até à 0.5 o atalho por omissão era Ctrl+Shift+Espaço. Quem o guardou sem
+    // nunca o mudar passa para o novo (a escolha do utilizador escreve sempre
+    // "Control+…", por isso nunca coincide com este texto).
+    if obj.get("shortcut").and_then(|v| v.as_str()) == Some(hotkey::LEGACY_SHORTCUT) {
+        obj.insert("shortcut".into(), DEFAULT_SHORTCUT.into());
+    }
 }
 
 #[cfg(test)]
@@ -455,6 +461,14 @@ mod tests {
         let json = serde_json::to_value(&on).unwrap();
         assert!(json.get("cleanup_enabled").is_none());
         assert_eq!(json["cleanup_level"], "medium");
+    }
+
+    #[test]
+    fn the_old_default_shortcut_becomes_the_new_one_but_a_chosen_one_stays() {
+        let old = Config::from_json(br#"{"shortcut": "CommandOrControl+Shift+Space"}"#).unwrap();
+        assert_eq!(old.shortcut, DEFAULT_SHORTCUT);
+        let chosen = Config::from_json(br#"{"shortcut": "Control+Shift+Space"}"#).unwrap();
+        assert_eq!(chosen.shortcut, "Control+Shift+Space");
     }
 
     #[test]

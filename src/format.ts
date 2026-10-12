@@ -89,7 +89,8 @@ export function shortcutKeys(s: string): string[] {
         case "commandorcontrol": case "cmdorctrl": case "commandorctrl": case "cmdorcontrol":
           return isMac ? "⌘" : "Ctrl";
         case "control": case "ctrl": return "Ctrl";
-        case "super": case "command": case "cmd": case "meta": return isMac ? "⌘" : "Win";
+        case "super": case "command": case "cmd": case "meta": case "win": return isMac ? "⌘" : "Win";
+        case "fn": return "fn";
         case "alt": case "option": return isMac ? "⌥" : "Alt";
         case "shift": return "Shift";
       }
@@ -109,6 +110,13 @@ export function renderKeys(el: HTMLElement, shortcut: string) {
       kbd.textContent = k;
       return kbd;
     }),
+  );
+}
+
+/** Os modificadores premidos no evento, no formato do backend ("Control", "Super"…). */
+export function heldModifiers(e: KeyboardEvent): string[] {
+  return [e.ctrlKey && "Control", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(
+    (m): m is string => !!m,
   );
 }
 

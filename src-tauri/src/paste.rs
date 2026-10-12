@@ -265,7 +265,7 @@ fn letter_key(letter: Letter) -> Key {
 /// Simula Ctrl+letra (Cmd+letra no macOS).
 fn send_shortcut(enigo: &mut Enigo, letter: Letter) -> enigo::InputResult<()> {
     // No modo alternar, o utilizador pode ainda estar a segurar modificadores do
-    // atalho (Ctrl+Shift+Espaço) quando o texto chega: Ctrl+Shift+V ou Ctrl+Alt+V
+    // atalho (ex.: Ctrl+Win) quando o texto chega: Ctrl+Shift+V ou Ctrl+Alt+V
     // fazem outra coisa em muitas apps, e Win+Ctrl+V abre um menu do Windows.
     release_modifiers(enigo)?;
 

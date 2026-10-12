@@ -12,7 +12,7 @@ import {
   type ModelList,
 } from "./api";
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
-import { ago, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
+import { ago, heldModifiers, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
 import { refreshRecentApps, setupStyles } from "./styles-panel";
 
@@ -95,24 +95,21 @@ function setupShortcut(prefix: "shortcut" | "command-shortcut", field: "shortcut
   const display = $(`${prefix}-display`);
   const error = $(`${prefix}-error`);
 
+  /** O maior conjunto de modificadores premidos sem nenhuma outra tecla: se o
+   *  utilizador largar tudo assim, é um atalho só de modificadores (Ctrl+Win). */
+  let peak: string[] = [];
+
   const stop = () => {
     recordingShortcut = null;
+    peak = [];
     button.textContent = "Mudar";
     display.classList.remove("recording");
     renderKeys(display, app.view.config[field]);
     window.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("keyup", onKeyUp, true);
   };
 
-  const onKey = async (e: KeyboardEvent) => {
-    e.preventDefault();
-    e.stopPropagation(); // impede também que o Esc feche o modal
-    if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return stop();
-    const shortcut = shortcutFromEvent(e);
-    if (!shortcut) {
-      display.textContent =
-        prettyShortcut([e.ctrlKey && "Control", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean).join("+")) + " + …";
-      return;
-    }
+  const commit = async (shortcut: string) => {
     stop();
     error.hidden = true;
     if (!(await save({ [field]: shortcut } as Partial<Config>))) {
@@ -121,6 +118,27 @@ function setupShortcut(prefix: "shortcut" | "command-shortcut", field: "shortcut
       error.textContent = $("toast").textContent ?? "";
       error.hidden = false;
     }
+  };
+
+  const onKey = (e: KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // impede também que o Esc feche o modal
+    if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return stop();
+    const shortcut = shortcutFromEvent(e);
+    if (!shortcut) {
+      const held = heldModifiers(e);
+      if (held.length > peak.length) peak = held;
+      display.textContent = prettyShortcut(held.join("+")) + " + …";
+      return;
+    }
+    void commit(shortcut);
+  };
+
+  const onKeyUp = (e: KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Largou tudo sem carregar numa tecla "normal": serve a combinação de modificadores.
+    if (heldModifiers(e).length === 0 && peak.length >= 2) void commit(peak.join("+"));
   };
 
   button.addEventListener("click", () => {
@@ -132,6 +150,7 @@ function setupShortcut(prefix: "shortcut" | "command-shortcut", field: "shortcut
     display.classList.add("recording");
     display.textContent = "Prime a nova combinação…";
     window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKeyUp, true);
   });
 
   // Fechar o modal a meio da gravação não pode deixar o teclado "capturado".

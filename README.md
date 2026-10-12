@@ -8,12 +8,14 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é fei
 
 | Ação | Atalho |
 | - | - |
-| Ditar (push-to-talk) | segurar **Ctrl+Shift+Espaço** (Mac: **Cmd+Shift+Espaço**) e largar no fim |
+| Ditar (push-to-talk) | segurar **Ctrl+Win** (Mac: a tecla **Fn**) e largar no fim |
 | Ditar (modo alternar) | tocar no atalho (<300 ms), falar, tocar outra vez |
 | Ditar com o rato | clicar na barra com a mascote, falar, clicar no **■** |
 | Cancelar a gravação | **Esc** (ou o **✕** na barra) |
 
-O atalho pode ser mudado nas definições.
+O atalho pode ser mudado nas definições (também aceita só modificadores, como Ctrl+Alt).
+
+No Mac, o Fn precisa da permissão **Monitorização de entrada** (Definições do Sistema → Privacidade e Segurança) e convém pôr *Pressionar 🌐 para* em **Não fazer nada** (Definições do Sistema → Teclado), para o Mac não abrir os emojis ao largar a tecla. No Windows, o Ctrl+Win usa um hook de teclado; não funciona sobre janelas abertas como administrador.
 
 ### A barra com a mascote
 

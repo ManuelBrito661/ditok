@@ -13,13 +13,23 @@ use tauri_plugin_global_shortcut::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::dictation::{DictationEvent, machine::Mode};
+use crate::{
+    dictation::{DictationEvent, machine::Mode},
+    modkeys::{self, Mods},
+};
 
-/// `CommandOrControl` é Ctrl no Windows e Cmd no macOS.
-pub const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+Space";
-/// O do modo comando: o de ditado com mais um Alt (Option no macOS). O
+/// O atalho de ditado por omissão: só modificadores, como no Wispr Flow. No
+/// macOS é a tecla Fn; no Windows, Ctrl+Win (ver `modkeys`).
+#[cfg(target_os = "macos")]
+pub const DEFAULT_SHORTCUT: &str = "Fn";
+#[cfg(not(target_os = "macos"))]
+pub const DEFAULT_SHORTCUT: &str = "Control+Super";
+/// O de antes da 0.6. Quem o tem no config.json (nunca o mudou) passa para o
+/// atual; ver `config::migrate`.
+pub const LEGACY_SHORTCUT: &str = "CommandOrControl+Shift+Space";
+/// O do modo comando. `CommandOrControl` é Ctrl no Windows e Cmd no macOS; o
 /// Windows só dispara um atalho se os modificadores forem exatamente os
-/// registados, por isso os dois não se confundem.
+/// registados, por isso não se confunde com outros.
 pub const DEFAULT_COMMAND_SHORTCUT: &str = "CommandOrControl+Shift+Alt+Space";
 
 /// O `id()` do atalho de comando registado, ou `NO_COMMAND`. O handler do plugin
@@ -41,6 +51,17 @@ pub enum HotkeyError {
         #[source]
         source: tauri_plugin_global_shortcut::Error,
     },
+    /// Atalho só de modificadores que o sistema não deixa ouvir.
+    #[error("não foi possível ouvir \"{shortcut}\": {reason}")]
+    Unavailable { shortcut: String, reason: String },
+}
+
+/// Um atalho lido: uma combinação com tecla (do plugin) ou só modificadores
+/// (do `modkeys`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Parsed {
+    Key(Shortcut),
+    Mods(Mods),
 }
 
 fn cancel_shortcut() -> Shortcut {
@@ -50,6 +71,8 @@ fn cancel_shortcut() -> Shortcut {
 /// Cria o plugin com o handler ligado ao canal. O `move` dá ao closure a sua própria
 /// cópia do `Sender` (os `Sender` do tokio são baratos de clonar e partilham o canal).
 pub fn plugin<R: Runtime>(tx: UnboundedSender<DictationEvent>) -> TauriPlugin<R> {
+    // Os atalhos só de modificadores não passam pelo plugin: enviam pelo mesmo canal.
+    modkeys::init(tx.clone());
     Builder::new()
         .with_handler(move |_app, shortcut, event| {
             // Medimos aqui, e não quando o orquestrador recebe a mensagem, para que
@@ -82,17 +105,81 @@ pub fn register_dictation<R: Runtime>(
     shortcut: &str,
 ) -> Result<(), HotkeyError> {
     let parsed = parse(shortcut)?;
-    app.global_shortcut()
-        .register(parsed)
-        .map_err(|source| HotkeyError::Register {
-            shortcut: shortcut.to_owned(),
-            source,
-        })?;
+    activate(app, shortcut, parsed, Slot::Dictation)?;
     tracing::info!(shortcut, "atalho de ditado registado");
     Ok(())
 }
 
-fn parse(shortcut: &str) -> Result<Shortcut, HotkeyError> {
+/// Qual dos dois atalhos.
+#[derive(Clone, Copy)]
+enum Slot {
+    Dictation,
+    Command,
+}
+
+/// Liga `parsed`, pelo plugin ou pelo `modkeys`. No `modkeys` isto também
+/// substitui o atalho anterior do mesmo `slot`; no plugin, largar o antigo é
+/// com `deactivate`.
+fn activate<R: Runtime>(
+    app: &AppHandle<R>,
+    text: &str,
+    parsed: Parsed,
+    slot: Slot,
+) -> Result<(), HotkeyError> {
+    match parsed {
+        Parsed::Key(key) => app
+            .global_shortcut()
+            .register(key)
+            .map_err(|source| HotkeyError::Register {
+                shortcut: text.to_owned(),
+                source,
+            }),
+        Parsed::Mods(mods) => set_mods(slot, Some(mods)).map_err(|reason| {
+            HotkeyError::Unavailable {
+                shortcut: text.to_owned(),
+                reason,
+            }
+        }),
+    }
+}
+
+/// Larga `old` (que deixou de ser o atalho do `slot`), a não ser que `new` o
+/// tenha substituído no mesmo sítio.
+fn deactivate<R: Runtime>(app: &AppHandle<R>, old: Parsed, new: Option<Parsed>, slot: Slot) {
+    match old {
+        Parsed::Key(key) => {
+            if let Err(e) = app.global_shortcut().unregister(key) {
+                tracing::warn!(error = %e, "não foi possível largar o atalho antigo");
+            }
+        }
+        // Um novo atalho de modificadores já trocou o antigo.
+        Parsed::Mods(_) if matches!(new, Some(Parsed::Mods(_))) => {}
+        Parsed::Mods(_) => {
+            let _ = set_mods(slot, None);
+        }
+    }
+}
+
+fn set_mods(slot: Slot, mods: Option<Mods>) -> Result<(), String> {
+    match slot {
+        Slot::Dictation => modkeys::set_dictation(mods),
+        Slot::Command => modkeys::set_command(mods),
+    }
+}
+
+/// Lê um atalho: só modificadores (`modkeys`) ou com tecla (plugin).
+fn parse(shortcut: &str) -> Result<Parsed, HotkeyError> {
+    let Some(mods) = modkeys::parse(shortcut) else {
+        return parse_key(shortcut).map(Parsed::Key);
+    };
+    modkeys::validate(mods).map_err(|reason| HotkeyError::Invalid {
+        shortcut: shortcut.to_owned(),
+        reason: reason.to_owned(),
+    })?;
+    Ok(Parsed::Mods(mods))
+}
+
+fn parse_key(shortcut: &str) -> Result<Shortcut, HotkeyError> {
     let parsed: Shortcut = shortcut.parse().map_err(|e| HotkeyError::Invalid {
         shortcut: shortcut.to_owned(),
         reason: format!("{e}"),
@@ -139,20 +226,13 @@ pub fn change_dictation<R: Runtime>(
     new: &str,
 ) -> Result<(), HotkeyError> {
     let new_parsed = parse(new)?;
-    let old_parsed = old.parse::<Shortcut>().ok();
+    let old_parsed = parse_loose(old);
     if old_parsed == Some(new_parsed) {
         return Ok(());
     }
-    let gs = app.global_shortcut();
-    gs.register(new_parsed)
-        .map_err(|source| HotkeyError::Register {
-            shortcut: new.to_owned(),
-            source,
-        })?;
-    if let Some(old) = old_parsed
-        && let Err(e) = gs.unregister(old)
-    {
-        tracing::warn!(error = %e, "não foi possível largar o atalho antigo");
+    activate(app, new, new_parsed, Slot::Dictation)?;
+    if let Some(old) = old_parsed {
+        deactivate(app, old, Some(new_parsed), Slot::Dictation);
     }
     tracing::info!(old, new, "atalho de ditado alterado");
     Ok(())
@@ -172,25 +252,23 @@ pub fn change_command<R: Runtime>(
     old: Option<&str>,
     new: Option<&str>,
 ) -> Result<(), HotkeyError> {
-    let gs = app.global_shortcut();
-    let old_parsed = old.and_then(|s| s.parse::<Shortcut>().ok());
+    let old_parsed = old.and_then(parse_loose);
     let new_parsed = new.map(parse).transpose()?;
     if old_parsed == new_parsed {
         return Ok(());
     }
     if let (Some(parsed), Some(text)) = (new_parsed, new) {
-        gs.register(parsed)
-            .map_err(|source| HotkeyError::Register {
-                shortcut: text.to_owned(),
-                source,
-            })?;
+        activate(app, text, parsed, Slot::Command)?;
     }
-    if let Some(old) = old_parsed
-        && let Err(e) = gs.unregister(old)
-    {
-        tracing::warn!(error = %e, "não foi possível largar o atalho de comando antigo");
+    if let Some(old) = old_parsed {
+        deactivate(app, old, new_parsed, Slot::Command);
     }
-    let id = new_parsed.map_or(NO_COMMAND, |s| u64::from(s.id()));
+    // Só os atalhos com tecla passam pelo handler do plugin, que usa isto para
+    // saber o modo; os de modificadores já levam o modo com eles.
+    let id = match new_parsed {
+        Some(Parsed::Key(key)) => u64::from(key.id()),
+        _ => NO_COMMAND,
+    };
     COMMAND_ID.store(id, Ordering::Relaxed);
     tracing::info!(?old, ?new, "atalho de comando");
     Ok(())
@@ -200,19 +278,22 @@ pub fn change_command<R: Runtime>(
 /// "CommandOrControl+Shift+Space" são, no Windows.) Textos inválidos nunca são
 /// iguais: a validação deles é feita ao registar.
 pub fn same_shortcut(a: &str, b: &str) -> bool {
-    match (a.parse::<Shortcut>(), b.parse::<Shortcut>()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
+    matches!((parse_loose(a), parse_loose(b)), (Some(a), Some(b)) if a == b)
+}
+
+/// Lê um atalho sem o validar: serve para comparar com o que está registado.
+fn parse_loose(shortcut: &str) -> Option<Parsed> {
+    match modkeys::parse(shortcut) {
+        Some(mods) => Some(Parsed::Mods(mods)),
+        None => shortcut.parse::<Shortcut>().ok().map(Parsed::Key),
     }
 }
 
 /// Larga o atalho de ditado (só usado para desfazer um registo quando gravar as
 /// definições falha).
 pub fn unregister_dictation<R: Runtime>(app: &AppHandle<R>, shortcut: &str) {
-    if let Ok(parsed) = shortcut.parse::<Shortcut>()
-        && let Err(e) = app.global_shortcut().unregister(parsed)
-    {
-        tracing::warn!(error = %e, shortcut, "não foi possível largar o atalho");
+    if let Some(parsed) = parse_loose(shortcut) {
+        deactivate(app, parsed, None, Slot::Dictation);
     }
 }
 
@@ -232,7 +313,8 @@ pub fn pretty(shortcut: &str) -> String {
             let label = match part.to_ascii_lowercase().as_str() {
                 "commandorcontrol" | "cmdorctrl" | "commandorctrl" | "cmdorcontrol" => cmd_or_ctrl,
                 "control" | "ctrl" => "Ctrl",
-                "super" | "command" | "cmd" | "meta" => sup,
+                "super" | "command" | "cmd" | "meta" | "win" => sup,
+                "fn" => "Fn",
                 "alt" | "option" => alt,
                 "shift" => "Shift",
                 "space" => "Espaço",
@@ -305,6 +387,31 @@ mod tests {
         assert!(!same_shortcut(DEFAULT_SHORTCUT, DEFAULT_COMMAND_SHORTCUT));
         assert!(same_shortcut("Control+Shift+KeyD", "Shift+Control+KeyD"));
         assert!(!same_shortcut("Control+Banana", "Control+Banana"));
+    }
+
+    #[test]
+    fn the_default_is_a_valid_modifier_only_shortcut() {
+        assert!(matches!(parse(DEFAULT_SHORTCUT), Ok(Parsed::Mods(_))));
+        assert!(pretty("Control+Super").starts_with("Ctrl+"));
+        assert_eq!(pretty("Fn"), "Fn");
+    }
+
+    #[test]
+    fn modifier_only_shortcuts_need_two_modifiers_and_fn_is_mac_only() {
+        assert!(matches!(parse("Control+Alt"), Ok(Parsed::Mods(_))));
+        assert!(matches!(
+            parse("Control"),
+            Err(HotkeyError::Invalid { .. })
+        ));
+        assert_eq!(parse("Fn").is_ok(), cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn same_shortcut_compares_modifier_only_ones_too() {
+        assert!(same_shortcut("Control+Super", "Super+Ctrl"));
+        assert!(!same_shortcut("Control+Super", "Control+Alt"));
+        assert!(!same_shortcut("Control+Super", "Control+Shift+Space"));
+        assert!(!same_shortcut(DEFAULT_SHORTCUT, DEFAULT_COMMAND_SHORTCUT));
     }
 
     #[test]

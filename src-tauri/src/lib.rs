@@ -10,6 +10,7 @@ mod history;
 mod hotkey;
 mod logging;
 mod metrics;
+mod modkeys;
 mod overlay;
 mod paste;
 pub mod secrets;
@@ -86,13 +87,21 @@ pub fn run() {
             let tray = tray::Tray::new(app.handle(), tx.clone(), &config)?;
             // `Invalid` = o texto do atalho no config não se lê (não é culpa de outra app).
             let mut shortcut_invalid = false;
+            // `Unavailable`: o sistema não deixou ouvir um atalho só de modificadores
+            // (no Mac, falta a permissão); guarda o motivo para o aviso.
+            let mut shortcut_unavailable = None;
             let shortcut_ok = match hotkey::register_dictation(app.handle(), &config.shortcut) {
                 Ok(()) => true,
                 Err(e) => {
                     tracing::error!(error = %e, "sem atalho de ditado");
                     shortcut_invalid = matches!(e, hotkey::HotkeyError::Invalid { .. });
+                    if let hotkey::HotkeyError::Unavailable { reason, .. } = &e {
+                        shortcut_unavailable = Some(reason.clone());
+                    }
                     tray.set_tooltip(if shortcut_invalid {
                         "Ditok: atalho inválido no config"
+                    } else if shortcut_unavailable.is_some() {
+                        "Ditok: não consigo ouvir o atalho"
                     } else {
                         "Ditok: atalho ocupado por outra app"
                     });
@@ -135,6 +144,8 @@ pub fn run() {
                 let shortcut = hotkey::pretty(&state.config().shortcut);
                 state.notify(&if shortcut_invalid {
                     format!("O atalho {shortcut} do config não é válido. Escolhe outro nas Definições.")
+                } else if let Some(reason) = shortcut_unavailable {
+                    format!("Não consegui ouvir o atalho {shortcut}: {reason}.")
                 } else {
                     format!(
                         "Não consegui usar o atalho {shortcut}: outra app já o ocupa. Clica na barra ou abre o Ditok para escolher outro."
