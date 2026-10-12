@@ -9,3 +9,4 @@ pub mod wav;
 pub use capture::{
     AudioError, InputDevice, LevelSink, MicSink, Recorder, Recording, input_devices,
 };
+pub(crate) use capture::{Session as RawInput, device_name};

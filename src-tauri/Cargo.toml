@@ -21,6 +21,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "set-key"
 required-features = ["cli"]
 
+[[bin]]
+name = "notes-probe"
+required-features = ["cli"]
+
 [features]
 cli = []
 # O motor de transcrição local (sherpa-onnx, estático). Sem isto a app compila na mesma

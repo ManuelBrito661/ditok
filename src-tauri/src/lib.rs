@@ -13,6 +13,7 @@ mod local_models;
 mod logging;
 mod metrics;
 mod modkeys;
+pub mod notes;
 mod overlay;
 mod paste;
 mod quick_history;

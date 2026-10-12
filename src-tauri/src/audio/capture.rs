@@ -360,7 +360,7 @@ fn audio_thread(
     tracing::debug!("thread de áudio terminada");
 }
 
-struct Session {
+pub(crate) struct Session {
     stream: cpal::Stream,
     consumer: rtrb::Consumer<f32>,
     samples: Vec<f32>,
@@ -380,7 +380,7 @@ impl Session {
     /// Abre o microfone `wanted` (pelo nome) ou, sem escolha, o predefinido. Se o
     /// escolhido já não existir ou não abrir, volto ao predefinido: um ditado
     /// nunca falha só porque desligaste o headset que estava escolhido.
-    fn open(
+    pub(crate) fn open(
         pressed_at: Instant,
         start_cue: bool,
         events: Option<UnboundedSender<DictationEvent>>,
@@ -409,14 +409,33 @@ impl Session {
         Self::open_device(&device, pressed_at, start_cue, events)
     }
 
-    fn open_device(
+    pub(crate) fn open_device(
         device: &cpal::Device,
         pressed_at: Instant,
         start_cue: bool,
         events: Option<UnboundedSender<DictationEvent>>,
     ) -> Result<Self, AudioError> {
-        let name = device_name(device).unwrap_or_else(|| "desconhecido".to_owned());
         let supported = device.default_input_config()?;
+        Self::open_configured(device, supported, pressed_at, start_cue, events)
+    }
+
+    /// O áudio que o sistema está a tocar (colunas ou auscultadores). No Windows, o
+    /// WASAPI trata um dispositivo de *saída* aberto como entrada como loopback; no
+    /// macOS (14.6+) o cpal cria uma "tap" do Core Audio. Em ambos o formato é o da
+    /// saída, daí `default_output_config`.
+    pub(crate) fn open_loopback(device: &cpal::Device) -> Result<Self, AudioError> {
+        let supported = device.default_output_config()?;
+        Self::open_configured(device, supported, Instant::now(), false, None)
+    }
+
+    fn open_configured(
+        device: &cpal::Device,
+        supported: cpal::SupportedStreamConfig,
+        pressed_at: Instant,
+        start_cue: bool,
+        events: Option<UnboundedSender<DictationEvent>>,
+    ) -> Result<Self, AudioError> {
+        let name = device_name(device).unwrap_or_else(|| "desconhecido".to_owned());
         let format = supported.sample_format();
         let config = supported.config();
         let rate = config.sample_rate;
@@ -482,6 +501,38 @@ impl Session {
         start
     }
 
+    /// Entrega ao chamador o que chegou desde a última vez, sem acumular nada aqui:
+    /// o notetaker corre durante uma hora e não pode guardar o áudio todo na RAM.
+    pub(crate) fn drain_into(&mut self, out: &mut Vec<f32>) {
+        let n = self.consumer.slots();
+        if n == 0 {
+            return;
+        }
+        if let Ok(chunk) = self.consumer.read_chunk(n) {
+            let (a, b) = chunk.as_slices();
+            out.extend_from_slice(a);
+            out.extend_from_slice(b);
+            chunk.commit_all();
+        }
+    }
+
+    pub(crate) fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    pub(crate) fn device(&self) -> &str {
+        &self.device
+    }
+
+    /// O stream morreu (dispositivo desligado): é preciso reabri-lo.
+    pub(crate) fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn dropped(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
     /// Consome a sessão (`self` por valor): depois de terminar já não pode ser usada,
     /// e é o compilador que o garante.
     fn finish(mut self, to16k: &mut To16k, stop_at: Instant) -> Result<Recording, AudioError> {
@@ -521,7 +572,7 @@ impl Session {
 }
 
 /// O nome que o sistema dá ao microfone ("Microfone (Realtek Audio)").
-fn device_name(device: &cpal::Device) -> Option<String> {
+pub(crate) fn device_name(device: &cpal::Device) -> Option<String> {
     device.description().ok().map(|d| d.name().to_owned())
 }
 
