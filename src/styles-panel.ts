@@ -3,13 +3,16 @@
 // ditado; aqui só se edita a lista, gravada no config.json como o resto.
 
 import { api, type Style, type StyleRule } from "./api";
-import { STYLE_LABEL } from "./format";
+import { isMac, STYLE_LABEL } from "./format";
 import { $, app, onViewChange, save, toast } from "./store";
 
 const STYLES: Style[] = ["casual", "formal", "literal", "default"];
 
 /** Como o backend compara nomes (config.rs, app_key): minúsculas e sem ".exe". */
 const appKey = (name: string) => name.trim().toLowerCase().replace(/\.exe$/, "");
+
+/** Um nome de exemplo como o backend o vê em cada sistema (focus.rs, app_name). */
+const EXAMPLE_APP = isMac ? "WhatsApp" : "whatsapp.exe";
 
 /** As apps onde ditaste nesta sessão (vêm do backend quando o separador abre). */
 let recent: string[] = [];
@@ -196,13 +199,15 @@ export function setupStyles() {
   const form = $<HTMLFormElement>("style-add");
   const input = $<HTMLInputElement>("style-app");
   const select = $<HTMLSelectElement>("style-new");
+  input.placeholder = `App, ex.: ${EXAMPLE_APP}`;
+  if (isMac) $("styles-foot").textContent = "O nome é o da app, como aparece no Dock (ex.: Microsoft Outlook).";
   input.addEventListener("input", clearError);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     clearError();
     const name = input.value.trim().toLowerCase();
-    if (!appKey(name)) return invalid("Escreve o nome da app (ex.: whatsapp.exe).");
+    if (!appKey(name)) return invalid(`Escreve o nome da app (ex.: ${EXAMPLE_APP}).`);
     if (rules().some((r) => appKey(r.app) === appKey(name))) {
       return invalid(`"${name}" já tem um estilo: muda-o na lista.`);
     }

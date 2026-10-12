@@ -131,9 +131,25 @@ pub struct StyleRule {
     pub style: Style,
 }
 
-/// As regras com que se começa. São nomes de executáveis do Windows: no macOS
-/// ainda não sei a app em foco (ver `focus::app_name`), por isso não fazem nada.
+/// As regras com que se começa, com os nomes que `focus::app_name` devolve em
+/// cada sistema: executáveis no Windows, nomes do Dock no macOS.
 fn default_styles() -> Vec<StyleRule> {
+    #[cfg(target_os = "macos")]
+    const RULES: &[(&str, Style)] = &[
+        ("whatsapp", Style::Casual),
+        ("discord", Style::Casual),
+        ("slack", Style::Casual),
+        ("telegram", Style::Casual),
+        ("microsoft outlook", Style::Formal),
+        ("microsoft word", Style::Formal),
+        ("mail", Style::Formal),
+        ("thunderbird", Style::Formal),
+        ("terminal", Style::Literal),
+        ("iterm2", Style::Literal),
+        ("visual studio code", Style::Literal),
+        ("wezterm", Style::Literal),
+    ];
+    #[cfg(not(target_os = "macos"))]
     const RULES: &[(&str, Style)] = &[
         ("whatsapp.exe", Style::Casual),
         ("discord.exe", Style::Casual),
@@ -221,7 +237,7 @@ pub enum ConfigError {
     Budget,
     #[error("o nome do microfone é demasiado longo")]
     InputDevice,
-    #[error("cada estilo precisa do nome da app (ex.: whatsapp.exe)")]
+    #[error("cada estilo precisa do nome da app")]
     StyleEntry,
     #[error("já há um estilo para {0}")]
     DuplicateStyle(String),

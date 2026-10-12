@@ -1118,6 +1118,8 @@ dependencies = [
  "cpal",
  "enigo",
  "keyring",
+ "objc2-app-kit",
+ "objc2-foundation",
  "regex",
  "reqwest",
  "rpassword",

@@ -19,7 +19,8 @@ pub struct Window(usize);
 #[derive(Debug, Clone, Default)]
 pub struct Target {
     pub window: Option<Window>,
-    /// Nome do executável em minúsculas, sem caminho ("whatsapp.exe").
+    /// Nome da app em minúsculas: o executável no Windows ("whatsapp.exe"), o
+    /// nome do Dock no macOS ("whatsapp").
     pub app: Option<String>,
 }
 
@@ -42,8 +43,8 @@ pub fn foreground() -> Option<Window> {
 
 /// O nome do executável dono da janela, em minúsculas e sem caminho
 /// ("whatsapp.exe"). `None` se a janela já fechou ou o sistema não deixar ver o
-/// processo (ex.: uma app a correr como administrador). No macOS é sempre `None`
-/// por agora: precisaria do AppKit (`NSWorkspace.frontmostApplication`).
+/// processo (ex.: uma app a correr como administrador). No macOS é o nome da app
+/// em primeiro plano, também em minúsculas ("whatsapp", "microsoft outlook").
 pub fn app_name(w: Window) -> Option<String> {
     imp::app_name(w)
 }
@@ -214,6 +215,20 @@ mod imp {
 
     pub fn activate(_: Window) {}
 
+    /// Sem janelas a sério (ver `foreground`), pergunta-se a app em primeiro
+    /// plano agora. Quem chama fá-lo logo ao começar o ditado, por isso é a
+    /// mesma. Devolve o nome que aparece no Dock ("WhatsApp", "Microsoft
+    /// Outlook"), não o do executável: o do VS Code, por exemplo, é "Electron".
+    #[cfg(target_os = "macos")]
+    pub fn app_name(_: Window) -> Option<String> {
+        use objc2_app_kit::NSWorkspace;
+        let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+        let name = app.localizedName()?.to_string();
+        let name = name.trim().to_lowercase();
+        (!name.is_empty()).then_some(name)
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn app_name(_: Window) -> Option<String> {
         None
     }
