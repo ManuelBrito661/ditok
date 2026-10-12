@@ -316,7 +316,7 @@ async fn transcribe_and_paste(
                 Outcome::Nothing
             } else {
                 // Comandos, expansões e dicionário: neste computador, em microssegundos.
-                let local = rules.apply(&raw);
+                let local = rules.apply_styled(&raw, style);
                 applied = local.applied;
                 let cleaned = if let Some(plan) = plan
                     && let Some(input) = local.cleanup_input()
@@ -731,7 +731,7 @@ pub async fn reprocess(
             if raw.is_empty() {
                 Err("Não ouvi nada nesta gravação.".to_owned())
             } else {
-                let local = rules.apply(&raw);
+                let local = rules.apply_styled(&raw, style);
                 let cleaned = if let Some(plan) = plan
                     && let Some(input) = local.cleanup_input()
                 {

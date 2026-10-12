@@ -1,7 +1,8 @@
 //! O que se faz ao texto neste computador, entre a transcrição e a colagem:
 //!
-//! 1. **Comandos falados**: "nova linha" e "novo parágrafo" (e "new line", "new
-//!    paragraph") viram mudanças de linha.
+//! 1. **Comandos falados**: "nova linha" e "novo parágrafo" viram mudanças de linha e
+//!    "vírgula", "ponto de interrogação", "abre aspas"… viram a pontuação (e as
+//!    mesmas frases em inglês).
 //! 2. **Expansões**: uma frase ("o meu email") dá lugar a um texto (o endereço).
 //! 3. **Dicionário**: palavras escritas à tua maneira ("tauri" → "Tauri").
 //!
@@ -18,6 +19,8 @@ use std::{ops::Range, sync::LazyLock};
 
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
+
+use crate::config::Style;
 
 /// Uma entrada do dicionário. `from` pode ter várias formas separadas por
 /// vírgulas ("tauri, tori"); vazio quer dizer "a própria palavra", o que serve
@@ -56,7 +59,10 @@ pub struct Snippet {
 /// `Arc` no `AppState` e só são recriadas quando guardas as definições.
 #[derive(Debug, Default)]
 pub struct TextRules {
-    commands: bool,
+    /// "nova linha" e "novo parágrafo" (`Config::voice_commands`).
+    lines: bool,
+    /// "vírgula", "ponto de interrogação"… (`Config::spoken_punctuation`).
+    punctuation: bool,
     dictionary: Option<PhraseSet>,
     /// O texto final de cada entrada do dicionário (indexado como na config).
     dictionary_to: Vec<String>,
@@ -111,7 +117,8 @@ impl TextRules {
             }
         }
         Self {
-            commands: config.voice_commands,
+            lines: config.voice_commands,
+            punctuation: config.spoken_punctuation,
             dictionary,
             dictionary_to: config
                 .dictionary
@@ -129,10 +136,20 @@ impl TextRules {
         &self.vocabulary
     }
 
+    /// `apply_styled` com o estilo Predefinido (os testes não precisam de mais).
+    #[cfg(test)]
     pub fn apply(&self, raw: &str) -> Processed {
+        self.apply_styled(raw, Style::Default)
+    }
+
+    /// Como `apply`, sabendo o estilo do ditado. No Literal (terminal, IDE) a
+    /// pontuação falada fica desligada: lá, um "ponto" ou uma "vírgula" ditados
+    /// quase sempre são palavras de um comando, não pontuação.
+    pub fn apply_styled(&self, raw: &str, style: Style) -> Processed {
         let mut applied = Applied::default();
-        let text = if self.commands {
-            apply_commands(raw, &mut applied.commands)
+        let punctuation = self.punctuation && style != Style::Literal;
+        let text = if self.lines || punctuation {
+            apply_spoken(raw, self.lines, punctuation, &mut applied.commands)
         } else {
             raw.to_owned()
         };
@@ -336,55 +353,255 @@ fn phrase_pattern(phrase: &str) -> Option<String> {
 
 // ---------------------------------------------------------------- comandos
 
-/// Grupo 1: mudança de linha; grupo 2: parágrafo. `LazyLock`: compilado na
+/// Onde fica o espaço à volta de uma marca de pontuação.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spacing {
+    /// Cola-se à palavra de trás e dá espaço à de a seguir: `,` `?` `)` `”`.
+    Close,
+    /// Tem espaço antes e cola-se à palavra de a seguir: `(` `“`.
+    Open,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Action {
+    Line,
+    Paragraph,
+    Mark {
+        symbol: &'static str,
+        spacing: Spacing,
+        /// A palavra a seguir começa com maiúscula (depois de `.` `?` `!`).
+        capitalize: bool,
+    },
+}
+
+/// Um comando falado: a frase (em expressão regular, PT e EN) e o que faz.
+struct Spoken {
+    pattern: &'static str,
+    action: Action,
+    /// Frases que quase nunca aparecem por acaso ("ponto de interrogação") valem em
+    /// qualquer sítio. As outras ("vírgula", "ponto final", "nova linha") só contam
+    /// isoladas por pontuação, como no "nova linha" de sempre.
+    firm: bool,
+    /// Também conta quando é a última coisa do texto, mesmo sem pausa escrita antes
+    /// ("…eu sou o Pedro ponto final"): é como se acaba um ditado.
+    at_end: bool,
+}
+
+const fn mark(symbol: &'static str, spacing: Spacing, capitalize: bool) -> Action {
+    Action::Mark {
+        symbol,
+        spacing,
+        capitalize,
+    }
+}
+
+/// A tabela. A ordem não importa: o regex escolhe a frase que começa mais cedo, e
+/// "ponto e vírgula" começa antes da "vírgula" que tem lá dentro.
+const SPOKEN: &[Spoken] = &[
+    Spoken {
+        pattern: r"ponto\s+de\s+interroga[çc][ãa]o|question\s+mark",
+        action: mark("?", Spacing::Close, true),
+        firm: true,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"ponto\s+de\s+exclama[çc][ãa]o|exclamation\s+(?:mark|point)",
+        action: mark("!", Spacing::Close, true),
+        firm: true,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"ponto\s+e\s+v[íi]rgula",
+        action: mark(";", Spacing::Close, false),
+        firm: true,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"abr(?:e|ir)\s+aspas|open\s+quotes?",
+        action: mark("“", Spacing::Open, false),
+        firm: true,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"fech(?:a|ar)\s+aspas|close\s+quotes?",
+        action: mark("”", Spacing::Close, false),
+        firm: true,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"abr(?:e|ir)\s+par[êe]nte(?:ses|sis)|open\s+paren(?:thesis|theses)?",
+        action: mark("(", Spacing::Open, false),
+        firm: true,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"fech(?:a|ar)\s+par[êe]nte(?:ses|sis)|close\s+paren(?:thesis|theses)?",
+        action: mark(")", Spacing::Close, false),
+        firm: true,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"v[íi]rgula|comma",
+        action: mark(",", Spacing::Close, false),
+        firm: false,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"ponto\s+final|full\s+stop",
+        action: mark(".", Spacing::Close, true),
+        firm: false,
+        at_end: true,
+    },
+    Spoken {
+        pattern: r"dois\s+pontos",
+        action: mark(":", Spacing::Close, false),
+        firm: false,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"retic[êe]ncias",
+        action: mark("…", Spacing::Close, false),
+        firm: false,
+        at_end: true,
+    },
+    Spoken {
+        pattern: r"nova\s+linha|new\s*line",
+        action: Action::Line,
+        firm: false,
+        at_end: false,
+    },
+    Spoken {
+        pattern: r"novo\s+par[áa]grafo|new\s+paragraph",
+        action: Action::Paragraph,
+        firm: false,
+        at_end: false,
+    },
+];
+
+/// Um regex só, com um grupo de captura por frase (como o `PhraseSet`): o grupo
+/// que apanhou diz qual foi a entrada de `SPOKEN`. `LazyLock`: compilado na
 /// primeira vez que é usado e partilhado daí em diante.
-static COMMANDS: LazyLock<Regex> = LazyLock::new(|| {
-    RegexBuilder::new(r"\b(?:(nova\s+linha|new\s*line)|(novo\s+par[áa]grafo|new\s+paragraph))\b")
+static SPOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    let alternatives: Vec<String> = SPOKEN.iter().map(|s| format!("({})", s.pattern)).collect();
+    RegexBuilder::new(&format!(r"\b(?:{})\b", alternatives.join("|")))
         .case_insensitive(true)
         .build()
-        .expect("regex dos comandos")
+        .expect("regex dos comandos falados")
 });
 
 fn is_punct(c: char) -> bool {
     matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '…')
 }
 
+/// Onde uma pausa deixa a sua marca: pontuação, mudança de linha ou o fecho de
+/// uns parênteses ou aspas ("(ver abaixo) ponto final").
+fn is_boundary(c: char) -> bool {
+    c == '\n' || is_punct(c) || matches!(c, ')' | '”' | '"')
+}
+
 fn is_space(c: char) -> bool {
     c.is_whitespace() && c != '\n'
 }
 
-/// Troca "nova linha" / "novo parágrafo" por mudanças de linha.
+/// Troca os comandos falados pelo que eles pedem, num só passe pelo texto:
+/// - `lines`: "nova linha" / "novo parágrafo" → mudanças de linha;
+/// - `punctuation`: "ponto de interrogação", "vírgula", "abre aspas"… → `?` `,` `“`.
 ///
-/// Só conta como comando quando a frase está isolada: entre pontuação, mudanças
-/// de linha ou as pontas do texto. Quem dita um comando faz uma pausa, e os
-/// modelos marcam-na com uma vírgula ou um ponto ("Olá Pedro, nova linha, tudo
-/// bem?"). Assim "abriu uma nova linha de metro" fica escrito tal e qual.
+/// Uma frase que não é "firme" (ver `Spoken::firm`) só conta quando está isolada:
+/// entre pontuação, mudanças de linha ou as pontas do texto. Quem dita um comando
+/// faz uma pausa, e os modelos marcam-na com uma vírgula ou um ponto ("Olá Pedro,
+/// nova linha, tudo bem?"). Assim "abriu uma nova linha de metro" e "o ponto final
+/// do autocarro" ficam escritos tal e qual.
 ///
-/// À volta de um comando: a vírgula de antes é tirada (é só a pausa), a pontuação
-/// de depois também, e a frase seguinte começa com maiúscula.
-fn apply_commands(text: &str, count: &mut usize) -> String {
+/// À volta de um comando: a pontuação que o modelo pôs de antes (é só a pausa) e
+/// de depois é tirada, e a frase seguinte começa com maiúscula quando o comando
+/// acaba uma frase.
+fn apply_spoken(text: &str, lines: bool, punctuation: bool, count: &mut usize) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last = 0; // até onde o texto original já foi copiado
     let mut capitalize = false;
+    // Depois de uma marca que fecha (`,` `?` `)`), a próxima palavra leva um espaço.
+    let mut space_next = false;
 
-    for caps in COMMANDS.captures_iter(text) {
+    for caps in SPOKEN_RE.captures_iter(text) {
         let Some(m) = caps.get(0) else { continue };
-        let before = text[..m.start()].trim_end_matches(is_space);
-        let after = text[m.end()..].trim_start_matches(is_space);
-        let isolated_before = before.is_empty() || before.ends_with(|c| c == '\n' || is_punct(c));
-        let isolated_after = after.is_empty() || after.starts_with(|c| c == '\n' || is_punct(c));
-        if m.start() < last || !isolated_before || !isolated_after {
+        // O grupo 0 é a ocorrência inteira; os das frases começam no 1.
+        let Some(entry) = caps.iter().skip(1).position(|g| g.is_some()) else {
+            continue;
+        };
+        let spoken = &SPOKEN[entry];
+        let enabled = match spoken.action {
+            Action::Line | Action::Paragraph => lines,
+            Action::Mark { .. } => punctuation,
+        };
+        if !enabled || m.start() < last {
             continue;
         }
-
-        push_capitalized(&mut out, &text[last..m.start()], &mut capitalize);
-        trim_end_spaces(&mut out);
-        if out.ends_with(',') {
-            out.pop();
-            trim_end_spaces(&mut out);
+        if !spoken.firm {
+            let before = text[..m.start()].trim_end_matches(is_space);
+            let after = text[m.end()..].trim_start_matches(is_space);
+            let isolated_before = before.is_empty() || before.ends_with(is_boundary);
+            let isolated_after = after.is_empty() || after.starts_with(is_boundary);
+            // Um ditado acaba muitas vezes em "ponto final", sem pausa antes.
+            let ends_the_text = spoken.at_end && after.is_empty();
+            if !(isolated_before || ends_the_text) || !isolated_after {
+                continue;
+            }
         }
-        out.push_str(if caps.get(1).is_some() { "\n" } else { "\n\n" });
-        capitalize = true;
+
+        push_text(
+            &mut out,
+            &text[last..m.start()],
+            &mut capitalize,
+            &mut space_next,
+        );
+        trim_end_spaces(&mut out);
+        match spoken.action {
+            Action::Line | Action::Paragraph => {
+                if out.ends_with(',') {
+                    out.pop();
+                    trim_end_spaces(&mut out);
+                }
+                out.push_str(if matches!(spoken.action, Action::Line) {
+                    "\n"
+                } else {
+                    "\n\n"
+                });
+                capitalize = true;
+                space_next = false;
+            }
+            Action::Mark {
+                symbol,
+                spacing: Spacing::Close,
+                capitalize: capital,
+            } => {
+                // A pausa que o modelo marcou antes ("tudo bem, ponto de interrogação")
+                // é só isso: a marca falada substitui-a.
+                while out.ends_with([',', ';', ':', '.']) {
+                    out.pop();
+                    trim_end_spaces(&mut out);
+                }
+                // Se o modelo já escreveu o "?" não se repete; os parênteses e as
+                // aspas, sim, podem vir seguidos.
+                let repeats = matches!(symbol, "?" | "!" | "…") && out.ends_with(symbol);
+                if !repeats {
+                    out.push_str(symbol);
+                }
+                capitalize |= capital;
+                space_next = true;
+            }
+            Action::Mark {
+                symbol,
+                spacing: Spacing::Open,
+                ..
+            } => {
+                if !out.is_empty() && !out.ends_with(['\n', '(', '“']) {
+                    out.push(' ');
+                }
+                out.push_str(symbol);
+                space_next = false;
+            }
+        }
         *count += 1;
 
         let rest = &text[m.end()..];
@@ -394,8 +611,28 @@ fn apply_commands(text: &str, count: &mut usize) -> String {
                 .len();
         last = m.end() + skipped;
     }
-    push_capitalized(&mut out, &text[last..], &mut capitalize);
+    push_text(&mut out, &text[last..], &mut capitalize, &mut space_next);
     out
+}
+
+/// Acrescenta um bocado de texto original a `out`, com o espaço que uma marca
+/// anterior pede (`space_next`) e a maiúscula que um comando pediu (`capitalize`).
+fn push_text(out: &mut String, chunk: &str, capitalize: &mut bool, space_next: &mut bool) {
+    if !*space_next {
+        push_capitalized(out, chunk, capitalize);
+        return;
+    }
+    // O espaço que lá estava é substituído por um só (ou nenhum).
+    let chunk = chunk.trim_start_matches(is_space);
+    // Se só havia espaços, o pedido de espaço fica para o próximo bocado.
+    if chunk.is_empty() {
+        return;
+    }
+    if !chunk.starts_with('\n') {
+        out.push(' ');
+    }
+    *space_next = false;
+    push_capitalized(out, chunk, capitalize);
 }
 
 fn trim_end_spaces(s: &mut String) {
@@ -447,8 +684,14 @@ mod tests {
         })
     }
 
+    /// Só "nova linha" e "novo parágrafo" (os testes de sempre).
     fn commands(text: &str) -> String {
-        apply_commands(text, &mut 0)
+        apply_spoken(text, true, false, &mut 0)
+    }
+
+    /// Tudo ligado, como por omissão.
+    fn spoken(text: &str) -> String {
+        apply_spoken(text, true, true, &mut 0)
     }
 
     #[test]
@@ -593,6 +836,152 @@ mod tests {
             r.apply("Olá, nova linha, tudo bem").text,
             "Olá, nova linha, tudo bem"
         );
+    }
+
+    #[test]
+    fn firm_phrases_apply_anywhere() {
+        // Sem pausas escritas à volta: "ponto de interrogação" nunca é uma frase normal.
+        assert_eq!(
+            spoken("Olá Pedro ponto de exclamação como estás ponto de interrogação"),
+            "Olá Pedro! Como estás?"
+        );
+        assert_eq!(
+            spoken("compra leite ponto e vírgula pão ponto e vírgula natas"),
+            "compra leite; pão; natas"
+        );
+        assert_eq!(
+            spoken("Are you sure question mark Yes exclamation mark"),
+            "Are you sure? Yes!"
+        );
+    }
+
+    #[test]
+    fn ambiguous_phrases_need_isolation() {
+        // Com as pausas que o STT escreve, valem.
+        assert_eq!(
+            spoken("Olá, Pedro, vírgula, tudo bem, ponto final, obrigado"),
+            "Olá, Pedro, tudo bem. Obrigado"
+        );
+        assert_eq!(
+            spoken("Atenção, dois pontos, fecha a porta"),
+            "Atenção: fecha a porta"
+        );
+        assert_eq!(
+            spoken("E depois, reticências, não sei"),
+            "E depois… não sei"
+        );
+        // No meio de uma frase, são palavras.
+        for text in [
+            "A vírgula é um sinal de pontuação.",
+            "Fica no ponto final do autocarro.",
+            "Marcou dois pontos no jogo.",
+            "Ele usa muitas reticências nos textos.",
+        ] {
+            assert_eq!(spoken(text), text);
+        }
+    }
+
+    #[test]
+    fn ponto_de_vista_untouched() {
+        for text in [
+            "Do meu ponto de vista, está bem.",
+            "O ponto de partida é este.",
+            "Chegámos a este ponto.",
+            "Falta um ponto e a vírgula.",
+        ] {
+            assert_eq!(spoken(text), text);
+        }
+    }
+
+    #[test]
+    fn no_double_punctuation() {
+        // O modelo já tinha escrito a pausa e/ou a própria marca.
+        assert_eq!(spoken("Tudo bem, ponto de interrogação."), "Tudo bem?");
+        assert_eq!(spoken("Tudo bem? Ponto de interrogação."), "Tudo bem?");
+        assert_eq!(spoken("Olá, vírgula, mundo"), "Olá, mundo");
+        assert_eq!(spoken("Fim. Ponto final. Obrigado"), "Fim. Obrigado");
+    }
+
+    #[test]
+    fn question_mark_capitalizes_next() {
+        assert_eq!(
+            spoken("quem és ponto de interrogação eu sou o pedro ponto final"),
+            "quem és? Eu sou o pedro."
+        );
+        // A vírgula e o ponto e vírgula não mudam a maiúscula.
+        assert_eq!(spoken("sim, vírgula, claro"), "sim, claro");
+    }
+
+    #[test]
+    fn quotes_pair_by_parity() {
+        assert_eq!(
+            spoken("Ele disse abre aspas olá fecha aspas e saiu"),
+            "Ele disse “olá” e saiu"
+        );
+        assert_eq!(spoken("abre aspas olá fecha aspas ponto final"), "“olá”.");
+        assert_eq!(spoken("open quote hi close quote"), "“hi”");
+    }
+
+    #[test]
+    fn parentheses_spacing() {
+        assert_eq!(
+            spoken("vê a figura abre parênteses página dois fecha parênteses ponto final"),
+            "vê a figura (página dois)."
+        );
+        assert_eq!(
+            spoken("abre parêntesis a fecha parêntesis fecha parêntesis"),
+            "(a))"
+        );
+    }
+
+    #[test]
+    fn marks_and_lines_work_together() {
+        assert_eq!(
+            spoken("Olá ponto de exclamação, nova linha, tudo bem ponto de interrogação"),
+            "Olá!\nTudo bem?"
+        );
+        assert_eq!(
+            spoken("Olá Pedro. Nova linha. Obrigado, vírgula, até já"),
+            "Olá Pedro.\nObrigado, até já"
+        );
+    }
+
+    #[test]
+    fn new_line_still_works_with_both_toggles() {
+        let only_lines = |text| apply_spoken(text, true, false, &mut 0);
+        let only_marks = |text| apply_spoken(text, false, true, &mut 0);
+        let text = "Olá, nova linha, tudo bem ponto de interrogação";
+        assert_eq!(only_lines(text), "Olá\nTudo bem ponto de interrogação");
+        assert_eq!(only_marks(text), "Olá, nova linha, tudo bem?");
+        assert_eq!(apply_spoken(text, false, false, &mut 0), text);
+    }
+
+    #[test]
+    fn disabled_toggle_leaves_text() {
+        let text = "Olá, vírgula, tudo bem ponto de interrogação";
+        let off = TextRules::new(&Config {
+            spoken_punctuation: false,
+            ..Config::default()
+        });
+        assert_eq!(off.apply(text).text, text);
+        // O Literal (terminal, IDE) também as desliga, com a opção ligada.
+        let on = TextRules::new(&Config::default());
+        assert_eq!(on.apply_styled(text, Style::Literal).text, text);
+        assert_eq!(on.apply_styled(text, Style::Casual).text, "Olá, tudo bem?");
+        // O contador conta os dois tipos de comando.
+        let applied = on.apply("Olá ponto de exclamação nova linha").applied;
+        assert_eq!(
+            applied.commands, 1,
+            "o 'nova linha' no fim, sem pausa, não conta"
+        );
+    }
+
+    #[test]
+    fn spoken_punctuation_is_not_applied_to_files() {
+        // Uma aula onde se diz "ponto de interrogação" não é um ditado teu.
+        let r = TextRules::new(&Config::default());
+        let text = "Pergunta com ponto de interrogação, vírgula, fim.";
+        assert_eq!(r.apply_dictionary(text), text);
     }
 
     #[test]

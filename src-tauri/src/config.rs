@@ -58,6 +58,9 @@ pub struct Config {
     pub show_overlay: bool,
     /// "nova linha" e "novo parágrafo" viram mudanças de linha (ver `text.rs`).
     pub voice_commands: bool,
+    /// "vírgula", "ponto de interrogação", "abre aspas"… viram a pontuação (ver
+    /// `text.rs`). Um config.json antigo, sem o campo, recebe o valor por omissão.
+    pub spoken_punctuation: bool,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -204,6 +207,7 @@ impl Default for Config {
             save_last_recording: false,
             show_overlay: true,
             voice_commands: true,
+            spoken_punctuation: true,
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,
@@ -562,6 +566,10 @@ mod tests {
             "um config.json antigo passa a deixar o ditado no clipboard"
         );
         assert!(c.voice_commands, "comandos falados ligados por omissão");
+        assert!(
+            c.spoken_punctuation,
+            "pontuação falada ligada por omissão (também para quem atualiza)"
+        );
         assert!(c.dictionary.is_empty() && c.snippets.is_empty());
         assert!(c.sounds, "sons ligados por omissão");
         assert_eq!(c.monthly_budget_usd, None);
