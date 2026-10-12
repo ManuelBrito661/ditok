@@ -1,8 +1,8 @@
 # Ditok
 
-App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, métricas e definições.
+App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, notas de reuniões, métricas e definições.
 
-Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é feita através do [OpenRouter](https://openrouter.ai).
+Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é feita através do [OpenRouter](https://openrouter.ai) ou, se preferires, no próprio computador com um motor local.
 
 ## Usar
 
@@ -12,8 +12,10 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é fei
 | Ditar (modo alternar) | tocar no atalho (<300 ms), falar, tocar outra vez |
 | Ditar com o rato | clicar na barra com a mascote, falar, clicar no **■** |
 | Cancelar a gravação | **Esc** (ou o **✕** na barra) |
+| Modo comando | atalho próprio, ligado em **Definições → Geral** (ver abaixo) |
+| Histórico rápido | atalho próprio, sem nenhum por omissão (ver abaixo) |
 
-O atalho pode ser mudado nas definições (também aceita só modificadores, como Ctrl+Alt).
+O atalho de ditado pode ser mudado nas definições (também aceita só modificadores, como Ctrl+Alt).
 
 No Mac, o Fn precisa da permissão **Monitorização de entrada** (Definições do Sistema → Privacidade e Segurança). Com a permissão **Acessibilidade** o Ditok engole o Fn e o Mac não abre os emojis; sem ela, põe *Pressionar 🌐 para* em **Não fazer nada** (Definições do Sistema → Teclado). No Windows, o Ctrl+Win usa um hook de teclado; não funciona sobre janelas abertas como administrador.
 
@@ -24,15 +26,15 @@ Em baixo ao centro do ecrã (no monitor onde está o cursor) há uma pílula peq
 | Estado | O que mostra |
 | - | - |
 | Em repouso | pílula minúscula com a mascote |
-| A ouvir | barras que seguem o volume da tua voz e o tempo de gravação (fica laranja aos 45 s, perto do limite de 60 s do OpenRouter) |
+| A ouvir | barras que seguem o volume da tua voz e o tempo de gravação (fica laranja aos 45 s, perto do limite de 60 s do processamento do OpenRouter) |
 | A processar | três pontos animados |
 | Colado | contorno verde durante ~1 s |
 | Falhou | contorno vermelho; uma notificação explica o motivo |
 | Não ouvi nada | durante ~1 s, quando a gravação só tinha silêncio ou ruído: não foi enviada nem colada |
 
-A barra reage ao rato: ao passares por cima cresce e mostra uma dica com o atalho, e um clique começa a ditar em modo alternar. Enquanto ouve nesse modo mostra um **✕** (cancelar) e um **■** (parar e colar). Fora da pílula os cliques passam através da janela. A barra nunca recebe o foco, por isso o texto é sempre colado na app em que estavas. Pode ser escondida nas definições.
+A barra reage ao rato: ao passares por cima cresce e mostra uma dica com o atalho, e um clique começa a ditar em modo alternar. Enquanto ouve nesse modo mostra um **✕** (cancelar) e um **■** (parar e colar). Fora da pílula os cliques passam através da janela. A barra nunca recebe o foco, por isso o texto é sempre colado na app em que estavas. Pode ser escondida em **Definições → Geral**.
 
-O ícone do tray mostra o mesmo estado: parado, a ouvir (vermelho), a processar (laranja), pronto (verde).
+O ícone do tray mostra o mesmo estado: parado, a ouvir (vermelho), a processar (laranja), pronto (verde). O menu do tray tem também **Tentar de novo o último ditado**.
 
 ### Sons
 
@@ -53,18 +55,21 @@ Olá Pedro
 Tudo bem?
 ```
 
-O comando é resolvido no computador, sem IA. Só conta quando está isolado por pausas, que os modelos marcam com uma vírgula ou um ponto: no meio de uma frase ("abriram uma nova linha de metro") fica escrito tal e qual. A vírgula antes do comando e a pontuação depois dele desaparecem, e a frase seguinte começa com maiúscula. Podem ser desligados na página **Dicionário**.
+O comando é resolvido no computador, sem IA. Só conta quando está isolado por pausas, que os modelos marcam com uma vírgula ou um ponto: no meio de uma frase ("abriram uma nova linha de metro") fica escrito tal e qual. A vírgula antes do comando e a pontuação depois dele desaparecem, e a frase seguinte começa com maiúscula. Os comandos e a pontuação falada podem ser desligados na página **Dicionário**.
 
 ## A janela
 
 Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua a correr. Tem modo claro e escuro.
 
+Na primeira execução aparece um guia em três passos: a chave do OpenRouter, o microfone (com um medidor de nível ao vivo) e uma experiência de ditado. Pode ser saltado em qualquer altura e não volta a aparecer.
+
 | Página | O que tem |
 | - | - |
-| Início | ditados, palavras e custo do mês, e o histórico dos últimos ditados com um botão "Copiar" em cada um. Um ditado que não chegou a ser colado também fica lá |
-| Dicionário | palavras, expansões e comandos falados (ver abaixo) |
-| Ficheiros | transcrever a gravação de uma aula ou um vídeo, arrastado para a janela (ver abaixo) |
-| Métricas | latência p50/p90, custo e ditados por mês, orçamento, o que resta na chave, últimos ditados, RAM da app e das janelas |
+| Início | ditados, palavras e custo do mês, e o histórico dos últimos ditados (com pesquisa e um botão "Copiar" em cada um). Um ditado que não chegou a ser colado também fica lá |
+| Dicionário | palavras, expansões, comandos falados e importar/exportar (ver abaixo) |
+| Ficheiros | transcrever a gravação de uma aula ou um vídeo, arrastado para a janela, com resumo (ver abaixo) |
+| Notas | gravar uma reunião ou uma chamada, com transcrição ao vivo (ver abaixo) |
+| Métricas | latência p50/p90, custo e ditados por mês, orçamento, o que resta na chave, estatísticas de uso, últimos ditados, RAM da app e das janelas |
 
 ### Dicionário e expansões
 
@@ -75,29 +80,69 @@ Aplicados no computador logo a seguir à transcrição, sem rede: não acrescent
 
 Com a limpeza com IA ligada, as palavras vão no pedido ao modelo, para ele as escrever assim. As expansões não: o modelo recebe um marcador (`{{1}}`) no lugar de cada uma, que é trocado pelo texto depois da limpeza. Assim o teu email ou a tua morada nunca saem do computador, e o modelo não os pode "corrigir". Se o modelo estragar um marcador ou mexer nas mudanças de linha, é colado o texto sem limpeza.
 
-### Definições
+**Importar e exportar** em JSON (o formato do Ditok), CSV (`tipo;de;para`, com BOM para o Excel abrir bem) ou TXT (uma palavra por linha, só vocabulário). Se uma palavra importada já existir com outro valor, escolhes entre manter a tua ou usar a do ficheiro.
 
-No botão **Definições** da barra lateral. Cada alteração é guardada logo, sem botão "Guardar".
+### Modo comando
 
-| Separador | O que tem |
+Seleciona um texto numa app, carrega no atalho de comando e diz o que queres: "torna isto mais formal", "traduz para inglês". O texto selecionado é substituído pela resposta do modelo. Sem seleção, a instrução escreve texto novo no cursor ("escreve um email a recusar a reunião"). Usa o mesmo modelo da limpeza, por isso precisa dela ligada. Liga-se em **Definições → Geral**, com o atalho próprio (por omissão `Ctrl+Shift+Alt+Space`).
+
+### Histórico rápido
+
+Um atalho (sem nenhum por omissão; define-o em **Definições → Geral**) abre um menu do sistema junto ao cursor com os últimos ditados. O escolhido é colado na janela onde estavas. É um menu nativo, por isso não tem caixa de pesquisa: para isso há a página Início.
+
+### Estilos por app
+
+Em **Definições → Estilos por app** dizes que tom usar em cada app. O estilo é escolhido pela app onde estavas quando começaste a ditar:
+
+| Estilo | Efeito |
 | - | - |
-| Geral | atalho (com deteção de conflitos com outras apps), idioma, sons ao começar e acabar, arranque com o sistema, mostrar a barra com a mascote, deixar o ditado no clipboard depois de colar (ligado por omissão; desligado, o clipboard volta ao que lá tinhas) |
-| Transcrição | chave do OpenRouter (guardar / testar / apagar), orçamento mensal, modelo de transcrição com pesquisa e preço, formato de envio (multipart ou JSON) |
-| Limpeza com IA | corrige pontuação, remove hesitações e, quando te corriges a meio da frase ("às duas, não, às três"), fica só a correção, com um modelo de texto (desligada por omissão; se falhar ou demorar mais de 6 s, cola o texto sem limpeza) |
-| Dados e privacidade | histórico (ligado por omissão, só neste computador), guardar a última gravação |
+| Predefinido | usa só o nível de limpeza global |
+| Casual | frases curtas, sem formalidades (mensagens) |
+| Formal | frases completas e pontuação cuidada (email, documentos) |
+| Literal | nunca passa pelo modelo, seja qual for o nível (terminal, editor de código) |
+
+Vêm regras iniciais para as apps mais comuns (WhatsApp, Discord, Slack e Telegram como Casual; Outlook e Word como Formal; terminais e VS Code como Literal). Podes acrescentar, mudar ou remover as tuas.
+
+### Notas de reuniões
+
+Na página **Notas** gravas uma reunião, uma chamada ou uma aula online. Escolhes o que gravar:
+
+- **Reunião ou chamada**: o teu microfone (**Eu**) e o áudio do computador (**Outros**).
+- **Só o áudio do computador**: um vídeo ou uma aula online.
+- **Conversa presencial**: só o microfone.
+
+A transcrição aparece ao vivo, com cada linha marcada como "Eu" ou "Outros". A gravação continua com a janela fechada, e ao reabri-la a página mostra onde ficou. Com colunas em vez de auscultadores, o microfone apanha também o som da outra pessoa; com auscultadores fica tudo limpo. O áudio do computador é captado da saída que escolheres em **Definições → Geral**.
+
+No fim, cada sessão fica numa pasta com a transcrição e os metadados, e pode ser resumida (com o modelo de resumos) e exportada. Quando a app fecha a meio de uma reunião, a sessão é recuperada como interrompida na próxima abertura.
+
+"Outros" não é separado por pessoa por omissão. Se marcares **Separar quem fala em "Outros" (Orador 1, 2…)**, no fim da reunião um modelo de voz local agrupa os trechos parecidos. Precisa dos modelos de voz (descarregados à parte) e só existe nos builds com o motor local (ver abaixo).
 
 ### Transcrever ficheiros
 
-Arrasta a gravação de uma aula, de uma reunião ou um vídeo para a janela (ou usa **Ficheiros → Escolher ficheiro…**). Funciona com mp3, m4a, aac, wav, flac, ogg (vorbis), mp4, mov e mkv. Opus (notas de voz do WhatsApp, webm) ainda não.
+Arrasta a gravação de uma aula, de uma reunião ou um vídeo para a janela (ou usa **Ficheiros → Escolher ficheiro…**). Funciona com mp3, m4a, aac, wav, flac, ogg (vorbis), mp4, mov, mkv e outros contentores de áudio ou vídeo comuns. Opus (notas de voz do WhatsApp, webm) ainda não.
 
 1. Antes de começar aparece a duração e o custo estimado, ao preço dos teus últimos pedidos com o modelo atual (ou ao da lista de modelos, se ainda não houver nenhum), com um aviso se passar o orçamento do mês ou o que resta na chave.
-2. O ficheiro é lido aos bocados e partido em pedaços de ~2,5 min, cortados na pausa mais silenciosa perto desse ponto, para não partir palavras. Vão até 3 pedaços ao mesmo tempo para o modelo de transcrição atual; um pedaço que falhe por um problema passageiro (rede, servidor ocupado) é repetido duas vezes. Os pedaços só com silêncio (um intervalo) não são enviados.
+2. O ficheiro é lido aos bocados e partido em pedaços de ~2,5 min, cortados na pausa mais silenciosa perto desse ponto, para não partir palavras. Vão até 3 pedaços ao mesmo tempo para o modelo de transcrição atual. Um pedaço que falhe por um problema passageiro (rede, servidor ocupado) é repetido até duas vezes, com uma pausa de 2 s e 4 s. Os pedaços só com silêncio (um intervalo) não são enviados.
 3. Uma barra mostra o progresso e o tempo que falta. Podes fechar a janela: o trabalho continua e há uma notificação no fim.
-4. O texto fica na janela, com **Copiar** e **Guardar ao lado do original** (`aula.txt`, sem substituir nenhum ficheiro), e é guardada sempre uma cópia em `transcricoes\` na pasta de dados.
+4. O texto fica na janela, com **Copiar texto** e **Guardar ao lado do original** (`aula.txt`, sem substituir nenhum ficheiro), e é guardada sempre uma cópia em `transcricoes\` na pasta de dados. Com **Resumir** obténs um resumo do texto, do tipo que escolheres.
 
 Os pedaços são juntos pela ordem do ficheiro, com um parágrafo novo quando o anterior acaba numa frase completa. Um pedaço que falhe de vez fica assinalado no texto (`[não foi possível transcrever 25:00–27:30]`). Ao parar a meio fica o que já estava transcrito. Só o dicionário é aplicado ao texto: comandos falados e expansões são para os teus ditados, e a limpeza com IA não é usada. O custo conta para o mês e para o orçamento.
 
 Uma aula de 1 h com o `elevenlabs/scribe-v2` custa ~$2; com o `openai/whisper-large-v3-turbo`, uns cêntimos.
+
+### Resumos
+
+Uma aula, uma reunião ou um ditado comprido podem ser resumidos com o modelo de texto, numa única chamada. O resumo usa um modelo próprio (em **Definições → Limpeza com IA**) ou, se não tiver, o da limpeza. O texto é tratado como dados, não como instruções: uma aula com "ignora o que disseram antes" não muda o resumo. Uma hora de aula cabe num pedido; acima de um certo tamanho a app recusa, com a razão, em vez de cortar o texto em silêncio.
+
+### Motor local
+
+Em **Definições → Transcrição → Onde se transcreve** podes escolher a **nuvem** (OpenRouter, o padrão) ou **este computador**. O motor local corre no próprio computador, sem custo e sem o áudio sair dele. Os modelos (Parakeet ou Whisper) não vêm no instalador: descarregam-se do Hugging Face quando os pedes, em **Modelos neste computador**, e cada ficheiro só fica disponível depois de o tamanho e o SHA-256 baterem certo. Uma descarga interrompida retoma de onde ia.
+
+Um modelo carregado ocupa entre 0,7 e 2,4 GB de RAM, por isso é carregado a pedido e largado ao fim de algum tempo sem uso. Os builds de release (Windows e macOS) incluem o motor. Num build de desenvolvimento sem a feature `local` a app compila e funciona com a nuvem, e a página do motor local diz que o motor não está incluído.
+
+### Estatísticas de uso
+
+Em **Métricas → Uso**: palavras por dia, a sequência de dias seguidos, um mapa de calor das últimas 53 semanas e as apps onde mais ditas. Só contagens: o texto nunca é guardado aqui. Há um botão para apagar estas estatísticas (os custos e os tempos ficam).
 
 ### Orçamento e chave
 
@@ -110,7 +155,7 @@ As Métricas mostram também quanto resta na chave do OpenRouter, se lhe tiveres
 O Ditok procura versões novas nas [Releases do GitHub](https://github.com/ManuelBrito661/ditok/releases) 10 s depois de arrancar e depois a cada 6 h. Quando há uma, mostra uma notificação e um cartão **Nova versão** na janela; o botão **Atualizar** descarrega, instala e reinicia a app. As atualizações são assinadas e verificadas antes de instalar.
 
 ### Chave de API
-A chave do [OpenRouter](https://openrouter.ai/settings/keys) fica no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros, e a janela nunca a mostra: só indica se está configurada. Ao guardar, a chave é validada no OpenRouter antes de ficar no cofre.
+A chave do [OpenRouter](https://openrouter.ai/settings/keys) fica no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros, e a janela nunca a mostra: só indica se está configurada. Ao guardar, a app valida a chave no OpenRouter e só depois a põe no cofre. Uma chave recusada não é guardada; se não houver rede, é guardada sem validação e fica registado no log.
 
 Em alternativa à janela, na pasta `src-tauri`:
 
@@ -118,28 +163,13 @@ Em alternativa à janela, na pasta `src-tauri`:
 cargo run --bin set-key --features cli
 ```
 
-### Ficheiros
+### Sem ser o OpenRouter
 
-| Ficheiro | Onde (Windows) | O que tem |
-| - | - | - |
-| `config.json` | `%APPDATA%\com.manuelbrito.ditok\` | as definições, incluindo o dicionário e as expansões |
-| `metrics.jsonl` | `%APPDATA%\com.manuelbrito.ditok\` | uma linha por ditado: tempos, modelo e custo, **sem o texto** |
-| `costs.json` | `%APPDATA%\com.manuelbrito.ditok\` | custo e número de ditados por mês |
-| `history.json` | `%APPDATA%\com.manuelbrito.ditok\` | texto dos últimos ditados (só se o histórico estiver ligado) |
-| `transcricoes\` | `%APPDATA%\com.manuelbrito.ditok\` | uma cópia do texto de cada ficheiro transcrito |
-| `debug\last.wav` | `%APPDATA%\com.manuelbrito.ditok\` | a última gravação (só se a opção estiver ligada) |
-| `models-*.json` | `%LOCALAPPDATA%\com.manuelbrito.ditok\` | lista de modelos do OpenRouter, guardada durante 24 h |
-
-### Logs
-
-- Windows: `%LOCALAPPDATA%\com.manuelbrito.ditok\logs` (um ficheiro por dia, 7 dias)
-- macOS: `~/Library/Logs/com.manuelbrito.ditok`
-
-Cada ditado regista uma linha `ditado` com a duração do áudio enviado e do silêncio cortado, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado), o custo e quantos comandos, palavras e expansões foram aplicados (o texto nunca vai para os logs). Uma gravação sem voz regista uma linha `sem voz na gravação` com o ruído de fundo, o pico e o limiar em dBFS, que servem para afinar a deteção se o teu microfone a enganar. A memória é registada no arranque, com a janela aberta e depois de a fechar.
+A transcrição na nuvem é feita pelo OpenRouter, com o modelo que escolheres em **Definições → Transcrição** (com pesquisa e preço na lista). A lista de modelos é guardada durante 24 h. Para transcrever sem rede ou sem custo, usa o motor local.
 
 ## Desempenho
 
-Medido no Windows em build de debug, com `openai/whisper-large-v3-turbo`:
+Medido no Windows em build de debug, com `openai/whisper-large-v3-turbo` (nuvem):
 
 | | Valor |
 | - | - |
@@ -148,20 +178,61 @@ Medido no Windows em build de debug, com `openai/whisper-large-v3-turbo`:
 | RAM privada em repouso | ~107 MB: ~10 MB do Ditok + ~97 MB do WebView da barra |
 | RAM sem a barra | ~10 MB |
 
-O WebView2 corre com a aceleração por GPU desligada, o que poupa ~55 MB e não se nota numa barra deste tamanho. A RAM mostrada é a memória privada (o mesmo número do Gestor de Tarefas), não o working set, que conta várias vezes as DLLs partilhadas pelos processos do WebView2.
+O WebView2 corre com a aceleração por GPU desligada, o que poupa ~55 MB e não se nota numa barra deste tamanho. A RAM mostrada é a memória privada (o mesmo número do Gestor de Tarefas), não o working set, que conta várias vezes as DLLs partilhadas pelos processos do WebView2. Com o motor local, a RAM sobe para 0,7–2,4 GB enquanto o modelo está carregado e volta a descer quando é largado por inatividade.
+
+## Ficheiros e logs
+
+| Ficheiro | Onde (Windows) | O que tem |
+| - | - | - |
+| `config.json` | `%APPDATA%\com.manuelbrito.ditok\` | as definições, incluindo o dicionário, as expansões e os estilos por app |
+| `metrics.jsonl` | `%APPDATA%\com.manuelbrito.ditok\` | uma linha por ditado: tempos, modelo e custo, **sem o texto** |
+| `costs.json` | `%APPDATA%\com.manuelbrito.ditok\` | custo e número de ditados por mês |
+| `usage.json` | `%APPDATA%\com.manuelbrito.ditok\` | contagens de palavras por dia e por app (sem texto) |
+| `history.json` | `%APPDATA%\com.manuelbrito.ditok\` | texto dos últimos ditados (só se o histórico estiver ligado) |
+| `audio\` | `%APPDATA%\com.manuelbrito.ditok\` | o áudio dos últimos 20 ditados (só se a opção estiver ligada) |
+| `transcricoes\` | `%APPDATA%\com.manuelbrito.ditok\` | uma cópia do texto de cada ficheiro transcrito |
+| `notas\` | `%APPDATA%\com.manuelbrito.ditok\` | as sessões de reuniões: metadados, transcrição, resumo |
+| `models\` | `%APPDATA%\com.manuelbrito.ditok\` | os modelos do motor local, descarregados por ti |
+| `debug\last.wav` | `%APPDATA%\com.manuelbrito.ditok\` | a última gravação (só se a opção estiver ligada) |
+| `models-*.json` | `%LOCALAPPDATA%\com.manuelbrito.ditok\` | cache da lista de modelos do OpenRouter, guardada durante 24 h |
+
+Logs:
+
+- Windows: `%LOCALAPPDATA%\com.manuelbrito.ditok\logs` (um ficheiro por dia, 7 dias)
+- macOS: `~/Library/Logs/com.manuelbrito.ditok`
+
+Cada ditado regista uma linha `ditado` com a duração do áudio enviado e do silêncio cortado, o tempo de transcrição, de limpeza e de colagem, o total (do soltar a tecla ao texto colado), o custo e quantos comandos, palavras e expansões foram aplicados (o texto nunca vai para os logs). Uma gravação sem voz regista uma linha `sem voz na gravação` com o ruído de fundo, o pico e o limiar em dBFS, que servem para afinar a deteção se o teu microfone a enganar. A memória é registada no arranque, com a janela aberta e depois de a fechar.
 
 ## Desenvolver
 
-Requisitos: Rust estável, Node 20+, pnpm.
+Requisitos: Rust estável, Node 24 (o CI usa esta versão), pnpm.
 
 ```bash
 pnpm install
 pnpm tauri dev
 ```
 
+Para incluir o motor local no build de desenvolvimento (a primeira compilação é mais demorada, porque o sherpa-onnx é descarregado):
+
 ```bash
-cd src-tauri && cargo test
+pnpm tauri dev --features local
 ```
+
+Verificações (são as mesmas que o CI corre em Windows e macOS):
+
+```bash
+pnpm build
+```
+
+```bash
+cd src-tauri && cargo fmt --check && cargo test
+```
+
+```bash
+cd src-tauri && cargo clippy --all-targets -- -D warnings
+```
+
+O clippy passa sem avisos, mas no CI ainda não bloqueia (`continue-on-error`). Há um job informativo que compila e testa com `--features local`.
 
 Os ícones da app e do tray são gerados a partir das SVG em `design/mascot/`:
 
@@ -175,7 +246,7 @@ pnpm tauri icon src-tauri/icons/app-icon.png
 
 ### Publicar uma versão
 
-O workflow [release.yml](.github/workflows/release.yml) compila para Windows e macOS (universal) quando é feito push de uma tag `v*`, e publica os instaladores e o `latest.json` usado pelas atualizações.
+O workflow [release.yml](.github/workflows/release.yml) compila para Windows e macOS (universal) quando é feito push de uma tag `v*`, com o motor local incluído, e publica os instaladores e o `latest.json` usado pelas atualizações. Antes de compilar confirma que a versão da tag coincide com `Cargo.toml`, `tauri.conf.json` e `package.json`.
 
 1. Subir a versão em `package.json`, `src-tauri/tauri.conf.json` e `src-tauri/Cargo.toml` (e correr `cargo check` para atualizar o `Cargo.lock`).
 2. Commit `chore: release X.Y.Z`.
@@ -200,29 +271,52 @@ Secrets necessários no GitHub:
 ```
 src-tauri/src/
   lib.rs              arranque: plugins, tray, atalho, barra, estado partilhado
-  dictation/          orquestrador (actor), máquina de estados do atalho, pipeline do ditado
-  audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV, nível do microfone,
-                      leitura de ficheiros (symphonia) e cortes nas pausas
-  stt/                trait SttProvider, OpenRouter, cache da lista de modelos
+  state.rs            estado partilhado entre os módulos
+  dictation/          orquestrador (actor), máquina de estados do atalho, pipeline do ditado,
+                      falhas, seleção
+  command.rs          modo comando: texto selecionado + instrução, com o modelo de texto
   text.rs             comandos falados, dicionário e expansões (no computador)
+  dict_io.rs          importar e exportar o dicionário (JSON, CSV, TXT)
+  audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV,
+                      leitura de ficheiros (symphonia) e cortes nas pausas
+  stt/                trait SttProvider; OpenRouter; motor local (sherpa-onnx, feature `local`);
+                      repetição de pedidos; descarregar o modelo local por inatividade; cache da lista de modelos
+  local_models.rs     catálogo e descarga dos modelos locais, com verificação SHA-256
+  notes/              notetaker: as duas faixas (microfone e sistema), segmentação, sessões,
+                      armazenamento, separação de oradores e verificações
   files.rs            transcrever um ficheiro: pedaços em paralelo, progresso, texto final
   cleanup.rs          limpeza opcional com LLM
+  summarize.rs        resumos de transcrições (uma chamada ao modelo de texto)
   paste.rs            clipboard + Ctrl/Cmd+V (+ reposição do clipboard, se pedida), copiar sem colar
+  focus.rs            janela em foco, para confirmar antes de colar
+  quick_history.rs    menu do histórico rápido
   sound.rs            sons de início e fim, gerados na app
   hotkey.rs           atalho global, troca com deteção de conflitos
+  modkeys.rs, modkeys/  Fn (macOS) e Ctrl+Win (Windows) por hook de teclado
   overlay.rs          barra flutuante com a mascote (hover e cliques)
   settings_window.rs  janela principal criada/destruída a pedido
+  usage.rs            estatísticas de uso (palavras por dia, sequências, apps)
   updater.rs          procura e instala atualizações
   commands.rs         comandos Tauri chamados pela UI
   config.rs, secrets.rs, metrics.rs, history.rs, sysmem.rs, tray.rs, logging.rs
+  bin/set-key.rs      guardar a chave do OpenRouter (feature `cli`)
+  bin/notes-probe.rs  ferramenta de diagnóstico das notas (feature `cli`)
 src-tauri/Info.plist, Entitlements.plist   permissões do macOS (microfone)
 src/
   main.ts             janela principal: navegação e cartão de atualização
-  home.ts, dictionary-page.ts, files-page.ts, metrics-page.ts, settings-dialog.ts
-                      Início, Dicionário, Ficheiros, Métricas e definições
-  api.ts, store.ts    tipos dos comandos e estado partilhado
-  overlay.ts          barra com a mascote
+  home.ts, dictionary-page.ts, dictionary-add.ts, files-page.ts, notes-page.ts,
+  metrics-page.ts, settings-dialog.ts, styles-panel.ts
+                      Início, Dicionário, Ficheiros, Notas, Métricas e definições
+  local-engine.ts     modelos do motor local nas definições
+  onboarding.ts       guia de primeira execução
+  devices.ts          seletor de microfone (partilhado)
+  summary.ts          resumos (Ficheiros e Notas)
+  api.ts, store.ts, format.ts   tipos dos comandos, estado partilhado e formatação
+  overlay.ts, overlay.css       barra com a mascote
+  styles.css
 design/mascot/        poses da mascote em SVG
+scripts/gen-icons.mjs geração dos ícones (pnpm icons)
+.github/workflows/    ci.yml (Windows e macOS) e release.yml (tags v*)
 ```
 
 ## Limitações conhecidas
@@ -234,7 +328,10 @@ O Windows impede que um processo normal envie teclas a uma janela com privilégi
 Enquanto gravas, o Esc fica reservado ao Ditok para cancelar e não chega às outras apps. Fora da gravação não é intercetado.
 
 ### macOS: permissão de Acessibilidade
-Ainda falta uma verificação explícita da permissão de Acessibilidade com uma mensagem clara. Sem ela, a colagem falha.
+Ainda não há uma verificação prévia da permissão de Acessibilidade com uma mensagem clara. A app só explica o que falta quando a colagem falha.
+
+### Notas: "Outros" sem separar por pessoa
+Por omissão, todo o áudio do computador é "Outros". A separação por orador precisa do build com o motor local e dos modelos de voz, e é feita só no fim da reunião.
 
 ### Builds sem assinatura reconhecida
 A app é para uso pessoal, por isso não tem uma assinatura reconhecida pelo sistema e há um aviso na primeira execução. No Windows não é assinada. No macOS é assinada com um certificado autoassinado: chega para a permissão do microfone ficar guardada entre atualizações, mas a app não é notarizada pela Apple.
