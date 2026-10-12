@@ -378,13 +378,20 @@ fn track_thread(
             level_acc.clear();
         }
 
+        // Sem amostras reais (o loopback não entregou nada) conta como silêncio: é o
+        // caso de um dispositivo que não é o que toca, e era o que ficava sem aviso.
         if track == Track::System
             && !lane.muted_reported
             && lane.opened_at.elapsed() >= MUTE_AFTER
-            && lane.raw_total > 0
             && lane.raw_peak == 0.0
         {
             lane.muted_reported = true;
+            tracing::warn!(
+                device = lane.input.device(),
+                amostras = lane.raw_total,
+                "sistema sem som ao fim de {} s",
+                MUTE_AFTER.as_secs()
+            );
             let _ = events.send(CaptureEvent::SystemMute);
         }
     }
@@ -408,6 +415,18 @@ fn track_thread(
             "amostras perdidas"
         );
     }
+    // Resumo da faixa para o log: diz se o áudio chegou e com que nível (ver o pico
+    // em dBFS; -86 dBFS é o silêncio do microfone com supressão de ruído).
+    let peak_db = 20.0 * lane.raw_peak.max(1e-9).log10();
+    tracing::info!(
+        track = track.label(),
+        device = lane.input.device(),
+        amostras = lane.raw_total,
+        preenchidas = lane.fed.saturating_sub(lane.raw_total),
+        pico_db = peak_db,
+        lost,
+        "faixa fechada"
+    );
     tracing::debug!(track = track.label(), "faixa terminada");
 }
 

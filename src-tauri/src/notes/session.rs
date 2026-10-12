@@ -224,12 +224,16 @@ fn default_title(mode: Mode, now: chrono::DateTime<chrono::Local>) -> String {
     format!("{what} {}", now.format("%d/%m %H:%M"))
 }
 
-fn capture_config(mode: Mode, mic_device: Option<String>) -> CaptureConfig {
+fn capture_config(
+    mode: Mode,
+    mic_device: Option<String>,
+    output_device: Option<String>,
+) -> CaptureConfig {
     CaptureConfig {
         mic: mode != Mode::SystemOnly,
         system: mode != Mode::InPerson,
         mic_device,
-        output_device: None,
+        output_device,
     }
 }
 
@@ -287,7 +291,11 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
     })?;
 
     let (tx, rx) = unbounded_channel();
-    let cfg = capture_config(mode, config.input_device.clone());
+    let cfg = capture_config(
+        mode,
+        config.input_device.clone(),
+        config.notes_output_device.clone(),
+    );
     let created = tauri::async_runtime::spawn_blocking({
         let meta = meta.clone();
         move || -> Result<Capture, NotesError> {
@@ -690,11 +698,17 @@ mod tests {
 
     #[test]
     fn capture_config_follows_mode() {
-        let c = capture_config(Mode::Meeting, Some("mic".into()));
+        let c = capture_config(Mode::Meeting, Some("mic".into()), None);
         assert!(c.mic && c.system);
-        let c = capture_config(Mode::SystemOnly, None);
+        let c = capture_config(Mode::SystemOnly, None, None);
         assert!(!c.mic && c.system);
-        let c = capture_config(Mode::InPerson, None);
+        let c = capture_config(Mode::InPerson, None, None);
         assert!(c.mic && !c.system);
+    }
+
+    #[test]
+    fn capture_config_passes_output_device() {
+        let c = capture_config(Mode::Meeting, None, Some("Altifalantes".into()));
+        assert_eq!(c.output_device.as_deref(), Some("Altifalantes"));
     }
 }

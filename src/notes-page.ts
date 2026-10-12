@@ -12,6 +12,7 @@ import {
   onSpeakersProgress,
   speakers,
   summaries,
+  type InputDevice,
   type NotesLine,
   type NotesMeta,
   type NotesMode,
@@ -190,8 +191,45 @@ async function stop() {
   }
 }
 
+// ---------------------------------------------------------------- saída do áudio do computador
+
+/** Preenche o seletor com as saídas do sistema; a escolha guardada fica sempre na lista. */
+async function renderOutputDevices() {
+  const select = $<HTMLSelectElement>("notes-output");
+  let devices: InputDevice[] = [];
+  let failed = "";
+  try {
+    devices = await notes.outputDevices();
+  } catch (e) {
+    failed = errorText(e);
+  }
+  const current = app.view.config.notes_output_device;
+  const def = devices.find((d) => d.is_default);
+  const options = [new Option(def ? `Predefinido do sistema (${def.name})` : "Predefinido do sistema", "")];
+  for (const d of devices) options.push(new Option(d.name, d.name));
+  // Escolhida mas desligada agora: continua na lista para não se perder a escolha.
+  if (current && !devices.some((d) => d.name === current)) {
+    options.push(new Option(`${current} (desligada: uso a predefinida)`, current));
+  }
+  select.replaceChildren(...options);
+  select.value = current ?? "";
+  $("notes-output-hint").textContent = failed
+    ? `Não consegui listar as saídas: ${failed}`
+    : "Escolhe a saída onde a reunião ou o vídeo toca. Se usas o Sonar ou outra app de áudio, pode ser um canal diferente do predefinido.";
+}
+
+function setupOutputDevice() {
+  $<HTMLSelectElement>("notes-output").addEventListener("change", async (e) => {
+    const value = (e.target as HTMLSelectElement).value;
+    await save({ notes_output_device: value || null });
+    // Mesmo que a gravação falhe a guardar, volto a mostrar o que está de facto guardado.
+    void renderOutputDevices();
+  });
+}
+
 export function renderNotesHint() {
   void renderSpeakers();
+  void renderOutputDevices();
   const c = app.view.config;
   $("notes-cost").textContent =
     c.stt_engine === "local"
@@ -452,6 +490,7 @@ export async function setupNotes(): Promise<void> {
   await onNotesLevel((e) => setLevel(e.track, e.level));
 
   setupSpeakers();
+  setupOutputDevice();
   await renderSpeakers();
   renderNotesHint();
   renderState(await notes.state());

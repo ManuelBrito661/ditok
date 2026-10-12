@@ -98,6 +98,10 @@ pub struct Config {
     /// predefinido do sistema. Se deixar de existir, uso o predefinido (ver
     /// `audio/capture.rs`).
     pub input_device: Option<String>,
+    /// Saída cujo áudio se capta nas notas de reunião (o que os outros dizem), pelo
+    /// nome que o sistema lhe dá; `None` = a saída predefinida do sistema, que
+    /// acompanha as mudanças. Se deixar de existir, uso a predefinida.
+    pub notes_output_device: Option<String>,
     /// O guia de primeira execução já foi concluído (ou saltado). Um config.json
     /// sem este campo é de uma versão anterior ao guia: ver `predates_onboarding`.
     pub onboarding_done: bool,
@@ -256,6 +260,7 @@ impl Default for Config {
             sounds: true,
             monthly_budget_usd: None,
             input_device: None,
+            notes_output_device: None,
             onboarding_done: false,
             styles: default_styles(),
         }
@@ -284,6 +289,8 @@ pub enum ConfigError {
     Budget,
     #[error("o nome do microfone é demasiado longo")]
     InputDevice,
+    #[error("o nome da saída de áudio é demasiado longo")]
+    NotesOutputDevice,
     #[error("cada estilo precisa do nome da app")]
     StyleEntry,
     #[error("já há um estilo para {0}")]
@@ -343,6 +350,13 @@ impl Config {
             .is_some_and(|d| d.chars().count() > MAX_PHRASE_CHARS)
         {
             return Err(ConfigError::InputDevice);
+        }
+        if self
+            .notes_output_device
+            .as_deref()
+            .is_some_and(|d| d.chars().count() > MAX_PHRASE_CHARS)
+        {
+            return Err(ConfigError::NotesOutputDevice);
         }
         if self.dictionary.len() > MAX_ENTRIES || self.snippets.len() > MAX_ENTRIES {
             return Err(ConfigError::TooManyEntries);
@@ -876,6 +890,14 @@ mod tests {
         assert!(matches!(
             long_device.validate(),
             Err(ConfigError::InputDevice)
+        ));
+        let long_output = Config {
+            notes_output_device: Some("x".repeat(500)),
+            ..Config::default()
+        };
+        assert!(matches!(
+            long_output.validate(),
+            Err(ConfigError::NotesOutputDevice)
         ));
     }
 }

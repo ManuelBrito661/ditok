@@ -47,6 +47,8 @@ export interface Config {
   monthly_budget_usd: number | null;
   /** Nome do microfone; `null` = o predefinido do sistema. */
   input_device: string | null;
+  /** Saída de áudio que se capta nas notas; `null` = a predefinida do sistema. */
+  notes_output_device: string | null;
   /** O guia de primeira execução já foi concluído (ou saltado). */
   onboarding_done: boolean;
   /** Estilo por app (config.rs, StyleRule). */
@@ -508,6 +510,7 @@ export interface NotesOut {
 
 export const notes = {
   state: () => invoke<NotesState>("notes_state"),
+  outputDevices: () => invoke<InputDevice[]>("notes_output_devices"),
   acceptConsent: () => invoke<void>("notes_accept_consent"),
   start: (mode: NotesMode) => invoke<NotesState>("notes_start", { mode }),
   stop: () => invoke<NotesState>("notes_stop"),
