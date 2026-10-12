@@ -56,6 +56,8 @@ pub struct Status {
     pub quick_label: Option<String>,
     /// `false` só quando há atalho do histórico rápido e outra app o tem.
     pub quick_ok: bool,
+    /// Está a gravar notas de uma reunião (mostra o item de parar no menu do tray).
+    pub notes_recording: bool,
 }
 
 pub struct AppState {
@@ -76,6 +78,8 @@ pub struct AppState {
     pub local: LocalStt,
     /// A descarga de um modelo em curso (só uma de cada vez), para a poder cancelar.
     pub download: Mutex<Option<ActiveDownload>>,
+    /// A gravação de reuniões em curso (ver `notes/`).
+    pub notes: crate::notes::session::Notes,
     pub history: HistoryStore,
     /// O ficheiro a ser transcrito (ou o último), ver `files.rs`.
     pub files: FileJobs,
@@ -134,6 +138,7 @@ impl AppState {
             usage: UsageStore::new(dirs.data.clone()),
             local: LocalStt::new(dirs.data.join("models")),
             download: Mutex::new(None),
+            notes: Default::default(),
             history: HistoryStore::new(dirs.data.clone()),
             files: FileJobs::default(),
             config_dir: dirs.config,
@@ -168,6 +173,7 @@ impl AppState {
                 .filter(|s| !s.is_empty())
                 .map(hotkey::pretty),
             quick_ok: self.quick_ok(),
+            notes_recording: self.notes.recording(),
         }
     }
 

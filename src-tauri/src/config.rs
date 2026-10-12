@@ -80,6 +80,8 @@ pub struct Config {
     pub local_model: LocalModelId,
     /// Minutos sem ditar até o modelo local ser largado da memória (ocupa 0,7 a 2,4 GB).
     pub local_idle_minutes: u32,
+    /// O aviso sobre gravar conversas foi aceite (ver `notes/`). Sem isto o notetaker não grava.
+    pub notes_consent: bool,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -244,6 +246,7 @@ impl Default for Config {
             stt_engine: SttEngine::Cloud,
             local_model: LocalModelId::default(),
             local_idle_minutes: 5,
+            notes_consent: false,
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,

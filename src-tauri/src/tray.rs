@@ -37,6 +37,7 @@ const MENU_COMMAND: &str = "command";
 const COMMAND_POSITION: usize = 5;
 const MENU_MUTE: &str = "mute";
 const MENU_QUIT: &str = "quit";
+const MENU_NOTES_STOP: &str = "notes_stop";
 
 /// Serializado em minúsculas ("recording", "nothing-heard", …) porque é o que a
 /// barra recebe.
@@ -87,6 +88,9 @@ pub struct TrayMenu {
     command: MenuItem<Wry>,
     command_shown: AtomicBool,
     mute: CheckMenuItem<Wry>,
+    /// "Parar a gravação das notas": só está no menu (à cabeça) enquanto se grava.
+    notes_stop: MenuItem<Wry>,
+    notes_shown: AtomicBool,
 }
 
 /// A janela onde estavas antes de abrir o menu (tray ou barra), para o "Colar o
@@ -130,7 +134,10 @@ pub fn sync_menu(app: &AppHandle, status: &Status, sounds: bool) {
     let show = status.command_label.is_some();
     let was_shown = m.command_shown.swap(show, Ordering::Relaxed);
     let result = match (was_shown, show) {
-        (false, true) => m.menu.insert(&m.command, COMMAND_POSITION),
+        (false, true) => m.menu.insert(
+            &m.command,
+            COMMAND_POSITION + usize::from(m.notes_shown.load(Ordering::Relaxed)),
+        ),
         (true, false) => m.menu.remove(&m.command),
         _ => Ok(()),
     };
@@ -146,6 +153,15 @@ pub fn sync_menu(app: &AppHandle, status: &Status, sounds: bool) {
         if let Err(e) = m.command.set_text(text) {
             tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
         }
+    }
+    let notes = status.notes_recording;
+    let result = match (m.notes_shown.swap(notes, Ordering::Relaxed), notes) {
+        (false, true) => m.menu.insert(&m.notes_stop, 0),
+        (true, false) => m.menu.remove(&m.notes_stop),
+        _ => Ok(()),
+    };
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
     }
     if let Err(e) = m.mute.set_checked(!sounds) {
         tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
@@ -228,6 +244,8 @@ impl Tray {
         let mute = CheckMenuItemBuilder::with_id(MENU_MUTE, "Silenciar sons")
             .checked(!config.sounds)
             .build(app)?;
+        let notes_stop =
+            MenuItemBuilder::with_id(MENU_NOTES_STOP, "● A gravar notas: parar").build(app)?;
         let quit = MenuItemBuilder::with_id(MENU_QUIT, "Sair").build(app)?;
         let menu = MenuBuilder::new(app)
             .item(&open)
@@ -273,6 +291,17 @@ impl Tray {
                         let _ = events.send(DictationEvent::Retry);
                     }
                     MENU_MUTE => toggle_sounds(app),
+                    MENU_NOTES_STOP => {
+                        tracing::info!("menu: parar as notas");
+                        if let Some(state) = app.try_state::<Arc<AppState>>() {
+                            let state = Arc::clone(&state);
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = crate::notes::session::stop(&state).await {
+                                    tracing::warn!(error = %e, "não foi possível parar as notas");
+                                }
+                            });
+                        }
+                    }
                     // Uma linha do histórico rápido (menu aberto por `quick_history::open`).
                     id if id.starts_with(crate::quick_history::ID_PREFIX) => {
                         crate::quick_history::chosen(
@@ -297,6 +326,8 @@ impl Tray {
             command,
             command_shown: AtomicBool::new(false),
             mute,
+            notes_stop,
+            notes_shown: AtomicBool::new(false),
         });
 
         Ok(Self {

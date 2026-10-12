@@ -1171,3 +1171,191 @@ pub async fn local_model_delete(
     tracing::info!(?id, "modelo local apagado");
     Ok(())
 }
+
+// ---------------------------------------------------------------- notas (reuniões)
+
+use crate::notes::{
+    session::{self, StateView},
+    store::{self, Line, Meta, Mode, NotesStore},
+};
+
+/// Uma sessão aberta: a meta, as linhas prontas a mostrar e o resumo, se já houver.
+#[derive(Serialize)]
+pub struct NoteOut {
+    meta: Meta,
+    lines: Vec<Line>,
+    summary: Option<String>,
+}
+
+#[tauri::command]
+pub fn notes_state(state: AppStateRef<'_>) -> StateView {
+    state.notes.view()
+}
+
+/// Guarda que o aviso sobre gravar conversas foi lido e aceite.
+#[tauri::command]
+pub async fn notes_accept_consent(state: AppStateRef<'_>) -> CmdResult<()> {
+    let mut config = (*state.config()).clone();
+    if config.notes_consent {
+        return Ok(());
+    }
+    config.notes_consent = true;
+    let state_ = Arc::clone(&state);
+    blocking(move || state_.replace_config(config)).await??;
+    let _ = state.app.emit(crate::state::EVENT_SETTINGS_CHANGED, ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn notes_start(state: AppStateRef<'_>, mode: Mode) -> CmdResult<StateView> {
+    Ok(session::start(&state, mode).await?)
+}
+
+#[tauri::command]
+pub async fn notes_stop(state: AppStateRef<'_>) -> CmdResult<StateView> {
+    Ok(session::stop(&state).await?)
+}
+
+#[tauri::command]
+pub async fn notes_list(state: AppStateRef<'_>) -> CmdResult<Vec<Meta>> {
+    let dir = state.data_dir.clone();
+    blocking(move || NotesStore::new(&dir).list()).await
+}
+
+#[tauri::command]
+pub async fn notes_get(state: AppStateRef<'_>, id: String) -> CmdResult<NoteOut> {
+    let dir = state.data_dir.clone();
+    blocking(move || -> Result<NoteOut, store::StoreError> {
+        let store = NotesStore::new(&dir);
+        let meta = store.meta(&id)?;
+        let lines = store::for_display(&store.lines(&id)?, meta.mode);
+        let summary = store.summary(&id)?;
+        Ok(NoteOut {
+            meta,
+            lines,
+            summary,
+        })
+    })
+    .await?
+    .map_err(Into::into)
+}
+
+/// Não se mexe na sessão que está a gravar (ou a fechar).
+fn not_active(state: &AppState, id: &str) -> CmdResult<()> {
+    if state.notes.view().id.as_deref() == Some(id) {
+        return Err("esta gravação ainda está em curso".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn notes_delete(state: AppStateRef<'_>, id: String) -> CmdResult<()> {
+    not_active(&state, &id)?;
+    let dir = state.data_dir.clone();
+    blocking(move || NotesStore::new(&dir).delete(&id)).await??;
+    Ok(())
+}
+
+/// Muda o título e/ou os nomes das faixas ("Eu" → "Manuel"). Campos vazios ficam como estão.
+#[tauri::command]
+pub async fn notes_rename(
+    state: AppStateRef<'_>,
+    id: String,
+    title: Option<String>,
+    mic_name: Option<String>,
+    system_name: Option<String>,
+) -> CmdResult<Meta> {
+    not_active(&state, &id)?;
+    let dir = state.data_dir.clone();
+    blocking(move || -> Result<Meta, store::StoreError> {
+        let store = NotesStore::new(&dir);
+        let mut meta = store.meta(&id)?;
+        let clean = |s: Option<String>| {
+            s.map(|s| s.trim().chars().take(80).collect::<String>())
+                .filter(|s| !s.is_empty())
+        };
+        if let Some(t) = clean(title) {
+            meta.title = t;
+        }
+        if let Some(n) = clean(mic_name) {
+            meta.mic_name = n;
+        }
+        if let Some(n) = clean(system_name) {
+            meta.system_name = n;
+        }
+        store.save_meta(&meta)?;
+        Ok(meta)
+    })
+    .await?
+    .map_err(Into::into)
+}
+
+/// O texto corrido de uma sessão ("Eu: …\nOutros: …"), para o resumir.
+#[tauri::command]
+pub async fn notes_text(state: AppStateRef<'_>, id: String) -> CmdResult<String> {
+    let dir = state.data_dir.clone();
+    blocking(move || -> Result<String, store::StoreError> {
+        let store = NotesStore::new(&dir);
+        let meta = store.meta(&id)?;
+        let lines = store::for_display(&store.lines(&id)?, meta.mode);
+        Ok(store::plain_for_summary(&meta, &lines))
+    })
+    .await?
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn notes_save_summary(
+    state: AppStateRef<'_>,
+    id: String,
+    summary: String,
+) -> CmdResult<()> {
+    let dir = state.data_dir.clone();
+    blocking(move || NotesStore::new(&dir).save_summary(&id, &summary)).await??;
+    Ok(())
+}
+
+/// Exporta a sessão (com o resumo, se houver) para um ficheiro à escolha. `None` se cancelaste.
+#[tauri::command]
+pub async fn notes_export(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    id: String,
+    markdown: bool,
+) -> CmdResult<Option<String>> {
+    let dir = state.data_dir.clone();
+    let id_ = id.clone();
+    let (text, title) = blocking(move || -> Result<(String, String), store::StoreError> {
+        let store = NotesStore::new(&dir);
+        let meta = store.meta(&id_)?;
+        let lines = store::for_display(&store.lines(&id_)?, meta.mode);
+        let mut text = if markdown {
+            store::export_markdown(&meta, &lines)
+        } else {
+            store::export_text(&meta, &lines)
+        };
+        if let Some(summary) = store.summary(&id_)? {
+            text = format!("{summary}\n\n---\n\n{text}");
+        }
+        Ok((text, meta.title))
+    })
+    .await??;
+    let ext = if markdown { "md" } else { "txt" };
+    let name = format!(
+        "{}.{ext}",
+        title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-")
+    );
+    let Some(path) = ask_save_path(&app, "Exportar as notas", &name, ("Notas", &[ext])).await
+    else {
+        return Ok(None);
+    };
+    let target = path.clone();
+    blocking(move || std::fs::write(&target, text)).await??;
+    Ok(Some(path.display().to_string()))
+}
+
+/// Os dispositivos de saída que se podem captar (por agora só informativo).
+#[tauri::command]
+pub async fn notes_output_devices() -> CmdResult<Vec<InputDevice>> {
+    Ok(blocking(crate::notes::capture::output_devices).await??)
+}

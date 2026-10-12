@@ -157,6 +157,14 @@ pub fn run() {
             // (fora da thread de arranque: lê um ficheiro).
             let usage_state = Arc::clone(&state);
             tauri::async_runtime::spawn_blocking(move || usage_state.usage.startup());
+            // Sessões de notas que ficaram abertas (a app fechou a meio) fecham-se como interrompidas.
+            let notes_dir = state.data_dir.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let fixed = notes::store::NotesStore::new(&notes_dir).recover(None);
+                if !fixed.is_empty() {
+                    tracing::warn!(?fixed, "sessões de notas interrompidas recuperadas");
+                }
+            });
             // O menu do tray nasce com a linha do atalho certa; isto só a marca
             // "ocupado" se for o caso (a barra pede o estado quando carregar).
             state.set_key_set(key_set);
@@ -267,6 +275,18 @@ pub fn run() {
             commands::local_model_download,
             commands::local_model_cancel,
             commands::local_model_delete,
+            commands::notes_state,
+            commands::notes_accept_consent,
+            commands::notes_start,
+            commands::notes_stop,
+            commands::notes_list,
+            commands::notes_get,
+            commands::notes_delete,
+            commands::notes_rename,
+            commands::notes_text,
+            commands::notes_save_summary,
+            commands::notes_export,
+            commands::notes_output_devices,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,
