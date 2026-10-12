@@ -319,6 +319,182 @@ export function renderNotesHint() {
       : `O áudio vai ao OpenRouter (${c.stt_model}) e custa como transcrever um ficheiro: só se paga o que se fala.`;
 }
 
+// ---------------------------------------------------------------- vista da transcrição
+
+/** Quem fala: uma faixa, e dentro dela um orador separado (se houver). */
+interface Participant {
+  key: string;
+  name: string;
+  color: number;
+  ms: number;
+}
+
+/** Pausa a partir da qual a mesma pessoa abre um bloco novo. */
+const TURN_GAP_MS = 20_000;
+const PALETTE = 5;
+
+const view = { query: "", hidden: new Set<string>(), times: true, hit: -1, hits: [] as HTMLElement[] };
+
+const keyOf = (l: NotesLine) => `${l.track}:${l.speaker ?? ""}`;
+
+/** Minúsculas e sem acentos, mantendo o comprimento para os índices coincidirem com o original. */
+function fold(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    const f = ch.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+    out += f.length === ch.length ? f : ch;
+  }
+  return out;
+}
+
+function participantsOf(meta: NotesMeta, lines: NotesLine[]): Participant[] {
+  const names = namesOf(meta);
+  const found = new Map<string, Participant>();
+  for (const l of lines) {
+    const key = keyOf(l);
+    let p = found.get(key);
+    if (!p) {
+      p = { key, name: whoIs(l, names), color: found.size % PALETTE, ms: 0 };
+      found.set(key, p);
+    }
+    p.ms += Math.max(0, l.end_ms - l.start_ms);
+  }
+  return [...found.values()];
+}
+
+/** Texto com as ocorrências da pesquisa dentro de `<mark>`; devolve-as para a navegação. */
+function highlight(text: string, query: string): { nodes: Node[]; marks: HTMLElement[] } {
+  const q = fold(query.trim());
+  if (!q) return { nodes: [document.createTextNode(text)], marks: [] };
+  const hay = fold(text);
+  const nodes: Node[] = [];
+  const marks: HTMLElement[] = [];
+  let at = 0;
+  for (let i = hay.indexOf(q); i !== -1; i = hay.indexOf(q, at)) {
+    if (i > at) nodes.push(document.createTextNode(text.slice(at, i)));
+    const m = el("mark", undefined, text.slice(i, i + q.length));
+    nodes.push(m);
+    marks.push(m);
+    at = i + q.length;
+  }
+  if (at < text.length) nodes.push(document.createTextNode(text.slice(at)));
+  return { nodes, marks };
+}
+
+function renderChips(people: Participant[]) {
+  const total = people.reduce((n, p) => n + p.ms, 0) || 1;
+  const box = $("nd-chips");
+  box.hidden = people.length < 2;
+  box.replaceChildren(
+    ...people.map((p) => {
+      const b = el("button", `nd-chip c${p.color}`);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(!view.hidden.has(p.key)));
+      b.append(el("span", "nd-dot"), el("span", "nd-chip-name", p.name), el("span", "nd-chip-pct", `${Math.round((p.ms / total) * 100)}%`));
+      b.title = "Mostrar ou esconder as falas desta pessoa";
+      b.addEventListener("click", () => {
+        if (!view.hidden.delete(p.key)) view.hidden.add(p.key);
+        renderTranscript();
+      });
+      return b;
+    }),
+  );
+}
+
+function renderTranscript(keepScroll = true) {
+  if (!detail) return;
+  const { meta, lines } = detail;
+  const box = $("nd-text");
+  const top = box.scrollTop;
+  const people = participantsOf(meta, lines);
+  const color = new Map(people.map((p) => [p.key, p]));
+  renderChips(people);
+
+  view.hits = [];
+  const blocks: HTMLElement[] = [];
+  let current: { key: string; end: number; body: HTMLElement } | null = null;
+  for (const l of lines) {
+    const key = keyOf(l);
+    if (view.hidden.has(key)) {
+      current = null;
+      continue;
+    }
+    const who = color.get(key)!;
+    if (!current || current.key !== key || l.start_ms - current.end > TURN_GAP_MS) {
+      const turn = el("section", `nd-turn c${who.color} ${l.track}`);
+      const head = el("header", "nd-turn-head");
+      head.append(el("span", "nd-avatar", [...who.name.trim()][0]?.toUpperCase() ?? "?"), el("strong", "note-who", who.name));
+      if (view.times) head.append(el("time", "note-time", stamp(l.start_ms)));
+      const body = el("div", "nd-turn-body");
+      turn.append(head, body);
+      blocks.push(turn);
+      current = { key, end: l.end_ms, body };
+    }
+    current.end = Math.max(current.end, l.end_ms);
+    const span = el("span", l.failed ? "nd-sentence failed" : "nd-sentence");
+    if (l.failed) {
+      span.textContent = "[trecho não transcrito]";
+    } else {
+      const { nodes, marks } = highlight(l.text, view.query);
+      span.append(...nodes);
+      view.hits.push(...marks);
+    }
+    current.body.append(span, " ");
+  }
+  box.classList.toggle("nd-no-times", !view.times);
+  if (blocks.length) {
+    box.replaceChildren(...blocks);
+  } else {
+    box.replaceChildren(el("p", "muted", lines.length ? "Todos os intervenientes estão escondidos." : "Esta gravação não tem fala transcrita."));
+  }
+  box.scrollTop = keepScroll ? top : 0;
+  view.hit = view.hits.length && view.query.trim() ? Math.min(Math.max(view.hit, 0), view.hits.length - 1) : -1;
+  updateHits(false);
+}
+
+function updateHits(scroll: boolean) {
+  const q = view.query.trim();
+  view.hits.forEach((m, i) => m.classList.toggle("current", i === view.hit));
+  $("nd-count").textContent = !q ? "" : view.hits.length ? `${view.hit + 1} de ${view.hits.length}` : "Sem resultados";
+  $<HTMLButtonElement>("nd-prev").disabled = $<HTMLButtonElement>("nd-next").disabled = view.hits.length < 2;
+  if (scroll && view.hit >= 0) view.hits[view.hit].scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function stepHit(delta: number) {
+  if (!view.hits.length) return;
+  view.hit = (view.hit + delta + view.hits.length) % view.hits.length;
+  updateHits(true);
+}
+
+function resetView() {
+  view.query = "";
+  view.hidden.clear();
+  view.hit = -1;
+  $<HTMLInputElement>("nd-search").value = "";
+}
+
+function setupTranscriptView() {
+  const search = $<HTMLInputElement>("nd-search");
+  search.addEventListener("input", () => {
+    view.query = search.value;
+    view.hit = 0;
+    renderTranscript();
+    updateHits(true);
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      stepHit(e.shiftKey ? -1 : 1);
+    }
+  });
+  $("nd-next").addEventListener("click", () => stepHit(1));
+  $("nd-prev").addEventListener("click", () => stepHit(-1));
+  $<HTMLInputElement>("nd-times").addEventListener("change", (e) => {
+    view.times = (e.target as HTMLInputElement).checked;
+    renderTranscript();
+  });
+}
+
 // ---------------------------------------------------------------- lista e detalhe
 
 function metaLine(m: NotesMeta): string {
@@ -359,7 +535,8 @@ async function openDetail(id: string) {
   $<HTMLInputElement>("nd-mic").value = meta.mic_name;
   $<HTMLInputElement>("nd-system").value = meta.system_name;
   $("nd-meta").textContent = `${MODE_TITLE[meta.mode]} · ${metaLine(meta)} · ${meta.model}`;
-  renderLines($("nd-text"), lines, namesOf(meta));
+  resetView();
+  renderTranscript(false);
   renderSpeakerNames(meta, lines);
   const d = describeText(lines.map((l) => l.text).join(" "));
   $("nd-hint").textContent = d.hint;
@@ -390,7 +567,7 @@ async function rename() {
       systemName: $<HTMLInputElement>("nd-system").value,
     });
     detail.meta = meta;
-    renderLines($("nd-text"), detail.lines, namesOf(meta));
+    renderTranscript();
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -478,7 +655,7 @@ async function renameSpeaker(n: number, name: string) {
   if (!detail) return;
   try {
     detail.meta = await speakers.rename(detail.meta.id, n, name);
-    renderLines($("nd-text"), detail.lines, namesOf(detail.meta));
+    renderTranscript();
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -556,6 +733,7 @@ export async function setupNotes(): Promise<void> {
   $("notes-start").addEventListener("click", () => void start());
   $("notes-stop").addEventListener("click", () => void stop());
   $("nd-back").addEventListener("click", closeDetail);
+  setupTranscriptView();
   $("nd-run").addEventListener("click", () => void summarize());
   $("nd-copy").addEventListener("click", () => void copyText());
   $("nd-md").addEventListener("click", () => void exportAs(true));
