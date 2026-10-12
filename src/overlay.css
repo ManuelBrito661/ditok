@@ -26,6 +26,7 @@ body {
   --green: #5dc47b;
   --red: #ff6b6e;
   --amber: #ffb86b;
+  --violet: #b69cff;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   display: flex;
@@ -268,6 +269,26 @@ kbd {
   transition: background 120ms;
 }
 #pill.retry.hover[data-state="failed"] #retry { background: rgb(255 255 255 / 0.26); }
+
+/* Motivos compridos ("Seleção grande demais"). */
+#pill.wide[data-state="failed"] { width: 222px; }
+
+/* ---------- modo comando: acento violeta, para não se confundir com um ditado */
+#pill.command { border-color: rgb(182 156 255 / 0.6); }
+#pill.command #bars span,
+#pill.command #dots span { background: var(--violet); }
+#pill.command[data-state="recording"] #label { color: var(--violet); opacity: 1; }
+/* "Sem seleção · a escrever" no lugar de "Comando · 0:12". */
+#pill.command.no-selection[data-state="recording"] { width: 320px; }
+#pill.command.no-selection.latched[data-state="recording"] { width: 336px; }
+/* A processar: os pontos e "A editar" / "A escrever". */
+#pill.command[data-state="processing"] { width: 214px; }
+#pill.command[data-state="processing"] #label {
+  display: block;
+  white-space: nowrap;
+  color: var(--violet);
+}
+#pill.command.slow[data-state="processing"] #label { color: var(--amber); }
 
 /* Atalho premido a meio do processamento: "ainda estou ocupado". */
 #pill.busy { animation: shake 300ms; }

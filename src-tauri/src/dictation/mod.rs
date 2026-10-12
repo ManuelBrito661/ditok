@@ -10,6 +10,7 @@
 pub mod failure;
 pub mod machine;
 pub mod pipeline;
+pub mod selection;
 
 use std::{
     sync::Arc,
@@ -28,8 +29,9 @@ use crate::{
     tray::{Tray, TrayState},
 };
 use failure::FailReason;
-use machine::{Action, Input, Machine, Phase};
+use machine::{Action, Input, Machine, Mode, Phase};
 use pipeline::{Commit, Outcome};
+use selection::Selection;
 
 /// Quanto tempo cada resultado fica visível antes de voltar a "parado". Uma falha
 /// fica mais tempo: tem um motivo para ler e, às vezes, um "Tentar de novo".
@@ -44,6 +46,8 @@ pub enum DictationEvent {
     Hotkey {
         pressed: bool,
         at: Instant,
+        /// Qual dos atalhos: ditado ou comando.
+        mode: Mode,
     },
     Cancel,
     /// Clique na barra flutuante: começa ou termina um ditado em modo alternar,
@@ -119,6 +123,10 @@ struct Orchestrator {
     /// Janela em primeiro plano quando a gravação começou (é lá que se cola) e a
     /// app dona dela (decide o estilo).
     target: focus::Target,
+    /// Modo comando: a seleção copiada (ou a ser copiada) para o comando em
+    /// curso. Largá-la repõe o clipboard (ver `selection.rs`), por isso basta
+    /// pôr `None` para "desistir" dela.
+    selection: Option<Selection>,
     job: Option<Job>,
     next_job: u64,
     /// A última gravação cuja transcrição falhou, para o "Tentar de novo". Fica
@@ -170,6 +178,7 @@ async fn run(
         machine: Machine::default(),
         openrouter,
         target: focus::Target::default(),
+        selection: None,
         job: None,
         next_job: 0,
         failed: None,
@@ -188,8 +197,16 @@ impl Orchestrator {
     fn handle(&mut self, event: DictationEvent) {
         let app = self.deps.state.app.clone();
         let (input, at) = match event {
-            DictationEvent::Hotkey { pressed: true, at } => (Input::Pressed, at),
-            DictationEvent::Hotkey { pressed: false, at } => (Input::Released, at),
+            DictationEvent::Hotkey {
+                pressed: true,
+                at,
+                mode,
+            } => (Input::Pressed(mode), at),
+            DictationEvent::Hotkey {
+                pressed: false,
+                at,
+                mode,
+            } => (Input::Released(mode), at),
             // A processar, o cancelamento só vale se a colagem ainda não começou. A
             // decisão é atómica (`try_cancel`) e vem ANTES da máquina de estados,
             // para a máquina nunca ficar "parada" com um ditado ainda a colar.
@@ -288,10 +305,12 @@ impl Orchestrator {
 
         let before = self.machine.phase();
         match self.machine.handle(input, at) {
-            Some(Action::StartRecording) => self.start_recording(at),
+            Some(Action::StartRecording(mode)) => self.start_recording(at, mode),
             Some(Action::StopAndProcess) => self.stop_and_process(at),
             Some(Action::Retry) => self.retry(),
             Some(Action::CancelRecording) => {
+                // Um comando cancelado: o clipboard volta ao que era.
+                self.selection = None;
                 self.deps.recorder.cancel();
                 self.deps.cue(Cue::Cancel);
                 hotkey::set_cancel_enabled(&app, false);
@@ -320,10 +339,15 @@ impl Orchestrator {
         // depois de `tray.set` para chegar à barra a seguir ao estado "a gravar".
         if self.machine.phase() == Phase::Latched && before != Phase::Latched {
             crate::overlay::emit_latched(&app);
+            // Modo comando alternado: a tecla acabou de ser largada, por isso é a
+            // altura segura de copiar a seleção (ver `capture_selection`).
+            if self.machine.mode() == Mode::Command && self.selection.is_none() {
+                self.selection = Some(Selection::capture(app.clone(), self.target.window));
+            }
         }
     }
 
-    fn start_recording(&mut self, at: Instant) {
+    fn start_recording(&mut self, at: Instant, mode: Mode) {
         let app = self.deps.state.app.clone();
         if self.openrouter.is_none() {
             self.openrouter = load_openrouter(&self.deps.state);
@@ -350,12 +374,18 @@ impl Orchestrator {
         if let Some(app) = &self.target.app {
             self.deps.state.note_app(app);
         }
-        // A pílula mostra o estilo enquanto ouve, se não for o Predefinido.
+        // A pílula mostra o estilo enquanto ouve, se não for o Predefinido. No
+        // modo comando não há estilo: a pílula diz "Comando".
         let style = config.style_for(self.target.app.as_deref());
-        crate::overlay::emit_style(
-            &app,
-            crate::cleanup::shown_style(config.cleanup_level, style).map(|s| s.label()),
-        );
+        let shown = match mode {
+            Mode::Dictation => crate::cleanup::shown_style(config.cleanup_level, style),
+            Mode::Command => None,
+        };
+        crate::overlay::emit_mode(&app, mode);
+        crate::overlay::emit_style(&app, shown.map(|s| s.label()));
+        // Uma seleção de um comando anterior que tenha ficado para trás (não
+        // devia) é largada já: repõe o clipboard antes de copiar outra.
+        self.selection = None;
         // A barra segue o monitor onde está o cursor (como no Wispr Flow).
         crate::overlay::reposition_for(&app);
         let provider = Arc::clone(provider);
@@ -363,7 +393,7 @@ impl Orchestrator {
         self.retry_offered = false;
         self.deps.tray.set(TrayState::Recording);
         hotkey::set_cancel_enabled(&app, true);
-        tracing::info!("a gravar");
+        tracing::info!(?mode, "a gravar");
     }
 
     fn stop_and_process(&mut self, released_at: Instant) {
@@ -377,6 +407,7 @@ impl Orchestrator {
         let Some(provider) = self.openrouter.clone() else {
             // Só acontece se a chave mudou a meio da gravação; o compilador
             // obriga-nos a decidir o que fazer.
+            self.selection = None;
             self.deps.recorder.cancel();
             self.spawn_job(Commit::default(), false, async {
                 Outcome::Failed {
@@ -389,6 +420,28 @@ impl Orchestrator {
         let target = self.target.clone();
         let state = Arc::clone(&self.deps.state);
         let commit = Commit::default();
+        if self.machine.mode() == Mode::Command {
+            // Em modo alternar a seleção já foi copiada ao largar a tecla; a
+            // segurar, copia-se agora (a tecla acabou de ser largada). Corre
+            // ao mesmo tempo que o fim da gravação e a transcrição.
+            let selection = self
+                .selection
+                .take()
+                .unwrap_or_else(|| Selection::capture(self.deps.state.app.clone(), target.window));
+            self.spawn_job(commit.clone(), false, async move {
+                pipeline::command(
+                    state,
+                    provider,
+                    recording,
+                    released_at,
+                    target,
+                    selection,
+                    commit,
+                )
+                .await
+            });
+            return;
+        }
         self.spawn_job(commit.clone(), false, async move {
             pipeline::process(state, provider, recording, released_at, target, commit).await
         });
@@ -412,6 +465,8 @@ impl Orchestrator {
             return;
         };
         self.retry_offered = false;
+        // Só os ditados se tentam de novo: a pílula sai do aspeto de comando.
+        crate::overlay::emit_mode(&app, Mode::Dictation);
         self.deps.tray.set(TrayState::Processing);
         hotkey::set_cancel_enabled(&app, true);
         let target = focus::Target::of(focus::foreground_for_retry());
@@ -556,6 +611,7 @@ impl Orchestrator {
                 // Para a máquina é igual a cancelar; a barra mostra a falha em vez
                 // de continuar a fingir que grava.
                 self.machine.handle(Input::Cancel, Instant::now());
+                self.selection = None;
                 self.deps.recorder.cancel();
                 hotkey::set_cancel_enabled(&app, false);
                 self.deps.state.notify(reason);

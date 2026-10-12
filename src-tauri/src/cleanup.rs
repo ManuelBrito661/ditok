@@ -211,19 +211,60 @@ pub async fn clean(
     let started = Instant::now();
     let system = system_prompt(plan, vocabulary, text.contains("{{1}}"));
     let user = format!("<transcricao>{text}</transcricao>");
+    let answer = chat(
+        openrouter,
+        &Chat {
+            model,
+            system: &system,
+            user: &user,
+            temperature: 0.0,
+            // ~1 token por 3 caracteres em português, com folga.
+            max_tokens: (text.len() / 2 + 64).min(4096) as u32,
+            timeout: TIMEOUT,
+        },
+    )
+    .await?;
+    let cleaned = sanitize(&answer.text, text)?;
+    Ok(Cleaned {
+        text: cleaned,
+        cost: answer.cost,
+        elapsed: started.elapsed(),
+    })
+}
+
+/// Um pedido ao `/chat/completions`: uma mensagem de sistema e uma do utilizador.
+/// Partilhado pela limpeza e pelo modo comando (`command.rs`).
+pub struct Chat<'a> {
+    pub model: &'a str,
+    pub system: &'a str,
+    pub user: &'a str,
+    pub temperature: f32,
+    pub max_tokens: u32,
+    pub timeout: Duration,
+}
+
+/// A resposta do modelo (já sem espaços nas pontas, nunca vazia) e o custo.
+pub struct Answer {
+    pub text: String,
+    pub cost: Option<f64>,
+}
+
+/// Envia o pedido e devolve o texto da primeira escolha. Uma resposta vazia é
+/// um erro (com o `finish_reason`, que diz porquê).
+pub async fn chat(openrouter: &OpenRouter, req: &Chat<'_>) -> Result<Answer, SttError> {
+    let model = req.model;
     let body = ChatRequest {
         model,
-        temperature: 0.0,
-        // ~1 token por 3 caracteres em português, com folga.
-        max_tokens: (text.len() / 2 + 64).min(4096) as u32,
+        temperature: req.temperature,
+        max_tokens: req.max_tokens,
         messages: [
             Message {
                 role: "system",
-                content: &system,
+                content: req.system,
             },
             Message {
                 role: "user",
-                content: &user,
+                content: req.user,
             },
         ],
         usage: UsageOpt { include: true },
@@ -232,7 +273,7 @@ pub async fn clean(
     };
     let response = openrouter
         .post("/chat/completions")
-        .timeout(TIMEOUT)
+        .timeout(req.timeout)
         .json(&body)
         .send()
         .await?;
@@ -248,8 +289,8 @@ pub async fn clean(
         .into_iter()
         .next()
         .ok_or_else(|| SttError::Decode("resposta sem escolhas".into()))?;
-    let cleaned = choice.message.content.unwrap_or_default();
-    if cleaned.trim().is_empty() {
+    let text = choice.message.content.unwrap_or_default();
+    if text.trim().is_empty() {
         // Dizer porquê poupa uma tarde a adivinhar (foi assim que se descobriu o
         // problema do raciocínio: finish_reason=length).
         let reason = choice.finish_reason.as_deref().unwrap_or("?");
@@ -257,11 +298,9 @@ pub async fn clean(
             "resposta sem texto (finish_reason={reason})"
         )));
     }
-    let cleaned = sanitize(&cleaned, text)?;
-    Ok(Cleaned {
-        text: cleaned,
+    Ok(Answer {
+        text: text.trim().to_owned(),
         cost: parsed.usage.and_then(|u| u.cost),
-        elapsed: started.elapsed(),
     })
 }
 

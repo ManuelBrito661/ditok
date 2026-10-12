@@ -43,6 +43,10 @@ pub struct DictationMetrics {
     /// percentis nem para o número de ditados, só para o custo.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub file: bool,
+    /// Modo comando: `cleanup_ms`/`cleanup_cost_usd` são o pedido ao LLM com a
+    /// instrução. Conta como um ditado (número, custo e latência).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub command: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -146,6 +150,8 @@ pub struct MetricsRow {
     pub error: Option<String>,
     #[serde(default)]
     pub file: bool,
+    #[serde(default)]
+    pub command: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -281,6 +287,7 @@ mod tests {
             chars: 80,
             generation_id: Some("gen-1".into()),
             file: false,
+            command: false,
             error: error.map(str::to_owned),
         }
     }

@@ -2,7 +2,10 @@
 //! faz uma coisa: marcar o instante e enviar um evento pelo canal do orquestrador.
 //! Toda a lógica (segurar vs alternar, cancelar) vive em `dictation`.
 
-use std::time::Instant;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Instant,
+};
 
 use tauri::{AppHandle, Runtime, plugin::TauriPlugin};
 use tauri_plugin_global_shortcut::{
@@ -10,10 +13,21 @@ use tauri_plugin_global_shortcut::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::dictation::DictationEvent;
+use crate::dictation::{DictationEvent, machine::Mode};
 
 /// `CommandOrControl` é Ctrl no Windows e Cmd no macOS.
 pub const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+Space";
+/// O do modo comando: o de ditado com mais um Alt (Option no macOS). O
+/// Windows só dispara um atalho se os modificadores forem exatamente os
+/// registados, por isso os dois não se confundem.
+pub const DEFAULT_COMMAND_SHORTCUT: &str = "CommandOrControl+Shift+Alt+Space";
+
+/// O `id()` do atalho de comando registado, ou `NO_COMMAND`. O handler do plugin
+/// corre noutra thread e só recebe o atalho premido: compara-o com isto para
+/// saber o modo. Um atómico chega (é só um número) e dispensa um `Mutex`.
+static COMMAND_ID: AtomicU64 = AtomicU64::new(NO_COMMAND);
+/// Fora do intervalo de um `u32`, por isso nunca é o `id()` de um atalho.
+const NO_COMMAND: u64 = u64::MAX;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HotkeyError {
@@ -48,7 +62,12 @@ pub fn plugin<R: Runtime>(tx: UnboundedSender<DictationEvent>) -> TauriPlugin<R>
                 }
                 DictationEvent::Cancel
             } else {
-                DictationEvent::Hotkey { pressed, at }
+                let mode = if u64::from(shortcut.id()) == COMMAND_ID.load(Ordering::Relaxed) {
+                    Mode::Command
+                } else {
+                    Mode::Dictation
+                };
+                DictationEvent::Hotkey { pressed, at, mode }
             };
             // `send` só falha se o orquestrador já terminou (a app está a sair).
             if tx.send(ev).is_err() {
@@ -137,6 +156,54 @@ pub fn change_dictation<R: Runtime>(
     }
     tracing::info!(old, new, "atalho de ditado alterado");
     Ok(())
+}
+
+/// Regista o atalho do modo comando (no arranque).
+pub fn register_command<R: Runtime>(app: &AppHandle<R>, shortcut: &str) -> Result<(), HotkeyError> {
+    change_command(app, None, Some(shortcut))
+}
+
+/// Troca o atalho de comando: `old` é o que está registado agora (`None` se
+/// nenhum) e `new` o que passa a estar (`None` = desligar o modo comando). Como
+/// no ditado, regista o novo antes de largar o antigo: se falhar, fica tudo
+/// como estava.
+pub fn change_command<R: Runtime>(
+    app: &AppHandle<R>,
+    old: Option<&str>,
+    new: Option<&str>,
+) -> Result<(), HotkeyError> {
+    let gs = app.global_shortcut();
+    let old_parsed = old.and_then(|s| s.parse::<Shortcut>().ok());
+    let new_parsed = new.map(parse).transpose()?;
+    if old_parsed == new_parsed {
+        return Ok(());
+    }
+    if let (Some(parsed), Some(text)) = (new_parsed, new) {
+        gs.register(parsed)
+            .map_err(|source| HotkeyError::Register {
+                shortcut: text.to_owned(),
+                source,
+            })?;
+    }
+    if let Some(old) = old_parsed
+        && let Err(e) = gs.unregister(old)
+    {
+        tracing::warn!(error = %e, "não foi possível largar o atalho de comando antigo");
+    }
+    let id = new_parsed.map_or(NO_COMMAND, |s| u64::from(s.id()));
+    COMMAND_ID.store(id, Ordering::Relaxed);
+    tracing::info!(?old, ?new, "atalho de comando");
+    Ok(())
+}
+
+/// Os dois textos são o mesmo atalho? ("Control+Shift+Space" e
+/// "CommandOrControl+Shift+Space" são, no Windows.) Textos inválidos nunca são
+/// iguais: a validação deles é feita ao registar.
+pub fn same_shortcut(a: &str, b: &str) -> bool {
+    match (a.parse::<Shortcut>(), b.parse::<Shortcut>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// Larga o atalho de ditado (só usado para desfazer um registo quando gravar as
@@ -230,6 +297,14 @@ mod tests {
         assert_eq!(pretty("Control+Shift+KeyD"), "Ctrl+Shift+D");
         assert_eq!(pretty("Control+Digit5"), "Ctrl+5");
         assert_eq!(pretty("F13"), "F13");
+    }
+
+    #[test]
+    fn command_default_is_valid_and_differs_from_dictation() {
+        assert!(parse(DEFAULT_COMMAND_SHORTCUT).is_ok());
+        assert!(!same_shortcut(DEFAULT_SHORTCUT, DEFAULT_COMMAND_SHORTCUT));
+        assert!(same_shortcut("Control+Shift+KeyD", "Shift+Control+KeyD"));
+        assert!(!same_shortcut("Control+Banana", "Control+Banana"));
     }
 
     #[test]

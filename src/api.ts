@@ -10,6 +10,9 @@ export type ModelKind = "transcription" | "text";
 
 export interface Config {
   shortcut: string;
+  /** Modo comando: um segundo atalho que aplica uma instrução falada ao texto selecionado. */
+  command_enabled: boolean;
+  command_shortcut: string;
   stt_model: string;
   transport: Transport;
   language: string | null;
@@ -63,6 +66,8 @@ export interface SettingsView {
   api_key_set: boolean;
   /** `false`: outra app ocupou o atalho de ditado e ele não funciona. */
   shortcut_ok: boolean;
+  /** `false`: o modo comando está ligado mas outra app ocupou o atalho. */
+  command_ok: boolean;
   autostart: boolean;
   paths: { config: string; data: string; logs: string };
 }
@@ -108,6 +113,8 @@ export interface MetricsRow {
   error: string | null;
   /** Linha de um ficheiro transcrito, não de um ditado. */
   file?: boolean;
+  /** Modo comando: `cleanup_*` são o pedido ao LLM com a instrução. */
+  command?: boolean;
 }
 
 export interface Stats {
@@ -130,6 +137,8 @@ export interface HistoryEntry {
   app?: string | null;
   /** O estilo aplicado, só quando mudou alguma coisa. */
   style?: Style | null;
+  /** Modo comando: a instrução falada. Aí `raw_text` é o texto selecionado que foi substituído. */
+  instruction?: string | null;
 }
 
 export interface MemoryReport {
@@ -162,6 +171,10 @@ export interface Status {
   shortcut_ok: boolean;
   shortcut: string;
   shortcut_label: string;
+  /** O atalho do modo comando, legível; `null` com o modo desligado. */
+  command_label: string | null;
+  /** `false` só com o modo comando ligado e o atalho ocupado por outra app. */
+  command_ok: boolean;
 }
 
 /** Sítios para onde a janela pode ser levada de fora (settings_window.rs, open_at). */

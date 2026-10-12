@@ -27,6 +27,13 @@ pub enum FailReason {
     NoMicrophone,
     /// O servidor (ou o provider) não respondeu a tempo.
     Timeout,
+    /// Modo comando: o texto selecionado passa do limite (ver
+    /// `command::MAX_SELECTION`).
+    SelectionTooLarge,
+    /// Modo comando sem modelo de texto configurado.
+    NoModel,
+    /// Modo comando: o modelo respondeu, mas sem texto que se possa colar.
+    BadAnswer,
     /// Tudo o resto: a notificação e o log explicam.
     Generic,
 }
@@ -44,6 +51,9 @@ impl FailReason {
             Self::TooManyRequests => "Muitos pedidos",
             Self::NoMicrophone => "Sem microfone",
             Self::Timeout => "Tempo esgotado",
+            Self::SelectionTooLarge => "Seleção grande demais",
+            Self::NoModel => "Sem modelo",
+            Self::BadAnswer => "Resposta vazia",
             Self::Generic => "Falhou",
         }
     }
@@ -184,9 +194,14 @@ mod tests {
             TooManyRequests,
             NoMicrophone,
             Timeout,
+            SelectionTooLarge,
+            NoModel,
+            BadAnswer,
             Generic,
         ] {
-            assert!(r.label().chars().count() <= 15, "{r:?}");
+            // A pílula de falha alarga-se para os motivos mais compridos
+            // (classe "wide" em overlay.ts).
+            assert!(r.label().chars().count() <= 22, "{r:?}");
         }
     }
 }

@@ -403,6 +403,39 @@
                 <input id="show-overlay" type="checkbox" role="switch" />
               </label>
             </div>
+
+            <h4 class="section-title">Modo comando</h4>
+            <p class="muted panel-intro command-intro">
+              Seleciona texto numa app, carrega no atalho de comando e diz o que queres. Substituo a seleção pelo
+              resultado. Sem nada selecionado, escrevo texto novo onde está o cursor. Por exemplo:
+            </p>
+            <ul class="command-examples">
+              <li>"Torna isto mais formal"</li>
+              <li>"Traduz para inglês"</li>
+              <li>"Resume em três pontos"</li>
+            </ul>
+            <div class="rows">
+              <label class="row switch">
+                <span class="row-text">
+                  <span class="row-title">Ligar o modo comando</span>
+                  <span class="row-desc">Uso o modelo de texto da Limpeza com IA, mesmo com a limpeza desligada. Seleções até 8000 caracteres.</span>
+                </span>
+                <input id="command-enabled" type="checkbox" role="switch" />
+              </label>
+              <div class="row" id="command-shortcut-row">
+                <div class="row-text">
+                  <span id="command-shortcut-label" class="row-title">Atalho de comando</span>
+                  <span class="row-desc">Funciona como o de ditado: segura para falar, toca para alternar, Esc cancela.</span>
+                  <p id="command-shortcut-busy" class="error" hidden>Outra app está a usar este atalho, por isso o modo comando não funciona. Escolhe outro em "Mudar".</p>
+                  <p id="command-shortcut-error" class="error" hidden></p>
+                </div>
+                <div class="row-control">
+                  <span id="command-shortcut-display" class="keys" aria-labelledby="command-shortcut-label"></span>
+                  <button id="command-shortcut-record" type="button" class="secondary">Mudar</button>
+                  <button id="command-shortcut-reset" type="button" class="ghost">Repor</button>
+                </div>
+              </div>
+            </div>
           </section>
 
           <!-- Transcrição -->

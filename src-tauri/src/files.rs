@@ -315,6 +315,7 @@ async fn run(
             .then(|| message.clone())
             .flatten(),
         file: true,
+        command: false,
     };
     tauri::async_runtime::spawn_blocking(move || {
         match state.metrics.record(&m, config.monthly_budget_usd) {

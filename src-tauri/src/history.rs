@@ -30,6 +30,11 @@ pub struct HistoryEntry {
     /// limpeza está ligada). Entradas antigas não o têm.
     #[serde(default)]
     pub style: Option<Style>,
+    /// Modo comando: a instrução falada ("torna isto mais formal"). Nesse caso
+    /// `raw_text` é o texto selecionado que foi substituído (se havia). `None`
+    /// num ditado e nas entradas antigas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
 }
 
 fn pasted_by_default() -> bool {
@@ -106,6 +111,7 @@ mod tests {
             pasted: true,
             app: None,
             style: None,
+            instruction: None,
         }
     }
 
@@ -130,5 +136,6 @@ mod tests {
         let e: HistoryEntry = serde_json::from_str(json).unwrap();
         assert!(e.pasted);
         assert_eq!((e.app, e.style), (None, None), "sem app nem estilo");
+        assert_eq!(e.instruction, None, "um ditado, não um comando");
     }
 }

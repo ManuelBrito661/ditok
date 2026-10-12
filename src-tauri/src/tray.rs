@@ -6,7 +6,10 @@
 //! O mesmo menu abre com o clique direito no ícone e na pílula da barra
 //! (`overlay::popup_menu`). No Windows, o clique esquerdo no ícone abre a janela.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use serde::Serialize;
 use tauri::{
@@ -28,6 +31,10 @@ const MENU_OPEN_SETTINGS: &str = "open_settings";
 const MENU_PASTE_LAST: &str = "paste_last";
 const MENU_RETRY: &str = "retry";
 const MENU_SHORTCUT: &str = "shortcut";
+const MENU_COMMAND: &str = "command";
+/// Onde fica a linha do atalho de comando: logo a seguir à do atalho de ditado
+/// (abrir, colar, tentar de novo, separador, atalho → posição 5).
+const COMMAND_POSITION: usize = 5;
 const MENU_MUTE: &str = "mute";
 const MENU_QUIT: &str = "quit";
 
@@ -76,6 +83,9 @@ impl TrayState {
 pub struct TrayMenu {
     menu: Menu<Wry>,
     shortcut: MenuItem<Wry>,
+    /// Só está no menu com o modo comando ligado (`command_shown`).
+    command: MenuItem<Wry>,
+    command_shown: AtomicBool,
     mute: CheckMenuItem<Wry>,
 }
 
@@ -114,6 +124,28 @@ pub fn sync_menu(app: &AppHandle, status: &Status, sounds: bool) {
     };
     if let Err(e) = m.shortcut.set_text(text) {
         tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
+    }
+    // A linha do modo comando só aparece com ele ligado. `swap` devolve o valor
+    // antigo: só se mexe no menu quando muda.
+    let show = status.command_label.is_some();
+    let was_shown = m.command_shown.swap(show, Ordering::Relaxed);
+    let result = match (was_shown, show) {
+        (false, true) => m.menu.insert(&m.command, COMMAND_POSITION),
+        (true, false) => m.menu.remove(&m.command),
+        _ => Ok(()),
+    };
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
+    }
+    if let Some(label) = &status.command_label {
+        let text = if status.command_ok {
+            format!("Comando: {label}")
+        } else {
+            format!("Comando ocupado: {label}")
+        };
+        if let Err(e) = m.command.set_text(text) {
+            tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
+        }
     }
     if let Err(e) = m.mute.set_checked(!sounds) {
         tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
@@ -189,6 +221,10 @@ impl Tray {
         )
         .enabled(false)
         .build(app)?;
+        // Também só informativa; entra no menu em `sync_menu` se o modo estiver ligado.
+        let command = MenuItemBuilder::with_id(MENU_COMMAND, "Comando")
+            .enabled(false)
+            .build(app)?;
         let mute = CheckMenuItemBuilder::with_id(MENU_MUTE, "Silenciar sons")
             .checked(!config.sounds)
             .build(app)?;
@@ -251,6 +287,8 @@ impl Tray {
         app.manage(TrayMenu {
             menu,
             shortcut,
+            command,
+            command_shown: AtomicBool::new(false),
             mute,
         });
 

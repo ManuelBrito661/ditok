@@ -7,6 +7,10 @@
 // - "overlay:latched": o ditado está em modo alternar (mostra ✕ e ■)
 // - "overlay:style": o estilo deste ditado ("Formal"…) ou null; chega logo antes
 //   do estado "recording" e aparece antes do tempo
+// - "overlay:mode": "dictation" | "command"; chega antes do estado "recording".
+//   No modo comando a pílula diz "Comando" e muda de cor
+// - "overlay:selection": modo comando, havia texto selecionado? Sem seleção, a
+//   pílula diz "Sem seleção · a escrever"
 
 // - "overlay:hover": o rato entrou/saiu da pílula (o Rust vigia o cursor)
 // - "overlay:notice": falta a chave / o atalho está ocupado (aviso persistente em
@@ -114,11 +118,49 @@ let smoothed = 0;
 let recordingSince = 0;
 /** O estilo do ditado em curso, se não for o Predefinido (ex.: "Formal"). */
 let styleTag: string | null = null;
+/** O modo da gravação em curso (overlay:mode). */
+let mode: "dictation" | "command" = "dictation";
+/** Modo comando: havia texto selecionado? `null` enquanto não se sabe. */
+let hasSelection: boolean | null = null;
 
-/** O texto da pílula a ouvir: o estilo (se houver) e o tempo. */
+/** Sem seleção, o comando escreve texto novo no cursor. */
+const NO_SELECTION = "Sem seleção · a escrever";
+
+/** O texto da pílula a ouvir: o estilo (ou "Comando", se houver) e o tempo. */
 function recordingLabel(secs: number): string {
+  // Comprido demais para caber com o tempo: o aviso dos 45 s fica na cor.
+  if (mode === "command" && hasSelection === false) return NO_SELECTION;
   const time = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
-  return styleTag ? `${styleTag} · ${time}` : time;
+  const tag = mode === "command" ? "Comando" : styleTag;
+  return tag ? `${tag} · ${time}` : time;
+}
+
+/** O texto ao lado dos pontos enquanto um comando é processado. */
+function processingLabel(): string {
+  return hasSelection === false ? "A escrever" : "A editar";
+}
+
+/** Aplica o que já se sabe sobre a seleção ao estado atual da pílula. */
+function renderCommand() {
+  // Só a ouvir e a processar: os resultados (colado, falhou…) têm as cores de sempre.
+  const state = pill.dataset.state;
+  const command = mode === "command" && (state === "recording" || state === "processing");
+  pill.classList.toggle("command", command);
+  pill.classList.toggle("no-selection", command && hasSelection === false);
+  if (!command) return;
+  if (pill.dataset.state === "recording") {
+    label.textContent = recordingLabel(Math.floor((performance.now() - recordingSince) / 1000));
+  } else if (pill.dataset.state === "processing" && !pill.classList.contains("slow")) {
+    label.textContent = processingLabel();
+  }
+}
+
+function onSelection(has: boolean) {
+  hasSelection = has;
+  renderCommand();
+  if (mode === "command" && !has && pill.dataset.state !== "idle") {
+    announce.textContent = "Sem seleção: vou escrever texto novo";
+  }
 }
 /** A última falha recebida; usada quando o estado passa a "failed". */
 let failure: Failure | null = null;
@@ -159,21 +201,28 @@ function onStatus(s: Status) {
 function setState(state: State) {
   pill.dataset.state = state;
   // O backend volta a avisar se for o caso.
-  pill.classList.remove("latched", "slow", "retry", "busy");
+  pill.classList.remove("latched", "slow", "retry", "busy", "wide");
   window.clearTimeout(slowTimer);
   mascot.src = MASCOT[state];
   label.textContent = LABEL[state];
   let spoken = ANNOUNCE[state];
+  renderCommand();
+  const command = mode === "command";
 
   if (state === "recording") {
     recordingSince = performance.now();
     label.textContent = recordingLabel(0);
-    pill.classList.toggle("styled", styleTag !== null);
-    if (styleTag) spoken += `, estilo ${styleTag}`;
+    pill.classList.toggle("styled", styleTag !== null || command);
+    if (command) spoken = "A ouvir o comando";
+    else if (styleTag) spoken += `, estilo ${styleTag}`;
     history.fill(0);
     smoothed = 0;
     renderBars();
   } else if (state === "processing") {
+    if (command) {
+      label.textContent = processingLabel();
+      spoken = hasSelection === false ? "A escrever" : "A aplicar o comando";
+    }
     slowTimer = window.setTimeout(() => {
       if (pill.dataset.state !== "processing") return;
       pill.classList.add("slow");
@@ -183,6 +232,8 @@ function setState(state: State) {
   } else if (state === "failed" && failure) {
     label.textContent = failure.label;
     pill.classList.toggle("retry", failure.retry);
+    // "Seleção grande demais" não cabe na pílula de falha normal.
+    pill.classList.toggle("wide", failure.label.length > 15);
     spoken = `O ditado falhou: ${failure.label}`;
     if (failure.retry) spoken += ". Clica na barra para tentar de novo.";
   }
@@ -275,6 +326,11 @@ void listen("overlay:busy", () => onBusy());
 void listen<number>("overlay:level", (e) => onLevel(e.payload));
 void listen("overlay:latched", () => pill.classList.add("latched"));
 void listen<string | null>("overlay:style", (e) => (styleTag = e.payload));
+void listen<"dictation" | "command">("overlay:mode", (e) => {
+  mode = e.payload;
+  hasSelection = null; // uma gravação nova: ainda não se sabe
+});
+void listen<boolean>("overlay:selection", (e) => onSelection(e.payload));
 void listen<boolean>("overlay:hover", (e) => onHover(e.payload));
 void listen<Status>("overlay:notice", (e) => onStatus(e.payload));
 // A barra pode nascer depois do último aviso: pede o estado atual.

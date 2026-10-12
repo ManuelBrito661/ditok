@@ -38,6 +38,10 @@ pub struct Status {
     pub shortcut: String,
     /// O mesmo, legível ("Ctrl+Shift+Espaço").
     pub shortcut_label: String,
+    /// O atalho do modo comando, legível; `None` com o modo desligado.
+    pub command_label: Option<String>,
+    /// `false` só quando o modo comando está ligado e outra app tem o atalho.
+    pub command_ok: bool,
 }
 
 pub struct AppState {
@@ -62,6 +66,8 @@ pub struct AppState {
     /// `AtomicBool`: escrito pelos comandos, lido por quem quiser, sem `Mutex`.
     key_set: AtomicBool,
     shortcut_ok: AtomicBool,
+    /// O atalho de comando não está em falta (desligado conta como "ok").
+    command_ok: AtomicBool,
     /// As últimas apps onde ditaste, mais recente primeiro. Só em memória (nunca
     /// em disco): servem para a janela de definições propor "Usar esta app" sem
     /// teres de saber o nome do executável. Um `Mutex` chega: é tocado uma vez
@@ -114,22 +120,38 @@ impl AppState {
             events,
             key_set: AtomicBool::new(false),
             shortcut_ok: AtomicBool::new(true),
+            command_ok: AtomicBool::new(true),
             recent_apps: Mutex::new(VecDeque::new()),
         }
     }
 
     pub fn status(&self) -> Status {
-        let shortcut = self.config().shortcut.clone();
+        let config = self.config();
+        let shortcut = config.shortcut.clone();
         Status {
             key_missing: !self.key_set.load(Ordering::Relaxed),
             shortcut_ok: self.shortcut_ok(),
             shortcut_label: hotkey::pretty(&shortcut),
             shortcut,
+            command_label: config
+                .command_enabled
+                .then(|| hotkey::pretty(&config.command_shortcut)),
+            command_ok: self.command_ok(),
         }
     }
 
     pub fn shortcut_ok(&self) -> bool {
         self.shortcut_ok.load(Ordering::Relaxed)
+    }
+
+    pub fn command_ok(&self) -> bool {
+        self.command_ok.load(Ordering::Relaxed)
+    }
+
+    /// Só guarda o valor: quem chama faz `publish` (as definições mudam as duas
+    /// coisas de uma vez e avisam uma só vez).
+    pub fn set_command_ok(&self, ok: bool) {
+        self.command_ok.store(ok, Ordering::Relaxed);
     }
 
     pub fn set_key_set(&self, set: bool) {

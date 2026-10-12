@@ -9,6 +9,7 @@
 //! - é transparente, sem moldura, por cima de tudo e fora da barra de tarefas.
 //!
 //! O backend envia-lhe eventos (`overlay:state`, `overlay:level`, `overlay:latched`,
+//! `overlay:mode`, `overlay:selection`, `overlay:style`,
 //! `overlay:failure`, `overlay:busy`, `overlay:hover`, `overlay:notice`) e recebe os cliques pelos
 //! comandos `overlay_*` em commands.rs.
 //! Toda a animação é CSS na página `overlay.html`.
@@ -211,6 +212,22 @@ pub fn emit_latched(app: &AppHandle) {
 /// antes do estado `recording`; a barra mostra-o enquanto ouve.
 pub fn emit_style(app: &AppHandle, label: Option<&str>) {
     let _ = app.emit_to(LABEL, "overlay:style", label);
+}
+
+/// O modo desta gravação ("dictation" ou "command"). Enviado antes do estado
+/// `recording`: no modo comando, a pílula mostra "Comando" e outra cor.
+pub fn emit_mode(app: &AppHandle, mode: crate::dictation::machine::Mode) {
+    let mode = match mode {
+        crate::dictation::machine::Mode::Dictation => "dictation",
+        crate::dictation::machine::Mode::Command => "command",
+    };
+    let _ = app.emit_to(LABEL, "overlay:mode", mode);
+}
+
+/// Modo comando: já se sabe se havia texto selecionado. Sem seleção, a pílula
+/// diz "Sem seleção · a escrever" (a instrução vai escrever texto novo).
+pub fn emit_selection(app: &AppHandle, has_text: bool) {
+    let _ = app.emit_to(LABEL, "overlay:selection", has_text);
 }
 
 /// Nível do microfone (0–1), ~20 vezes por segundo durante a gravação.

@@ -712,6 +712,12 @@ dialog[open] { animation: dlg-in 0.2s var(--ease); }
 .panel-title { font-size: 18px; font-weight: 600; margin: 4px 0 18px; }
 .rows + .section-title { margin-top: 28px; }
 .panel-intro { margin: -8px 0 16px; max-width: 560px; }
+/* Modo comando (separador Geral): a introdução fica colada ao título da secção. */
+.panel-intro.command-intro { margin: 0 0 6px; }
+.command-examples { margin: 0 0 16px; padding-left: 20px; color: var(--muted); font-size: var(--fs-sm); }
+.command-examples li + li { margin-top: 2px; }
+/* Modo comando desligado: o atalho fica visível mas esbatido (não se usa). */
+.row.is-off { opacity: 0.55; }
 
 .rows { border-top: 1px solid var(--border); }
 .row {

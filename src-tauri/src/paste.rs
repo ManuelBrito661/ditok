@@ -50,16 +50,29 @@ pub fn copy(text: &str) -> Result<(), PasteError> {
 /// reposição aconteça fora do caminho crítico.
 pub struct Restore {
     previous: Option<String>,
-    pasted: String,
+    /// O que o clipboard tem enquanto é "nosso" (o texto colado, ou a seleção
+    /// copiada no modo comando). `None` = vazio ou sem texto.
+    ours: Option<String>,
+}
+
+/// O que estava no clipboard antes de o Ditok lhe mexer.
+pub enum Before {
+    /// Lê-o agora (o ditado normal).
+    ReadNow,
+    /// Já foi lido antes (o modo comando lê-o antes de copiar a seleção).
+    Known(Option<String>),
 }
 
 /// Coloca `text` no clipboard e envia o atalho de colar. Devolve o tempo gasto e
 /// um `Restore` para repor o clipboard anterior mais tarde.
-pub fn paste(text: &str) -> Result<(Duration, Restore), PasteError> {
+pub fn paste(text: &str, before: Before) -> Result<(Duration, Restore), PasteError> {
     let started = Instant::now();
     let mut clipboard = Clipboard::new()?;
     // Só sabemos guardar texto; se o clipboard tinha uma imagem, perde-se (fica no log).
-    let previous = clipboard.get_text().ok();
+    let previous = match before {
+        Before::ReadNow => clipboard.get_text().ok(),
+        Before::Known(previous) => previous,
+    };
     if previous.is_none() {
         tracing::debug!("clipboard anterior não era texto (ou estava vazio); não será reposto");
     }
@@ -67,15 +80,100 @@ pub fn paste(text: &str) -> Result<(Duration, Restore), PasteError> {
     set_text(&mut clipboard, text)?;
     let mut enigo =
         Enigo::new(&Settings::default()).map_err(|e| PasteError::Input(e.to_string()))?;
-    send_paste_shortcut(&mut enigo).map_err(|e| PasteError::Input(e.to_string()))?;
+    send_shortcut(&mut enigo, Letter::V).map_err(|e| PasteError::Input(e.to_string()))?;
 
     Ok((
         started.elapsed(),
         Restore {
             previous,
-            pasted: text.to_owned(),
+            ours: Some(text.to_owned()),
         },
     ))
+}
+
+/// Quanto tempo esperamos que a app copie a seleção depois do Ctrl+C. As apps
+/// respondem em poucos milissegundos; sem seleção, não copiam nada e esperamos
+/// isto tudo.
+const COPY_WAIT: Duration = Duration::from_millis(300);
+/// De quanto em quanto tempo olhamos para o clipboard enquanto esperamos.
+const COPY_POLL: Duration = Duration::from_millis(15);
+
+/// O texto selecionado na app em foco (modo comando) e o que estava no
+/// clipboard antes, para o repor no fim.
+pub struct Captured {
+    /// `None`: não havia seleção (ou não era texto).
+    pub text: Option<String>,
+    previous: Option<String>,
+}
+
+impl Captured {
+    /// Nada foi copiado (ex.: a janela mudou): não há nada a repor.
+    pub fn nothing() -> Self {
+        Self {
+            text: None,
+            previous: None,
+        }
+    }
+
+    /// O clipboard de antes, para colar o resultado e repô-lo depois
+    /// (`paste(_, Before::Known(..))`).
+    pub fn into_previous(self) -> Option<String> {
+        self.previous
+    }
+
+    /// O comando não chegou a colar (falhou, foi cancelado…): repõe o clipboard
+    /// de antes. Bloqueante.
+    pub fn restore(self) {
+        Restore {
+            previous: self.previous,
+            ours: self.text,
+        }
+        .run();
+    }
+}
+
+/// Copia o texto selecionado na app em foco: guarda o clipboard, esvazia-o,
+/// simula Ctrl+C (Cmd+C) e espera, até `COPY_WAIT`, que a app lá ponha alguma
+/// coisa. O clipboard fica com a seleção: quem chama tem de o repor no fim
+/// (`Captured::restore` ou `paste` com `Before::Known`).
+///
+/// Porquê esvaziar primeiro: é a forma mais simples (e igual nas duas
+/// plataformas) de saber se a app copiou alguma coisa. Sem seleção, a maior
+/// parte das apps não mexe no clipboard, que continua vazio.
+pub fn capture_selection() -> Result<Captured, PasteError> {
+    let mut clipboard = Clipboard::new()?;
+    let previous = clipboard.get_text().ok();
+    clipboard.clear()?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| PasteError::Input(e.to_string()))?;
+    if let Err(e) = send_shortcut(&mut enigo, Letter::C) {
+        // Sem Ctrl+C não há seleção; o clipboard volta ao que era.
+        Captured {
+            text: None,
+            previous,
+        }
+        .restore();
+        return Err(PasteError::Input(e.to_string()));
+    }
+    let deadline = Instant::now() + COPY_WAIT;
+    let text = loop {
+        // A app pode ter o clipboard aberto a meio da cópia: um erro aqui só
+        // quer dizer "ainda não", por isso tenta-se outra vez.
+        if let Ok(t) = clipboard.get_text()
+            && !t.trim().is_empty()
+        {
+            break Some(t);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(COPY_POLL);
+    };
+    tracing::debug!(
+        chars = text.as_ref().map(|t| t.chars().count()),
+        "seleção copiada"
+    );
+    Ok(Captured { text, previous })
 }
 
 #[cfg(target_os = "windows")]
@@ -94,18 +192,50 @@ fn set_text(clipboard: &mut Clipboard, text: &str) -> Result<(), arboard::Error>
     clipboard.set_text(text)
 }
 
-fn send_paste_shortcut(enigo: &mut Enigo) -> enigo::InputResult<()> {
+/// A letra do atalho a simular: V para colar, C para copiar.
+#[derive(Debug, Clone, Copy)]
+enum Letter {
+    C,
+    V,
+}
+
+/// A tecla de cada letra, independente do layout do teclado.
+#[cfg(target_os = "macos")]
+fn letter_key(letter: Letter) -> Key {
+    // Códigos virtuais do macOS: kVK_ANSI_C = 8, kVK_ANSI_V = 9.
+    match letter {
+        Letter::C => Key::Other(8),
+        Letter::V => Key::Other(9),
+    }
+}
+#[cfg(target_os = "windows")]
+fn letter_key(letter: Letter) -> Key {
+    // Teclas virtuais (VK_C, VK_V): independentes do layout.
+    match letter {
+        Letter::C => Key::C,
+        Letter::V => Key::V,
+    }
+}
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn letter_key(letter: Letter) -> Key {
+    match letter {
+        Letter::C => Key::Unicode('c'),
+        Letter::V => Key::Unicode('v'),
+    }
+}
+
+/// Simula Ctrl+letra (Cmd+letra no macOS).
+fn send_shortcut(enigo: &mut Enigo, letter: Letter) -> enigo::InputResult<()> {
     // No modo alternar, o utilizador pode ainda estar a segurar modificadores do
     // atalho (Ctrl+Shift+Espaço) quando o texto chega: Ctrl+Shift+V ou Ctrl+Alt+V
     // fazem outra coisa em muitas apps, e Win+Ctrl+V abre um menu do Windows.
     release_modifiers(enigo)?;
 
     #[cfg(target_os = "macos")]
-    let (modifier, v) = (Key::Meta, Key::Other(9)); // kVK_ANSI_V: independente do layout
-    #[cfg(target_os = "windows")]
-    let (modifier, v) = (Key::Control, Key::V); // tecla virtual, independente do layout
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let (modifier, v) = (Key::Control, Key::Unicode('v'));
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+    let v = letter_key(letter);
 
     enigo.key(modifier, Direction::Press)?;
     let result = enigo.key(v, Direction::Click);
@@ -174,7 +304,9 @@ impl Restore {
             return;
         };
         let result = Clipboard::new().and_then(|mut cb| {
-            if cb.get_text().ok().as_deref() == Some(self.pasted.as_str()) {
+            // Vazio (ou sem texto) conta como `None`, tal como em `ours`.
+            let now = cb.get_text().ok().filter(|t| !t.is_empty());
+            if now == self.ours {
                 cb.set_text(previous)
             } else {
                 tracing::debug!("clipboard mudou entretanto; não foi reposto");

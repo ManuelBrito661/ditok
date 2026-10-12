@@ -1,5 +1,6 @@
 mod audio;
 mod cleanup;
+mod command;
 mod commands;
 mod config;
 mod dictation;
@@ -91,6 +92,17 @@ pub fn run() {
                     false
                 }
             };
+            // O modo comando é um extra: se o atalho estiver ocupado, fica só o
+            // aviso nas definições e no menu do tray (sem notificação, para não
+            // incomodar quem nunca o usa).
+            let command_ok = !config.command_enabled
+                || match hotkey::register_command(app.handle(), &config.command_shortcut) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "sem atalho de comando");
+                        false
+                    }
+                };
 
             let dirs = state::Dirs {
                 config: config_dir,
@@ -110,6 +122,7 @@ pub fn run() {
             // O menu do tray nasce com a linha do atalho certa; isto só a marca
             // "ocupado" se for o caso (a barra pede o estado quando carregar).
             state.set_key_set(key_set);
+            state.set_command_ok(command_ok);
             state.set_shortcut_ok(shortcut_ok);
             if !shortcut_ok {
                 state.notify(&format!(

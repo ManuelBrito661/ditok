@@ -15,15 +15,17 @@ use std::{
 
 use tauri::Emitter;
 
-use super::failure::FailReason;
+use super::{failure::FailReason, selection::Selection};
 use crate::{
     audio::{AudioError, Recording},
-    cleanup, focus,
+    cleanup, command,
+    config::Config,
+    focus,
     history::HistoryEntry,
     metrics::{self, DictationMetrics},
     paste,
     state::AppState,
-    stt::{SttProvider, SttRequest, openrouter::OpenRouter},
+    stt::{SttError, SttProvider, SttRequest, openrouter::OpenRouter},
     text::{Applied, Processed, TextRules},
 };
 
@@ -163,18 +165,41 @@ pub async fn process(
     target: focus::Target,
     commit: Commit,
 ) -> Outcome {
+    let (rec, release_to_wav) = match ready_recording(&state, recording, released_at).await {
+        Ok(ready) => ready,
+        Err(outcome) => return outcome,
+    };
+    transcribe_and_paste(
+        state,
+        openrouter,
+        rec,
+        released_at,
+        release_to_wav,
+        target,
+        commit,
+    )
+    .await
+}
+
+/// Espera pela gravação e decide se vale a pena enviá-la. `Err` traz o fim do
+/// ditado (sem microfone, toque acidental, só silêncio), igual nos dois modos.
+async fn ready_recording(
+    state: &Arc<AppState>,
+    recording: impl Future<Output = Result<Recording, AudioError>>,
+    released_at: Instant,
+) -> Result<(Recording, Duration), Outcome> {
     let rec = match recording.await {
         Ok(rec) => rec,
         // O microfone nem abriu: o motivo já foi notificado quando falhou
         // (`DictationEvent::AudioFailed`). Repetir a notificação só confundia.
         Err(AudioError::NotRecording) => {
             tracing::warn!("não havia gravação (o microfone não abriu)");
-            return Outcome::failed(FailReason::NoMicrophone);
+            return Err(Outcome::failed(FailReason::NoMicrophone));
         }
         Err(e) => {
             tracing::error!(error = %e, "gravação falhou");
             state.notify(&e.to_string());
-            return Outcome::failed(FailReason::from_audio(&e));
+            return Err(Outcome::failed(FailReason::from_audio(&e)));
         }
     };
     let release_to_wav = released_at.elapsed();
@@ -184,7 +209,7 @@ pub async fn process(
             audio_ms = ms(rec.audio),
             "gravação demasiado curta; ignorada"
         );
-        return Outcome::Nothing;
+        return Err(Outcome::Nothing);
     }
     if !rec.voice.has_speech() {
         // Só silêncio ou ruído: o Whisper inventaria uma frase, por isso nem se envia.
@@ -197,20 +222,12 @@ pub async fn process(
         );
         // O WAV de diagnóstico é o que permite perceber um falso negativo.
         if state.config().save_last_recording {
+            let state = Arc::clone(state);
             tauri::async_runtime::spawn_blocking(move || save_debug_wav(&state.debug_dir(), &rec));
         }
-        return Outcome::Nothing;
+        return Err(Outcome::Nothing);
     }
-    transcribe_and_paste(
-        state,
-        openrouter,
-        rec,
-        released_at,
-        release_to_wav,
-        target,
-        commit,
-    )
-    .await
+    Ok((rec, release_to_wav))
 }
 
 /// "Tentar de novo": volta a enviar uma gravação cuja transcrição falhou. As
@@ -263,26 +280,7 @@ async fn transcribe_and_paste(
         model: &config.stt_model,
         language: config.language.as_deref(),
     };
-    let mut m = DictationMetrics {
-        at: metrics::now(),
-        provider: stt.name(),
-        model: config.stt_model.clone(),
-        transport: None,
-        audio_ms: ms(rec.audio),
-        wav_bytes: rec.wav.len(),
-        mic_start_ms: rec.mic_start.map(ms),
-        release_to_wav_ms: ms(release_to_wav),
-        stt_ms: None,
-        cleanup_ms: None,
-        paste_ms: None,
-        total_ms: None,
-        cost_usd: None,
-        cleanup_cost_usd: None,
-        chars: 0,
-        generation_id: None,
-        file: false,
-        error: None,
-    };
+    let mut m = new_metrics(stt, &config, &rec, release_to_wav, false);
     let mut history_entry = None;
     let mut applied = Applied::default();
     let mut stt_guard: Option<SttMetricsGuard> = None;
@@ -355,6 +353,7 @@ async fn transcribe_and_paste(
                     released_at,
                     restore_clipboard,
                     target.window,
+                    paste::Before::ReadNow,
                     &mut m,
                 )
                 .await;
@@ -370,6 +369,7 @@ async fn transcribe_and_paste(
                         pasted: matches!(outcome, Outcome::Pasted),
                         app: target.app.clone(),
                         style: cleanup::shown_style(config.cleanup_level, style),
+                        instruction: None,
                     });
                 }
                 outcome
@@ -403,7 +403,19 @@ async fn transcribe_and_paste(
     if let Some(guard) = &mut stt_guard {
         guard.disarm();
     }
-    // Já colámos: o que falta não atrasa o utilizador.
+    record_in_background(state, config, m, history_entry, rec);
+    outcome
+}
+
+/// Já colámos: o que falta (métricas, histórico, WAV de teste) não atrasa o
+/// utilizador, por isso vai para uma thread de bloqueio.
+fn record_in_background(
+    state: Arc<AppState>,
+    config: Arc<Config>,
+    m: DictationMetrics,
+    history_entry: Option<HistoryEntry>,
+    rec: Recording,
+) {
     tauri::async_runtime::spawn_blocking(move || {
         record_metrics(&state, &m, config.monthly_budget_usd);
         if let Some(entry) = history_entry
@@ -417,6 +429,203 @@ async fn transcribe_and_paste(
         // Sem janela aberta não há ninguém a ouvir, e o `emit` não custa nada.
         let _ = state.app.emit(EVENT_DICTATION_RECORDED, ());
     });
+}
+
+/// As métricas de uma gravação antes de a enviar (o resto vai sendo preenchido).
+fn new_metrics(
+    stt: &dyn SttProvider,
+    config: &Config,
+    rec: &Recording,
+    release_to_wav: Duration,
+    command: bool,
+) -> DictationMetrics {
+    DictationMetrics {
+        at: metrics::now(),
+        provider: stt.name(),
+        model: config.stt_model.clone(),
+        transport: None,
+        audio_ms: ms(rec.audio),
+        wav_bytes: rec.wav.len(),
+        mic_start_ms: rec.mic_start.map(ms),
+        release_to_wav_ms: ms(release_to_wav),
+        stt_ms: None,
+        cleanup_ms: None,
+        paste_ms: None,
+        total_ms: None,
+        cost_usd: None,
+        cleanup_cost_usd: None,
+        chars: 0,
+        generation_id: None,
+        file: false,
+        command,
+        error: None,
+    }
+}
+
+/// Modo comando, do fim da gravação à colagem: a instrução falada passa pelo
+/// STT, o LLM aplica-a à seleção (ou escreve texto novo, sem seleção) e o
+/// resultado substitui a seleção.
+///
+/// Diferenças do ditado: sem regras locais nem limpeza (a instrução não é texto
+/// a colar), sem "Tentar de novo" (repetir precisava da mesma seleção) e com o
+/// clipboard já mexido pela cópia da seleção (ver `selection.rs`).
+pub async fn command(
+    state: Arc<AppState>,
+    openrouter: Arc<OpenRouter>,
+    recording: impl Future<Output = Result<Recording, AudioError>>,
+    released_at: Instant,
+    target: focus::Target,
+    selection: Selection,
+    commit: Commit,
+) -> Outcome {
+    // Se sairmos daqui sem colar (falha, silêncio, cancelamento), o `Drop` da
+    // `selection` repõe o clipboard. Não é preciso fazer nada nesses caminhos.
+    let (rec, release_to_wav) = match ready_recording(&state, recording, released_at).await {
+        Ok(ready) => ready,
+        Err(outcome) => return outcome,
+    };
+    let config = state.config();
+    let model = config.cleanup_model.trim().to_owned();
+    if model.is_empty() {
+        tracing::error!("modo comando sem modelo de texto");
+        state.notify("O modo comando precisa de um modelo de texto: escolhe um em Definições → Limpeza com IA.");
+        return Outcome::failed(FailReason::NoModel);
+    }
+
+    let stt: &dyn SttProvider = &*openrouter;
+    let req = SttRequest {
+        model: &config.stt_model,
+        language: config.language.as_deref(),
+    };
+    let mut m = new_metrics(stt, &config, &rec, release_to_wav, true);
+    let mut history_entry = None;
+    let mut stt_guard: Option<SttMetricsGuard> = None;
+
+    // A cópia da seleção começou antes deste processamento (ver `Selection`),
+    // por isso corre ao mesmo tempo que a transcrição: `join!` espera pelas duas.
+    let (transcribed, selected) =
+        tokio::join!(stt.transcribe(rec.wav.clone(), &req), selection.text());
+
+    let outcome = match transcribed {
+        Err(e) => {
+            tracing::error!(error = %e, model = %config.stt_model, "transcrição do comando falhou");
+            state.notify(&format!("Transcrição falhou: {e}"));
+            m.error = Some(e.to_string());
+            Outcome::failed(FailReason::from_stt(&e))
+        }
+        Ok(t) => {
+            m.stt_ms = Some(ms(t.elapsed));
+            m.transport = Some(t.transport);
+            m.cost_usd = t.usage.cost;
+            m.generation_id = t.generation_id;
+            stt_guard = Some(SttMetricsGuard {
+                state: Arc::clone(&state),
+                budget: config.monthly_budget_usd,
+                metrics: Some(m.clone()),
+            });
+            let instruction = t.text.trim().to_owned();
+            let chars = selected.as_ref().map_or(0, |s| s.chars().count());
+            if instruction.is_empty() {
+                tracing::info!("comando sem instrução; nada para fazer");
+                Outcome::Nothing
+            } else if chars > command::MAX_SELECTION {
+                tracing::info!(
+                    chars,
+                    max = command::MAX_SELECTION,
+                    "seleção grande demais para um comando"
+                );
+                state.notify(&format!(
+                    "A seleção tem {chars} caracteres; o modo comando aceita até {}. Seleciona menos texto.",
+                    command::MAX_SELECTION
+                ));
+                m.error = Some("seleção grande demais".into());
+                Outcome::failed(FailReason::SelectionTooLarge)
+            } else {
+                tracing::info!(
+                    instruction_chars = instruction.chars().count(),
+                    selection_chars = chars,
+                    "a pedir o comando ao LLM"
+                );
+                match command::run(&openrouter, &model, &instruction, selected.as_deref()).await {
+                    Err(e) => {
+                        tracing::error!(error = %e, model, "comando falhou");
+                        state.notify(&format!("O comando falhou: {e}"));
+                        m.error = Some(e.to_string());
+                        let reason = match e {
+                            SttError::Decode(_) => FailReason::BadAnswer,
+                            ref e => FailReason::from_stt(e),
+                        };
+                        Outcome::failed(reason)
+                    }
+                    Ok(answer) => {
+                        m.cleanup_ms = Some(ms(answer.elapsed));
+                        m.cleanup_cost_usd = answer.cost;
+                        let text = answer.text;
+                        m.chars = text.chars().count();
+                        // Ponto sem retorno, como no ditado.
+                        if !commit.try_commit() {
+                            tracing::info!("comando cancelado antes de colar");
+                            return Outcome::Nothing;
+                        }
+                        // A colagem fica com o clipboard de antes da cópia: é
+                        // esse que se repõe (ou não, com "deixar no clipboard").
+                        let before = match selection.take() {
+                            Some(captured) => paste::Before::Known(captured.into_previous()),
+                            None => paste::Before::ReadNow,
+                        };
+                        let _ = state
+                            .events
+                            .send(super::DictationEvent::LastText(text.clone()));
+                        let outcome = paste_text(
+                            &state,
+                            text.clone(),
+                            released_at,
+                            !config.keep_in_clipboard,
+                            target.window,
+                            before,
+                            &mut m,
+                        )
+                        .await;
+                        if config.history_enabled {
+                            history_entry = Some(HistoryEntry {
+                                at: m.at,
+                                // O texto que foi substituído (sem seleção, nada).
+                                raw_text: selected,
+                                text,
+                                model: model.clone(),
+                                audio_ms: m.audio_ms,
+                                total_ms: m.total_ms,
+                                pasted: matches!(outcome, Outcome::Pasted),
+                                app: target.app.clone(),
+                                style: None,
+                                instruction: Some(instruction),
+                            });
+                        }
+                        outcome
+                    }
+                }
+            }
+        }
+    };
+
+    tracing::info!(
+        stt_model = %m.model,
+        model,
+        audio_ms = m.audio_ms,
+        stt_ms = m.stt_ms,
+        llm_ms = m.cleanup_ms,
+        paste_ms = m.paste_ms,
+        total_ms = m.total_ms,
+        cost_usd = m.cost_usd,
+        llm_cost_usd = m.cleanup_cost_usd,
+        chars = m.chars,
+        app = target.app.as_deref(),
+        "comando"
+    );
+    if let Some(guard) = &mut stt_guard {
+        guard.disarm();
+    }
+    record_in_background(state, config, m, history_entry, rec);
     outcome
 }
 
@@ -463,11 +672,12 @@ async fn paste_text(
     released_at: Instant,
     restore_clipboard: bool,
     target: Option<focus::Window>,
+    before: paste::Before,
     m: &mut DictationMetrics,
 ) -> Outcome {
     // `move` passa a posse do `text` para a thread de bloqueio. A janela é
     // verificada lá dentro, o mais perto possível do Ctrl+V.
-    let job = move || paste_or_copy(&text, restore_clipboard, target);
+    let job = move || paste_or_copy(&text, restore_clipboard, target, before);
     match tauri::async_runtime::spawn_blocking(job).await {
         Ok(Ok(Pasting::Copied)) => {
             m.total_ms = Some(ms(released_at.elapsed()));
@@ -507,10 +717,11 @@ fn paste_or_copy(
     text: &str,
     restore_clipboard: bool,
     target: Option<focus::Window>,
+    before: paste::Before,
 ) -> Result<Pasting, paste::PasteError> {
     let now = focus::foreground();
     if focus::should_paste(target, now) {
-        let (took, restore) = paste::paste(text)?;
+        let (took, restore) = paste::paste(text, before)?;
         // A reposição do clipboard é agendada aqui dentro, numa thread própria:
         // uma vez colado, nada (nem um cancelamento) a pode impedir de correr.
         if restore_clipboard {
@@ -550,7 +761,7 @@ pub async fn paste_again(
         {
             tracing::info!("não consegui voltar à janela de destino");
         }
-        paste_or_copy(&text, restore_clipboard, target)
+        paste_or_copy(&text, restore_clipboard, target, paste::Before::ReadNow)
     };
     match tauri::async_runtime::spawn_blocking(job).await {
         Ok(Ok(Pasting::Pasted(_))) => Outcome::Pasted,

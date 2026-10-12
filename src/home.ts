@@ -70,13 +70,17 @@ function entryRow(h: HistoryEntry): HTMLLIElement {
   const parts = h.total_ms != null ? [ms(h.total_ms), shortModel] : [shortModel];
   // O estilo só aparece quando mudou alguma coisa (o backend não o guarda nos outros casos).
   if (h.style && h.style !== "default") parts.push(STYLE_LABEL[h.style]);
+  // Um comando diz qual foi a instrução, à frente de tudo.
+  if (h.instruction) parts.unshift(`Comando: ${h.instruction}`);
   meta.textContent = parts.join(" · ");
-  meta.title = h.app ? `${h.model} · ditado em ${h.app}` : h.model;
+  const where = h.instruction ? "comando em" : "ditado em";
+  meta.title = h.app ? `${h.model} · ${where} ${h.app}` : h.model;
   body.append(meta);
   if (h.raw_text) {
     const raw = document.createElement("details");
     const summary = document.createElement("summary");
-    summary.textContent = "Transcrição original";
+    // Num comando, `raw_text` é o texto que estava selecionado.
+    summary.textContent = h.instruction ? "Texto selecionado" : "Transcrição original";
     const p = document.createElement("p");
     p.textContent = h.raw_text;
     raw.append(summary, p);

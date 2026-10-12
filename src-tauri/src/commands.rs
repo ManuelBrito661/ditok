@@ -74,6 +74,8 @@ pub struct SettingsView {
     api_key_set: bool,
     /// O atalho de ditado está registado (`false`: outra app ocupou-o).
     shortcut_ok: bool,
+    /// O atalho de comando está registado (ou o modo está desligado).
+    command_ok: bool,
     autostart: bool,
     paths: Paths,
 }
@@ -85,6 +87,7 @@ async fn settings_view(app: &AppHandle, state: &Arc<AppState>) -> CmdResult<Sett
         defaults: Config::default(),
         api_key_set,
         shortcut_ok: state.shortcut_ok(),
+        command_ok: state.command_ok(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         paths: Paths {
             config: Config::path(&state.config_dir).display().to_string(),
@@ -107,16 +110,22 @@ pub async fn save_settings(
 ) -> CmdResult<SettingsView> {
     config.validate()?;
     let current = state.config();
+    // O atalho de comando primeiro: se falhar, ainda não mexemos em nada.
+    let command = apply_command_shortcut(&app, &state, &current, &config)?;
     // O atalho estava a funcionar antes desta gravação? (Se não, o antigo não
     // está registado e não há nada para largar nem para repor.)
     let was_ok = state.shortcut_ok();
     let shortcut_changed = config.shortcut != current.shortcut;
     let mut now_ok = was_ok;
     if shortcut_changed {
-        if was_ok {
-            hotkey::change_dictation(&app, &current.shortcut, &config.shortcut)?;
+        let changed = if was_ok {
+            hotkey::change_dictation(&app, &current.shortcut, &config.shortcut)
         } else {
-            hotkey::register_dictation(&app, &config.shortcut)?;
+            hotkey::register_dictation(&app, &config.shortcut)
+        };
+        if let Err(e) = changed {
+            command.undo(&app, &state);
+            return Err(e.into());
         }
         now_ok = true;
     } else if !was_ok && hotkey::register_dictation(&app, &config.shortcut).is_ok() {
@@ -141,6 +150,7 @@ pub async fn save_settings(
                 now_ok = false;
             }
         }
+        command.undo(&app, &state);
         if now_ok != was_ok {
             state.set_shortcut_ok(now_ok);
         }
@@ -165,6 +175,65 @@ pub async fn save_settings(
     }
     tracing::info!("definições guardadas");
     settings_view(&app, &state).await
+}
+
+/// O que `apply_command_shortcut` mudou, para o poder desfazer se o resto da
+/// gravação falhar.
+struct CommandChange {
+    /// Atalho registado antes e depois (`None` = nenhum).
+    before: Option<String>,
+    after: Option<String>,
+    was_ok: bool,
+}
+
+impl CommandChange {
+    fn undo(&self, app: &AppHandle, state: &AppState) {
+        if self.before != self.after
+            && let Err(e) =
+                hotkey::change_command(app, self.after.as_deref(), self.before.as_deref())
+        {
+            tracing::warn!(error = %e, "não foi possível repor o atalho de comando");
+        }
+        state.set_command_ok(self.was_ok);
+    }
+}
+
+/// Liga, desliga ou troca o atalho do modo comando, como o de ditado: um atalho
+/// novo ocupado por outra app é um erro (a gravação falha e a janela diz
+/// porquê); o mesmo atalho, antes ocupado, só volta a ser tentado em silêncio.
+fn apply_command_shortcut(
+    app: &AppHandle,
+    state: &AppState,
+    current: &Config,
+    config: &Config,
+) -> Result<CommandChange, hotkey::HotkeyError> {
+    let was_ok = state.command_ok();
+    // O que está mesmo registado agora: com o atalho ocupado, nada.
+    let before = (current.command_enabled && was_ok).then(|| current.command_shortcut.clone());
+    let wanted = config
+        .command_enabled
+        .then(|| config.command_shortcut.clone());
+    let same_as_saved = config.command_enabled
+        && current.command_enabled
+        && config.command_shortcut == current.command_shortcut;
+    let (after, now_ok) = if before == wanted {
+        (before.clone(), was_ok || !config.command_enabled)
+    } else if same_as_saved {
+        // Estava ocupado e continua igual: tenta outra vez, sem erro se falhar.
+        match hotkey::change_command(app, None, wanted.as_deref()) {
+            Ok(()) => (wanted, true),
+            Err(_) => (None, false),
+        }
+    } else {
+        hotkey::change_command(app, before.as_deref(), wanted.as_deref())?;
+        (wanted, true)
+    };
+    state.set_command_ok(now_ok);
+    Ok(CommandChange {
+        before,
+        after,
+        was_ok,
+    })
 }
 
 /// Valida a chave no OpenRouter e só depois a guarda no cofre. Devolve o estado

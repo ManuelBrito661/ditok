@@ -85,18 +85,21 @@ function setupTabs() {
 
 // ---------------------------------------------------------------- atalho
 
-let recordingShortcut = false;
+/** Qual dos captadores de atalho está à espera de teclas (só um de cada vez). */
+let recordingShortcut: "shortcut" | "command_shortcut" | null = null;
 
-function setupShortcut() {
-  const button = $<HTMLButtonElement>("shortcut-record");
-  const display = $("shortcut-display");
-  const error = $("shortcut-error");
+/** O captador de atalho ("Mudar" → prime a combinação), para o de ditado e o de
+ *  comando. `prefix` é o início dos ids no HTML; `field`, o campo do Config. */
+function setupShortcut(prefix: "shortcut" | "command-shortcut", field: "shortcut" | "command_shortcut") {
+  const button = $<HTMLButtonElement>(`${prefix}-record`);
+  const display = $(`${prefix}-display`);
+  const error = $(`${prefix}-error`);
 
   const stop = () => {
-    recordingShortcut = false;
+    recordingShortcut = null;
     button.textContent = "Mudar";
     display.classList.remove("recording");
-    renderKeys(display, app.view.config.shortcut);
+    renderKeys(display, app.view.config[field]);
     window.removeEventListener("keydown", onKey, true);
   };
 
@@ -112,16 +115,18 @@ function setupShortcut() {
     }
     stop();
     error.hidden = true;
-    if (!(await save({ shortcut }))) {
-      // O backend explica porquê (conflito com outra app, tecla sem modificador…).
+    if (!(await save({ [field]: shortcut } as Partial<Config>))) {
+      // O backend explica porquê (conflito com outra app, tecla sem modificador,
+      // igual ao outro atalho…).
       error.textContent = $("toast").textContent ?? "";
       error.hidden = false;
     }
   };
 
   button.addEventListener("click", () => {
-    if (recordingShortcut) return stop();
-    recordingShortcut = true;
+    if (recordingShortcut === field) return stop();
+    if (recordingShortcut) return; // o outro captador está à espera
+    recordingShortcut = field;
     error.hidden = true;
     button.textContent = "Cancelar";
     display.classList.add("recording");
@@ -130,11 +135,11 @@ function setupShortcut() {
   });
 
   // Fechar o modal a meio da gravação não pode deixar o teclado "capturado".
-  dialog().addEventListener("close", () => recordingShortcut && stop());
+  dialog().addEventListener("close", () => recordingShortcut === field && stop());
 
-  $("shortcut-reset").addEventListener("click", async () => {
+  $(`${prefix}-reset`).addEventListener("click", async () => {
     error.hidden = true;
-    await save({ shortcut: app.view.defaults.shortcut });
+    await save({ [field]: app.view.defaults[field] } as Partial<Config>);
   });
 }
 
@@ -304,9 +309,14 @@ function modelPicker(kind: ModelKind, prefix: "stt" | "cleanup", field: "stt_mod
 
 function renderControls() {
   const c = app.view.config;
-  if (!recordingShortcut) renderKeys($("shortcut-display"), c.shortcut);
+  if (recordingShortcut !== "shortcut") renderKeys($("shortcut-display"), c.shortcut);
+  if (recordingShortcut !== "command_shortcut") renderKeys($("command-shortcut-display"), c.command_shortcut);
   // Outra app ocupou o atalho: diz porquê ele não funciona até escolheres outro.
   $("shortcut-busy").hidden = app.view.shortcut_ok;
+  $<HTMLInputElement>("command-enabled").checked = c.command_enabled;
+  $("command-shortcut-busy").hidden = !c.command_enabled || app.view.command_ok;
+  // Desligado, o atalho fica à vista (e pode ser mudado), mas esbatido.
+  $("command-shortcut-row").classList.toggle("is-off", !c.command_enabled);
   syncDeviceSelect($<HTMLSelectElement>("input-device"));
   $<HTMLSelectElement>("language").value = c.language ?? "";
   $<HTMLInputElement>("autostart").checked = app.view.autostart;
@@ -335,6 +345,7 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   checkbox("keep-in-clipboard", "keep_in_clipboard");
   checkbox("sounds", "sounds");
   checkbox("history-enabled", "history_enabled");
+  checkbox("command-enabled", "command_enabled");
   bindDeviceSelect($<HTMLSelectElement>("input-device"));
 
   $<HTMLSelectElement>("language").addEventListener("change", (e) =>
@@ -392,7 +403,8 @@ function bindSimpleControls(onHistoryCleared: () => void) {
 
 export function setupSettings(onHistoryCleared: () => void) {
   setupTabs();
-  setupShortcut();
+  setupShortcut("shortcut", "shortcut");
+  setupShortcut("command-shortcut", "command_shortcut");
   setupKey();
   bindSimpleControls(onHistoryCleared);
   setupStyles();

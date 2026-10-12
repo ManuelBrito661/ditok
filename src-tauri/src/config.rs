@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hotkey::DEFAULT_SHORTCUT,
+    hotkey::{self, DEFAULT_COMMAND_SHORTCUT, DEFAULT_SHORTCUT},
     stt::openrouter::Transport,
     text::{Replacement, Snippet},
 };
@@ -26,6 +26,11 @@ pub const DEFAULT_CLEANUP_MODEL: &str = "openai/gpt-4.1-nano";
 #[serde(default)]
 pub struct Config {
     pub shortcut: String,
+    /// Modo comando (ver `command.rs`): um segundo atalho que aplica uma
+    /// instrução falada ao texto selecionado. Desligado, o atalho fica livre
+    /// para outras apps, mas a escolha em `command_shortcut` é guardada.
+    pub command_enabled: bool,
+    pub command_shortcut: String,
     /// Slug completo do modelo no OpenRouter.
     #[serde(alias = "openrouter_model")]
     pub stt_model: String,
@@ -165,6 +170,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             shortcut: DEFAULT_SHORTCUT.to_owned(),
+            command_enabled: true,
+            command_shortcut: DEFAULT_COMMAND_SHORTCUT.to_owned(),
             stt_model: DEFAULT_STT_MODEL.to_owned(),
             transport: Transport::Multipart,
             language: Some("pt".to_owned()),
@@ -215,6 +222,8 @@ pub enum ConfigError {
     DuplicateStyle(String),
     #[error("os estilos têm um limite de {MAX_STYLES} apps")]
     TooManyStyles,
+    #[error("o atalho de comando tem de ser diferente do atalho de ditado")]
+    SameShortcut,
 }
 
 /// Limites do dicionário e das expansões: muito acima do que se usa, só para um
@@ -276,6 +285,10 @@ impl Config {
             if too_long(&s.trigger, MAX_PHRASE_CHARS) || too_long(&s.text, MAX_SNIPPET_CHARS) {
                 return Err(ConfigError::EntryTooLong);
             }
+        }
+        // Com o modo desligado, o atalho guardado não é registado: pode repetir-se.
+        if self.command_enabled && hotkey::same_shortcut(&self.shortcut, &self.command_shortcut) {
+            return Err(ConfigError::SameShortcut);
         }
         if self.styles.len() > MAX_STYLES {
             return Err(ConfigError::TooManyStyles);
@@ -504,6 +517,27 @@ mod tests {
         assert_eq!(c.monthly_budget_usd, None);
         assert_eq!(c.input_device, None, "microfone predefinido do sistema");
         assert!(!c.onboarding_done);
+        assert!(c.command_enabled, "modo comando ligado por omissão");
+        assert_eq!(c.command_shortcut, DEFAULT_COMMAND_SHORTCUT);
+    }
+
+    #[test]
+    fn command_shortcut_must_differ_from_dictation_when_enabled() {
+        let same = Config {
+            command_shortcut: "Control+Shift+Space".into(),
+            shortcut: "CommandOrControl+Shift+Space".into(),
+            ..Config::default()
+        };
+        // No macOS, "CommandOrControl" é o Cmd e os dois são diferentes.
+        if cfg!(not(target_os = "macos")) {
+            assert!(matches!(same.validate(), Err(ConfigError::SameShortcut)));
+        }
+        let off = Config {
+            command_enabled: false,
+            command_shortcut: DEFAULT_SHORTCUT.into(),
+            ..Config::default()
+        };
+        assert!(off.validate().is_ok());
     }
 
     #[test]
