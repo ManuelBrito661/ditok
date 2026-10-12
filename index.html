@@ -175,6 +175,62 @@
               <input id="spoken-punctuation" type="checkbox" role="switch" />
             </label>
           </div>
+
+          <h2 class="section-title">Importar e exportar</h2>
+          <p class="section-desc muted">
+            Leva o dicionário e as expansões para outro computador, ou traz uma lista que já tenhas: o JSON do Ditok, um
+            CSV (abre no Excel) ou um TXT com uma palavra por linha.
+          </p>
+          <div class="list-card">
+            <div class="row card-row">
+              <span class="row-text">
+                <span class="row-title">Exportar</span>
+                <span class="row-desc">O TXT guarda só as palavras, sem as variantes.</span>
+              </span>
+              <span class="row-control">
+                <select id="dict-export-format" aria-label="Formato do ficheiro">
+                  <option value="json">JSON (Ditok)</option>
+                  <option value="csv">CSV (Excel)</option>
+                  <option value="txt">TXT (só as palavras)</option>
+                </select>
+                <button id="dict-export" type="button" class="secondary small">Exportar…</button>
+              </span>
+            </div>
+            <label class="row switch card-row">
+              <span class="row-text">
+                <span class="row-title">Incluir as expansões</span>
+                <span class="row-desc">
+                  Podem ter emails, moradas e outros dados pessoais: confirma para onde levas o ficheiro.
+                </span>
+              </span>
+              <input id="dict-export-snippets" type="checkbox" role="switch" />
+            </label>
+            <div class="row card-row">
+              <span class="row-text">
+                <span class="row-title">Importar</span>
+                <span class="row-desc">Junta ao que já tens, sem apagar nada. Vês o que muda antes de confirmar.</span>
+              </span>
+              <button id="dict-import" type="button" class="secondary small">Importar…</button>
+            </div>
+            <div id="dict-import-panel" class="import-panel" role="region" aria-labelledby="dict-import-title" hidden>
+              <p id="dict-import-title" class="import-title" tabindex="-1"></p>
+              <p id="dict-import-summary" class="muted" role="status"></p>
+              <fieldset id="dict-import-conflicts" class="import-conflicts" hidden>
+                <legend>Já tens com outro valor (<span id="dict-conflict-count"></span>)</legend>
+                <ul id="dict-conflict-list" class="import-list"></ul>
+                <label class="import-choice">
+                  <input type="radio" name="dict-conflict-mode" value="keep" checked /> Manter as minhas
+                </label>
+                <label class="import-choice">
+                  <input type="radio" name="dict-conflict-mode" value="replace" /> Usar as do ficheiro
+                </label>
+              </fieldset>
+              <div class="import-actions">
+                <button id="dict-import-confirm" type="button" class="primary small">Importar</button>
+                <button id="dict-import-cancel" type="button" class="ghost small">Cancelar</button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- ============================================================ Ficheiros -->

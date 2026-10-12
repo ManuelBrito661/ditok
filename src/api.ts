@@ -63,6 +63,36 @@ export interface Snippet {
   text: string;
 }
 
+export type DictFormat = "json" | "csv" | "txt";
+
+/** Uma palavra ou expansão que o ficheiro e a tua lista dizem de maneiras diferentes. */
+export interface DictConflict {
+  list: "dictionary" | "snippet";
+  key: string;
+  mine: string;
+  theirs: string;
+}
+
+/** As tuas listas depois de juntar um ficheiro, e o que mudou. */
+export interface DictMerged {
+  dictionary: Replacement[];
+  snippets: Snippet[];
+  new: number;
+  duplicate: number;
+  replaced: number;
+  invalid: number;
+  conflicts: DictConflict[];
+}
+
+/** O que um ficheiro faria, em cada modo de resolver conflitos. Nada está gravado ainda. */
+export interface ImportPreview {
+  file_name: string;
+  format: DictFormat;
+  invalid: number;
+  keep: DictMerged;
+  replace: DictMerged;
+}
+
 export interface SettingsView {
   config: Config;
   defaults: Config;
@@ -228,6 +258,9 @@ export const api = {
   overlayStatus: () => invoke<Status>("overlay_status"),
   overlayOpen: (target: OpenTarget) => invoke<void>("overlay_open", { target }),
   overlayMenu: () => invoke<void>("overlay_menu"),
+  dictionaryExport: (format: DictFormat, withSnippets: boolean) =>
+    invoke<string | null>("dictionary_export", { format, withSnippets }),
+  dictionaryImportPreview: () => invoke<ImportPreview | null>("dictionary_import_preview"),
 };
 
 /// Emitido pelo backend depois de cada ditado (pipeline.rs, EVENT_DICTATION_RECORDED).

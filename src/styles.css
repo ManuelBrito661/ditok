@@ -382,6 +382,19 @@ main { overflow-y: auto; padding: 0 48px 64px; }
 .pairs-empty { padding: 14px 22px; border-top: 1px solid var(--border); }
 .field-error { margin: 0; padding: 0 12px 10px; background: var(--surface-2); }
 .row.card-row { padding: 16px 20px; border: 0; }
+.list-card .row.card-row + .row.card-row,
+.list-card .row.card-row + .import-panel { border-top: 1px solid var(--border); }
+
+/* importar o dicionário: o painel de confirmação por baixo das linhas */
+.import-panel { display: grid; gap: 10px; padding: 16px 20px; background: var(--surface-2); }
+.import-panel[hidden] { display: none; }
+.import-panel p { margin: 0; }
+.import-title { font-weight: 600; word-break: break-all; }
+.import-conflicts { display: grid; gap: 6px; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); }
+.import-conflicts legend { padding: 0 6px; font-size: var(--fs-sm); color: var(--muted); }
+.import-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; font-size: var(--fs-sm); }
+.import-choice { display: flex; align-items: center; gap: 8px; }
+.import-actions { display: flex; gap: 8px; }
 
 /* ---------------------------------------------------------------- ficheiros */
 .dropzone {

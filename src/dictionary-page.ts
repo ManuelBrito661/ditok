@@ -3,7 +3,7 @@
 // listas, que são gravadas no config.json como as outras definições.
 
 import { $, app, onViewChange, save, toast } from "./store";
-import type { Config } from "./api";
+import { api, errorText, type Config, type DictFormat, type ImportPreview } from "./api";
 
 /** As duas listas têm a mesma forma: pares de texto. */
 type Pair = [string, string];
@@ -203,6 +203,134 @@ export function setupDictionary() {
     void save({ voice_commands: (e.target as HTMLInputElement).checked }));
   $<HTMLInputElement>("spoken-punctuation").addEventListener("change", (e) =>
     void save({ spoken_punctuation: (e.target as HTMLInputElement).checked }));
+  setupImportExport();
   onViewChange(renderAll);
   renderAll();
+}
+
+// ---------------------------------------------------------------- importar e exportar
+
+/** O ficheiro escolhido e as listas que existiam nesse momento (ver `confirmImport`). */
+let pending: { preview: ImportPreview; baseline: string } | null = null;
+
+const listsKey = () => JSON.stringify([app.view.config.dictionary, app.view.config.snippets]);
+
+const importMode = (): "keep" | "replace" =>
+  document.querySelector<HTMLInputElement>('input[name="dict-conflict-mode"]:checked')?.value === "replace"
+    ? "replace"
+    : "keep";
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** Um valor comprido (o texto de uma expansão) cabe numa linha do aviso. */
+const short = (s: string) => {
+  const line = s.replace(/\s+/g, " ").trim();
+  return line.length > 40 ? `${line.slice(0, 40)}…` : line;
+};
+
+/** O resumo e o botão seguem o modo escolhido para os conflitos. */
+function renderImport() {
+  if (!pending) return;
+  const { preview } = pending;
+  const mode = importMode();
+  const merged = preview[mode];
+  const parts = [plural(merged.new, "nova", "novas"), plural(merged.duplicate, "já existia", "já existiam")];
+  if (merged.replaced) parts.push(plural(merged.replaced, "trocada", "trocadas"));
+  if (merged.conflicts.length && mode === "keep") {
+    parts.push(plural(merged.conflicts.length, "em conflito fica como está", "em conflito ficam como estão"));
+  }
+  if (preview.invalid) parts.push(plural(preview.invalid, "ignorada por não servir", "ignoradas por não servirem"));
+  $("dict-import-summary").textContent = parts.join(" · ");
+  $<HTMLButtonElement>("dict-import-confirm").disabled = merged.new + merged.replaced === 0;
+}
+
+function openImport(preview: ImportPreview) {
+  pending = { preview, baseline: listsKey() };
+  $("dict-import-title").textContent = preview.file_name;
+
+  const conflicts = preview.keep.conflicts;
+  $("dict-import-conflicts").hidden = conflicts.length === 0;
+  $("dict-conflict-count").textContent = String(conflicts.length);
+  const shown = conflicts.slice(0, 8).map((c) => {
+    const li = document.createElement("li");
+    li.textContent = `${short(c.key)}: tens “${short(c.mine)}”, o ficheiro tem “${short(c.theirs)}”`;
+    return li;
+  });
+  if (conflicts.length > shown.length) {
+    const more = document.createElement("li");
+    more.className = "muted";
+    more.textContent = `… e mais ${conflicts.length - shown.length}`;
+    shown.push(more);
+  }
+  $("dict-conflict-list").replaceChildren(...shown);
+  const keep = document.querySelector<HTMLInputElement>('input[name="dict-conflict-mode"][value="keep"]');
+  if (keep) keep.checked = true;
+
+  renderImport();
+  $("dict-import-panel").hidden = false;
+  $("dict-import-title").focus();
+}
+
+function closeImport() {
+  pending = null;
+  $("dict-import-panel").hidden = true;
+}
+
+async function confirmImport() {
+  if (!pending) return;
+  const { preview, baseline } = pending;
+  const merged = preview[importMode()];
+  closeImport();
+  // As listas foram calculadas quando escolheste o ficheiro: se entretanto mudaste
+  // alguma coisa, gravá-las apagava essa mudança.
+  if (listsKey() !== baseline) {
+    toast("As listas mudaram desde que escolheste o ficheiro. Importa outra vez.", "error");
+    return;
+  }
+  const before = { dictionary: app.view.config.dictionary, snippets: app.view.config.snippets };
+  if (!(await save({ dictionary: merged.dictionary, snippets: merged.snippets }))) return;
+  const added = merged.new + merged.replaced;
+  const undo = toast(plural(added, "entrada importada", "entradas importadas"), "ok", {
+    label: "Desfazer",
+    run: () => void save(before),
+  });
+  undo?.focus();
+}
+
+function setupImportExport() {
+  const exportButton = $<HTMLButtonElement>("dict-export");
+  exportButton.addEventListener("click", async () => {
+    const format = $<HTMLSelectElement>("dict-export-format").value as DictFormat;
+    const withSnippets = $<HTMLInputElement>("dict-export-snippets").checked;
+    exportButton.disabled = true;
+    try {
+      if (await api.dictionaryExport(format, withSnippets)) toast("Dicionário exportado");
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      exportButton.disabled = false;
+    }
+  });
+
+  const importButton = $<HTMLButtonElement>("dict-import");
+  importButton.addEventListener("click", async () => {
+    importButton.disabled = true;
+    try {
+      const preview = await api.dictionaryImportPreview();
+      if (preview) openImport(preview);
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      importButton.disabled = false;
+    }
+  });
+
+  $("dict-import-confirm").addEventListener("click", () => void confirmImport());
+  $("dict-import-cancel").addEventListener("click", () => {
+    closeImport();
+    importButton.focus();
+  });
+  for (const radio of document.querySelectorAll('input[name="dict-conflict-mode"]')) {
+    radio.addEventListener("change", renderImport);
+  }
 }
