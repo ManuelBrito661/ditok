@@ -620,7 +620,9 @@ input[aria-invalid="true"]:focus, textarea[aria-invalid="true"]:focus {
 }
 input[type="search"], input[type="password"] { flex: 1 1 220px; }
 input[type="number"] { width: 100px; font-variant-numeric: tabular-nums; }
-select { min-width: 200px; cursor: pointer; }
+select { min-width: 200px; max-width: 100%; text-overflow: ellipsis; cursor: pointer; }
+/* Um <select> fica tão largo como a opção mais comprida: os nomes longos de microfones cortam-se. */
+#input-device { width: 320px; min-width: 0; }
 
 /* Teclas do atalho, uma por <kbd>, como no Flow. */
 kbd {
@@ -754,7 +756,7 @@ dialog[open] { animation: dlg-in 0.2s var(--ease); }
 .row-title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .row-desc { color: var(--muted); font-size: var(--fs-sm); }
 .row-desc:empty { display: none; }
-.row-control { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.row-control { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .paths { margin-top: 18px; word-break: break-all; }
 
 /* lista de modelos */
@@ -898,7 +900,7 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .ob-msg { min-height: 1.5em; color: var(--muted); font-size: var(--fs-sm); }
 .ob-msg.ok { color: var(--green-text); }
 .ob-msg.error { color: var(--red-text); }
-.ob-field { display: grid; justify-items: start; gap: 6px; }
+.ob-field { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start; gap: 6px; }
 .ob-field select { width: min(100%, 420px); }
 .ob-meter { height: 12px; }
 /* O nível chega ~20 vezes por segundo: transição curta, senão a barra fica atrasada. */
