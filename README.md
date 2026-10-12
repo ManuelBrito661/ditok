@@ -15,7 +15,7 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é fei
 
 O atalho pode ser mudado nas definições (também aceita só modificadores, como Ctrl+Alt).
 
-No Mac, o Fn precisa da permissão **Monitorização de entrada** (Definições do Sistema → Privacidade e Segurança) e convém pôr *Pressionar 🌐 para* em **Não fazer nada** (Definições do Sistema → Teclado), para o Mac não abrir os emojis ao largar a tecla. No Windows, o Ctrl+Win usa um hook de teclado; não funciona sobre janelas abertas como administrador.
+No Mac, o Fn precisa da permissão **Monitorização de entrada** (Definições do Sistema → Privacidade e Segurança). Com a permissão **Acessibilidade** o Ditok engole o Fn e o Mac não abre os emojis; sem ela, põe *Pressionar 🌐 para* em **Não fazer nada** (Definições do Sistema → Teclado). No Windows, o Ctrl+Win usa um hook de teclado; não funciona sobre janelas abertas como administrador.
 
 ### A barra com a mascote
 

@@ -245,6 +245,16 @@ fn set(target: Option<Mods>, slot: impl FnOnce(&mut State) -> &mut Slot) -> Resu
     Ok(())
 }
 
+/// Algum atalho usa o Fn? Se sim, o backend do Mac engole a tecla para o
+/// sistema não abrir os emojis ao largá-la.
+#[cfg(target_os = "macos")]
+fn wants_fn() -> bool {
+    let s = state();
+    [&s.dictation, &s.command]
+        .iter()
+        .any(|slot| slot.target.is_some_and(|t| t.contains(Mods::FN)))
+}
+
 /// Chamado pelos backends: os modificadores premidos agora são `held`.
 fn on_mods(held: Mods) -> Mods {
     let mut s = state();
