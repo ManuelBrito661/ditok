@@ -26,6 +26,7 @@ export interface Config {
   save_last_recording: boolean;
   show_overlay: boolean;
   voice_commands: boolean;
+  spoken_punctuation: boolean;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;

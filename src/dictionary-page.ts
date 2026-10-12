@@ -194,12 +194,15 @@ function setupAdd(spec: ListSpec) {
 function renderAll() {
   for (const spec of SPECS) render(spec);
   $<HTMLInputElement>("voice-commands").checked = app.view.config.voice_commands;
+  $<HTMLInputElement>("spoken-punctuation").checked = app.view.config.spoken_punctuation;
 }
 
 export function setupDictionary() {
   for (const spec of SPECS) setupAdd(spec);
   $<HTMLInputElement>("voice-commands").addEventListener("change", (e) =>
     void save({ voice_commands: (e.target as HTMLInputElement).checked }));
+  $<HTMLInputElement>("spoken-punctuation").addEventListener("change", (e) =>
+    void save({ spoken_punctuation: (e.target as HTMLInputElement).checked }));
   onViewChange(renderAll);
   renderAll();
 }
