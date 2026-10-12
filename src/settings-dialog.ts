@@ -447,8 +447,44 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   });
 }
 
+/// Procura uma versão nova a pedido. Mostra o resultado aqui; a instalação fica num
+/// botão que só aparece quando há uma versão.
+function setupUpdates() {
+  const check = $<HTMLButtonElement>("update-check");
+  const apply = $<HTMLButtonElement>("update-apply");
+  const status = $("update-status");
+  check.addEventListener("click", async () => {
+    check.disabled = true;
+    apply.hidden = true;
+    status.textContent = "A procurar…";
+    try {
+      const info = await api.checkUpdate();
+      status.textContent = info
+        ? `Há a versão ${info.version} (tens a ${info.current}).`
+        : "Já tens a versão mais recente.";
+      apply.hidden = !info;
+    } catch (e) {
+      status.textContent = `Não consegui verificar: ${errorText(e)}`;
+    } finally {
+      check.disabled = false;
+    }
+  });
+  apply.addEventListener("click", async () => {
+    apply.disabled = true;
+    apply.textContent = "A atualizar…";
+    try {
+      await api.installUpdate(); // se correr bem, a app reinicia
+    } catch (e) {
+      toast(`Não foi possível atualizar: ${errorText(e)}`, "error");
+      apply.disabled = false;
+      apply.textContent = "Atualizar";
+    }
+  });
+}
+
 export function setupSettings(onHistoryCleared: () => void) {
   setupTabs();
+  setupUpdates();
   setupShortcut("shortcut", "shortcut");
   setupShortcut("command-shortcut", "command_shortcut");
   setupShortcut("quick-history", "quick_history_shortcut");
