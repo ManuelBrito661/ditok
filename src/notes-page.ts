@@ -196,7 +196,7 @@ async function stop() {
 // ---------------------------------------------------------------- saída do áudio do computador
 
 /** Preenche o seletor com as saídas do sistema; a escolha guardada fica sempre na lista. */
-async function renderOutputDevices() {
+export async function renderOutputDevices() {
   const select = $<HTMLSelectElement>("notes-output");
   let devices: InputDevice[] = [];
   let failed = "";

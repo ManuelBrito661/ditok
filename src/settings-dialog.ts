@@ -15,6 +15,7 @@ import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
 import { ago, heldModifiers, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
 import { setupLocalEngine } from "./local-engine";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
+import { renderOutputDevices } from "./notes-page";
 import { refreshRecentApps, setupStyles } from "./styles-panel";
 
 export type Tab = "geral" | "transcricao" | "limpeza" | "estilos" | "dados";
@@ -29,6 +30,7 @@ export function openSettings(tab: Tab = "geral") {
     dialog().showModal();
     // A cada abertura: entretanto podes ter ligado ou desligado um headset.
     void loadDevices($<HTMLSelectElement>("input-device"));
+    void renderOutputDevices();
   }
   for (const m of models) {
     if (!m.loaded) {
