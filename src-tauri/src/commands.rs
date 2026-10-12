@@ -1360,6 +1360,21 @@ pub async fn notes_output_devices() -> CmdResult<Vec<InputDevice>> {
     Ok(blocking(crate::notes::capture::output_devices).await??)
 }
 
+/// Teste de áudio: `seconds` de microfone e de áudio do computador, com os níveis ao
+/// vivo (evento `notes:test`). Usa as mesmas escolhas que a gravação.
+#[tauri::command]
+pub async fn notes_test_start(state: AppStateRef<'_>, seconds: u64) -> CmdResult<()> {
+    let config = state.config();
+    let capture = crate::notes::capture::CaptureConfig {
+        mic: true,
+        system: true,
+        mic_device: config.input_device.clone(),
+        output_device: config.notes_output_device.clone(),
+    };
+    crate::notes::check::start(state.app.clone(), capture, seconds.clamp(5, 30))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------- oradores (notes/speakers.rs)
 
 const EVENT_SPEAKERS: &str = "speakers:progress";

@@ -511,6 +511,7 @@ export interface NotesOut {
 export const notes = {
   state: () => invoke<NotesState>("notes_state"),
   outputDevices: () => invoke<InputDevice[]>("notes_output_devices"),
+  testStart: (seconds: number) => invoke<void>("notes_test_start", { seconds }),
   acceptConsent: () => invoke<void>("notes_accept_consent"),
   start: (mode: NotesMode) => invoke<NotesState>("notes_start", { mode }),
   stop: () => invoke<NotesState>("notes_stop"),
@@ -540,6 +541,18 @@ export function onNotesLine(handler: (e: { id: string; line: NotesLine; cost_usd
 
 export function onNotesLevel(handler: (e: { track: NotesTrack; level: number }) => void): Promise<UnlistenFn> {
   return listen<{ track: NotesTrack; level: number }>("notes:level", (e) => handler(e.payload));
+}
+
+/** Eventos do teste de áudio (notes/check.rs, TestEvent). */
+export type NotesTestEvent =
+  | { kind: "level"; track: NotesTrack; level: number }
+  | { kind: "device"; track: NotesTrack; name: string }
+  | { kind: "lost"; track: NotesTrack; why: string }
+  | { kind: "failed"; why: string }
+  | { kind: "done"; mic_peak: number; system_peak: number };
+
+export function onNotesTest(handler: (e: NotesTestEvent) => void): Promise<UnlistenFn> {
+  return listen<NotesTestEvent>("notes:test", (e) => handler(e.payload));
 }
 
 // ---------------------------------------------------------------- oradores (notes/speakers.rs)

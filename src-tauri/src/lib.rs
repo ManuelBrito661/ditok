@@ -287,6 +287,7 @@ pub fn run() {
             commands::notes_save_summary,
             commands::notes_export,
             commands::notes_output_devices,
+            commands::notes_test_start,
             commands::notes_rename_speaker,
             commands::speakers_status,
             commands::speakers_download,

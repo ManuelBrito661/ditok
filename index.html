@@ -326,6 +326,22 @@
               <select id="notes-output" title="Saída cujo som se grava: a que a reunião ou o vídeo está a tocar"></select>
             </div>
             <p id="notes-output-hint" class="row-desc"></p>
+            <div id="notes-test" class="notes-test">
+              <div class="notes-start">
+                <span class="row-title">Testar o áudio</span>
+                <button id="notes-test-go" type="button" class="secondary">Testar 10 s</button>
+              </div>
+              <p class="row-desc">Fala para o microfone e põe um vídeo a tocar na saída escolhida. Não grava nada.</p>
+              <div class="notes-test-meter">
+                <span>Microfone</span>
+                <meter id="notes-test-mic" min="0" max="1" value="0"></meter>
+              </div>
+              <div class="notes-test-meter">
+                <span>Áudio do computador</span>
+                <meter id="notes-test-sys" min="0" max="1" value="0"></meter>
+              </div>
+              <p id="notes-test-result" class="row-desc" aria-live="polite"></p>
+            </div>
             <p id="notes-cost" class="row-desc"></p>
             <div id="notes-speakers" class="notes-speakers">
               <label class="notes-check">

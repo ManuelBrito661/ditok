@@ -9,10 +9,12 @@ import {
   onNotesLevel,
   onNotesLine,
   onNotesState,
+  onNotesTest,
   onSpeakersProgress,
   speakers,
   summaries,
   type InputDevice,
+  type NotesTestEvent,
   type NotesLine,
   type NotesMeta,
   type NotesMode,
@@ -224,6 +226,86 @@ function setupOutputDevice() {
     await save({ notes_output_device: value || null });
     // Mesmo que a gravação falhe a guardar, volto a mostrar o que está de facto guardado.
     void renderOutputDevices();
+  });
+}
+
+// ---------------------------------------------------------------- teste de áudio
+
+/** Limiar do teste: abaixo disto não se considera que se ouviu alguma coisa. */
+const HEARD = 0.01;
+
+function setupTest() {
+  const go = $<HTMLButtonElement>("notes-test-go");
+  const result = $("notes-test-result");
+  const mic = $<HTMLMeterElement>("notes-test-mic");
+  const sys = $<HTMLMeterElement>("notes-test-sys");
+  const names: Partial<Record<"mic" | "system", string>> = {};
+  let running = false;
+
+  const describe = () => {
+    const parts = [
+      names.mic ? `Microfone: ${names.mic}` : null,
+      names.system ? `Saída: ${names.system}` : null,
+    ].filter(Boolean);
+    return parts.join(" · ");
+  };
+
+  go.addEventListener("click", async () => {
+    if (running) return;
+    running = true;
+    go.disabled = true;
+    mic.value = 0;
+    sys.value = 0;
+    names.mic = undefined;
+    names.system = undefined;
+    result.textContent = "A testar… fala e põe som a tocar.";
+    try {
+      await notes.testStart(10);
+    } catch (e) {
+      running = false;
+      go.disabled = false;
+      result.textContent = `Não consegui testar: ${errorText(e)}`;
+    }
+  });
+
+  void onNotesTest((e: NotesTestEvent) => {
+    switch (e.kind) {
+      case "level":
+        (e.track === "mic" ? mic : sys).value = e.level;
+        break;
+      case "device":
+        names[e.track === "mic" ? "mic" : "system"] = e.name;
+        result.textContent = `A testar… ${describe()}`;
+        break;
+      case "lost":
+        result.textContent = `Perdi a faixa ${e.track === "mic" ? "do microfone" : "do sistema"}: ${e.why}`;
+        break;
+      case "failed":
+        running = false;
+        go.disabled = false;
+        result.textContent = `Não consegui testar: ${e.why}`;
+        break;
+      case "done": {
+        running = false;
+        go.disabled = false;
+        const heardMic = e.mic_peak >= HEARD;
+        const heardSys = e.system_peak >= HEARD;
+        const where = describe();
+        if (heardMic && heardSys) {
+          result.textContent = `Tudo certo: ouvi o microfone e o áudio do computador. ${where}`;
+        } else {
+          const lines: string[] = [];
+          if (!heardMic) lines.push("Não ouvi o microfone: confirma o microfone escolhido nas definições e fala mais perto.");
+          if (!heardSys) {
+            lines.push(
+              "Não ouvi nada na saída do computador. Confirma que o vídeo toca nessa saída (escolhe-a no seletor \"Áudio do computador\").",
+            );
+          }
+          result.textContent = `${lines.join(" ")} ${where}`;
+        }
+        break;
+      }
+    }
   });
 }
 
@@ -491,6 +573,7 @@ export async function setupNotes(): Promise<void> {
 
   setupSpeakers();
   setupOutputDevice();
+  setupTest();
   await renderSpeakers();
   renderNotesHint();
   renderState(await notes.state());

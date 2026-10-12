@@ -5,6 +5,7 @@
 //! - `capture`: abre as duas faixas (microfone e loopback) e alimenta os segmentadores.
 
 pub mod capture;
+pub mod check;
 pub mod platform;
 pub mod probe;
 pub mod segmenter;
