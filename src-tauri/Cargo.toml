@@ -1,6 +1,6 @@
 [package]
 name = "ditok"
-version = "0.5.1"
+version = "0.5.2"
 description = "Ditado por voz pessoal"
 authors = ["Manuel Brito"]
 edition = "2024"
