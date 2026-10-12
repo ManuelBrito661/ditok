@@ -7,7 +7,7 @@ import { api, errorText, onDictationRecorded, onOpenRequest, onSettingsChanged, 
 import { setupDictionary } from "./dictionary-page";
 import { setupFiles } from "./files-page";
 import { clearHomeHistory, refreshHome, setupHome } from "./home";
-import { renderMemory, renderStats, setupMetrics } from "./metrics-page";
+import { renderMemory, renderStats, renderUsage, scrollHeatToEnd, setupMetrics } from "./metrics-page";
 import { isOnboardingOpen, openOnboarding, setupOnboarding } from "./onboarding";
 import { openKeySettings, openSettings, openShortcutSettings, setupSettings } from "./settings-dialog";
 import { $, app, notifyViewChange, onViewChange, refreshKey, toast } from "./store";
@@ -24,7 +24,10 @@ function showPage(page: Page, focus = false) {
   for (const p of document.querySelectorAll<HTMLElement>(".page")) p.hidden = p.id !== `page-${page}`;
   document.querySelector("main")!.scrollTop = 0;
   if (focus) document.querySelector<HTMLElement>(`#page-${page} h1`)?.focus({ preventScroll: true });
-  if (page === "metricas") void renderMemory().catch(() => {});
+  if (page === "metricas") {
+    void renderMemory().catch(() => {});
+    scrollHeatToEnd(); // só tem largura agora que a página está visível
+  }
 }
 
 function setupNav() {
@@ -154,6 +157,7 @@ async function main() {
     setupFiles(() => showPage("ficheiros")),
     refreshHome(),
     renderStats(),
+    renderUsage(),
     renderMemory(),
     refreshKey(),
     checkUpdate(),
@@ -163,6 +167,7 @@ async function main() {
   await onDictationRecorded(() => {
     void refreshHome();
     void renderStats();
+    void renderUsage();
     void refreshKey(); // o gasto da chave mudou
   });
 }

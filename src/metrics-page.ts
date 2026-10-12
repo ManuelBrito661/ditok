@@ -1,10 +1,10 @@
 // Página Métricas: tempos (o normal e o mais lento em cada 10), custos por mês,
 // orçamento, o que resta na chave e RAM.
 
-import { api, errorText, type Percentiles, type Stats } from "./api";
+import { api, errorText, type Percentiles, type Stats, type UsageSummary } from "./api";
 import { budgetLevel, costPerMinute, dateTime, duration, monthLabel, ms, usd } from "./format";
 import { openSettings } from "./settings-dialog";
-import { $, app, onViewChange } from "./store";
+import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 
 let stats: Stats | null = null;
 
@@ -141,4 +141,108 @@ export async function renderMemory() {
 
 export function setupMetrics() {
   onViewChange(renderMoney);
+  setupUsage();
+}
+
+// ---------------------------------------------------------------- uso
+
+const pt = (n: number) => n.toLocaleString("pt-PT");
+const days = (n: number) => `${n} ${n === 1 ? "dia" : "dias"}`;
+
+/** "12 de outubro de 2026" a partir de "2026-10-12", na hora do computador. */
+function dayLabel(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("pt-PT", { day: "numeric", month: "long", year: "numeric" });
+}
+
+/** A grelha abre nas semanas mais recentes (as mais antigas ficam à esquerda, a rolar).
+ *  Numa página escondida a largura é 0: por isso também se chama ao mostrá-la. */
+export function scrollHeatToEnd() {
+  const scroller = $("u-heat").parentElement;
+  if (scroller) scroller.scrollLeft = scroller.scrollWidth;
+}
+
+export async function renderUsage() {
+  let u: UsageSummary;
+  try {
+    u = await api.usageSummary();
+  } catch (e) {
+    $("u-words").textContent = "—";
+    $("u-words-sub").textContent = `Não consegui ler: ${errorText(e)}`;
+    return;
+  }
+  $("u-words").textContent = pt(u.total_words);
+  $("u-words-sub").textContent = u.total_words
+    ? `${pt(u.month_words)} este mês · ${pt(u.total_dictations)} ditados`
+    : "Ainda não há palavras.";
+  $("u-streak").textContent = days(u.streak_current);
+  $("u-streak-sub").textContent = `a melhor: ${days(u.streak_best)}`;
+  $("u-wpm").textContent = u.wpm ? String(Math.round(u.wpm)) : "—";
+  $("u-saved").textContent = u.saved_minutes >= 1 ? duration(u.saved_minutes * 60) : "—";
+  $("u-saved-sub").textContent =
+    `face a escrever a ${u.typing_wpm} palavras por minuto${u.estimated ? " · estimativa" : ""}`;
+  $("u-estimated").hidden = !u.estimated;
+
+  // Uma célula por dia, semana a semana (a grelha CSS põe 7 por coluna, segunda a domingo).
+  $("u-heat").replaceChildren(
+    ...u.heat.map((cell) => {
+      const div = document.createElement("div");
+      div.className = `heat-cell l${cell.level}${cell.future ? " future" : ""}`;
+      if (!cell.future) div.title = `${dayLabel(cell.date)}: ${pt(cell.words)} ${cell.words === 1 ? "palavra" : "palavras"}`;
+      return div;
+    }),
+  );
+  scrollHeatToEnd();
+
+  const max = Math.max(1, ...u.top_apps.map((a) => a.words));
+  if (!u.top_apps.length) {
+    const li = document.createElement("li");
+    li.className = "pairs-empty muted";
+    li.textContent = "Ainda não sei em que apps ditas: conto a partir de agora.";
+    $("u-apps").replaceChildren(li);
+  } else {
+    $("u-apps").replaceChildren(
+      ...u.top_apps.map((a) => {
+        const li = document.createElement("li");
+        const name = document.createElement("span");
+        name.textContent = a.app;
+        const bar = document.createElement("span");
+        bar.className = "app-bar";
+        const fill = document.createElement("span");
+        fill.style.width = `${Math.max(2, (a.words / max) * 100)}%`;
+        bar.append(fill);
+        const words = document.createElement("span");
+        words.className = "app-words muted";
+        words.textContent = pt(a.words);
+        li.append(name, bar, words);
+        return li;
+      }),
+    );
+  }
+  // Não mexe no campo enquanto escreves nele.
+  const typing = $<HTMLInputElement>("u-typing");
+  if (document.activeElement !== typing) typing.value = String(u.typing_wpm);
+}
+
+function setupUsage() {
+  $<HTMLInputElement>("u-typing").addEventListener("change", async (e) => {
+    const value = Number((e.target as HTMLInputElement).value);
+    if (await save({ typing_wpm: Math.round(value) })) void renderUsage();
+    else void renderUsage(); // repõe o valor guardado
+  });
+  $("u-clear").addEventListener("click", async () => {
+    const ok = await confirmDanger(
+      "Apagar as estatísticas de uso?",
+      "As palavras, a sequência e o mapa de calor voltam a zero. Os custos, os tempos e o histórico ficam.",
+      "Apagar",
+    );
+    if (!ok) return;
+    try {
+      await api.usageClear();
+      toast("Estatísticas apagadas");
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+    void renderUsage();
+  });
 }

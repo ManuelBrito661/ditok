@@ -5,10 +5,9 @@ import mascotUrl from "../design/mascot/parado.svg?inline";
 import listeningMascotUrl from "../design/mascot/a-ouvir.svg?inline";
 import thinkingMascotUrl from "../design/mascot/a-processar.svg?inline";
 import readyMascotUrl from "../design/mascot/pronto.svg?inline";
-import { api, errorText, type HistoryItem, type Stats } from "./api";
+import { api, errorText, type HistoryItem, type Stats, type UsageSummary } from "./api";
 import {
   budgetLevel,
-  countWords,
   dayLabel,
   foldText,
   greeting,
@@ -30,6 +29,8 @@ const SEARCH_DELAY = 120;
 
 let history: HistoryItem[] = [];
 let stats: Stats | null = null;
+/** As palavras do mês vêm das estatísticas de uso (o histórico só guarda os últimos ditados). */
+let usage: UsageSummary | null = null;
 /** Até o primeiro `getHistory` responder não se sabe se há ditados: nada de "Ainda não há". */
 let historyState: "loading" | "ready" | "failed" = "loading";
 /** O que escreveste na pesquisa, tal e qual (para a mensagem) e já normalizado. */
@@ -67,15 +68,7 @@ function renderStats() {
   $("s-key-item").hidden = remaining == null;
   $("s-key").textContent = usd(remaining, 2);
   $("s-speed").textContent = stats?.total ? ms(stats.total.p50) : "—";
-  // As palavras só se sabem pelo histórico (as métricas não guardam o texto).
-  const now = new Date();
-  const words = history
-    .filter((h) => {
-      const d = new Date(h.at);
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    })
-    .reduce((sum, h) => sum + countWords(h.text), 0);
-  $("s-words").textContent = app.view.config.history_enabled && historyState === "ready" ? words.toLocaleString("pt-PT") : "—";
+  $("s-words").textContent = usage ? usage.month_words.toLocaleString("pt-PT") : "—";
 }
 
 /** `label` é o rótulo original do botão: com dois cliques seguidos, o texto do
@@ -296,7 +289,7 @@ function renderView() {
 
 /** Volta a pedir histórico e métricas ao backend (no arranque e depois de cada ditado). */
 export async function refreshHome() {
-  const [h, s] = await Promise.allSettled([api.getHistory(), api.getStats()]);
+  const [h, s, u] = await Promise.allSettled([api.getHistory(), api.getStats(), api.usageSummary()]);
   if (h.status === "fulfilled") {
     history = h.value;
     historyState = "ready";
@@ -306,6 +299,7 @@ export async function refreshHome() {
     $("history-error-text").textContent = errorText(h.reason);
   }
   if (s.status === "fulfilled") stats = s.value;
+  if (u.status === "fulfilled") usage = u.value;
   renderHistory();
   renderStats();
 }

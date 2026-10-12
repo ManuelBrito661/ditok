@@ -29,6 +29,8 @@ export interface Config {
   spoken_punctuation: boolean;
   /** Atalho do histórico rápido (menu com os últimos ditados); vazio = desligado. */
   quick_history_shortcut: string;
+  /** Palavras por minuto que escreves à mão (só para estimar o tempo poupado). */
+  typing_wpm: number;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -93,6 +95,32 @@ export interface ImportPreview {
   invalid: number;
   keep: DictMerged;
   replace: DictMerged;
+}
+
+/** Uma célula do mapa de calor (api.ts espelha `usage::HeatCell`). */
+export interface HeatCell {
+  date: string;
+  words: number;
+  /** 0 = nada; 1 a 4 = de menos a mais palavras. */
+  level: number;
+  /** Um dia que ainda não chegou. */
+  future: boolean;
+}
+
+export interface UsageSummary {
+  total_words: number;
+  total_dictations: number;
+  month_words: number;
+  streak_current: number;
+  streak_best: number;
+  wpm: number | null;
+  saved_minutes: number;
+  typing_wpm: number;
+  top_apps: { app: string; words: number }[];
+  /** 53 semanas × 7 dias, semana a semana (segunda a domingo). */
+  heat: HeatCell[];
+  estimated: boolean;
+  first_day: string | null;
 }
 
 export interface SettingsView {
@@ -265,6 +293,8 @@ export const api = {
   dictionaryExport: (format: DictFormat, withSnippets: boolean) =>
     invoke<string | null>("dictionary_export", { format, withSnippets }),
   dictionaryImportPreview: () => invoke<ImportPreview | null>("dictionary_import_preview"),
+  usageSummary: () => invoke<UsageSummary>("usage_summary"),
+  usageClear: () => invoke<void>("usage_clear"),
 };
 
 /// Emitido pelo backend depois de cada ditado (pipeline.rs, EVENT_DICTATION_RECORDED).

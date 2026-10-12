@@ -977,3 +977,25 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
     opacity: 0.55;
   }
 }
+
+/* ---------------------------------------------------------------- uso (mapa de calor, apps) */
+.section-title.small { margin-top: 20px; font-size: var(--fs-md); }
+.usage-card { margin-top: 12px; padding: 16px 20px; }
+.heat-scroll { overflow-x: auto; padding-bottom: 6px; }
+/* 7 linhas (segunda a domingo) e uma coluna por semana. */
+.heat { display: grid; grid-template-rows: repeat(7, 12px); grid-auto-flow: column; grid-auto-columns: 12px; gap: 3px; width: max-content; }
+.heat-cell { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: var(--border); }
+.heat-cell.l1 { background: color-mix(in srgb, var(--blue) 30%, var(--border)); }
+.heat-cell.l2 { background: color-mix(in srgb, var(--blue) 55%, var(--border)); }
+.heat-cell.l3 { background: color-mix(in srgb, var(--blue) 78%, var(--border)); }
+.heat-cell.l4 { background: var(--blue); }
+.heat-cell.future { visibility: hidden; }
+.heat-legend { display: flex; align-items: center; gap: 4px; margin-top: 10px; font-size: var(--fs-xs); justify-content: flex-end; }
+.usage-apps { margin: 0; padding: 6px 0; list-style: none; }
+.usage-apps li { display: grid; grid-template-columns: 140px 1fr 80px; align-items: center; gap: 12px; padding: 7px 20px; }
+.usage-apps .app-bar { height: 8px; border-radius: var(--radius-pill); background: var(--border); overflow: hidden; }
+.usage-apps .app-bar span { display: block; height: 100%; background: var(--blue); border-radius: inherit; }
+.usage-apps .app-words { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-apps .pairs-empty { display: block; padding: 8px 20px; }
+.usage-tools { margin-top: 12px; }
+.usage-tools input[type="number"] { width: 84px; }
