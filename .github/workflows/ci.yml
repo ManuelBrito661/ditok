@@ -1,0 +1,64 @@
+# Corre a cada push e pull request: compila o frontend, verifica tipos e formato e
+# corre os testes em Windows e macOS. O macOS só era compilado nas releases; assim
+# um erro específico do Mac aparece logo no push.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      # `tauri::generate_context!` lê `frontendDist` (../dist): sem o frontend
+      # compilado, nem o `cargo test` compila.
+      - name: Frontend (tipos e build)
+        run: pnpm build
+
+      - name: Formato (Rust)
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Testes (Rust)
+        working-directory: src-tauri
+        run: cargo test
+
+      # Só avisa por agora: se houver avisos antigos, não bloqueia o resto.
+      - name: Clippy (Rust)
+        working-directory: src-tauri
+        continue-on-error: true
+        run: cargo clippy --all-targets -- -D warnings
