@@ -360,6 +360,7 @@ async fn transcribe_and_paste(
                 // Também quando a colagem falha: é aí que o histórico mais faz falta.
                 if config.history_enabled {
                     history_entry = Some(HistoryEntry {
+                        id: String::new(), // dado pelo `HistoryStore::push`
                         at: m.at,
                         raw_text: (text != raw).then_some(raw),
                         text,
@@ -418,10 +419,19 @@ fn record_in_background(
 ) {
     tauri::async_runtime::spawn_blocking(move || {
         record_metrics(&state, &m, config.monthly_budget_usd);
-        if let Some(entry) = history_entry
-            && let Err(e) = state.history.push(entry, config.history_limit)
-        {
-            tracing::warn!(error = %e, "não foi possível guardar o histórico");
+        if let Some(entry) = history_entry {
+            // Os comandos não se reprocessam (precisavam da mesma seleção): o
+            // áudio deles não serve para nada.
+            let keep_audio = config.keep_audio && entry.instruction.is_none();
+            match state.history.push(entry, config.history_limit) {
+                Ok(id) if keep_audio => {
+                    if let Err(e) = state.history.save_audio(&id, &rec.wav) {
+                        tracing::warn!(error = %e, "não foi possível guardar o áudio do ditado");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "não foi possível guardar o histórico"),
+            }
         }
         if config.save_last_recording {
             save_debug_wav(&state.debug_dir(), &rec);
@@ -588,6 +598,7 @@ pub async fn command(
                         .await;
                         if config.history_enabled {
                             history_entry = Some(HistoryEntry {
+                                id: String::new(),
                                 at: m.at,
                                 // O texto que foi substituído (sem seleção, nada).
                                 raw_text: selected,
@@ -627,6 +638,126 @@ pub async fn command(
     }
     record_in_background(state, config, m, history_entry, rec);
     outcome
+}
+
+/// O resultado de "Reprocessar": o texto novo e o que o STT devolveu.
+#[derive(Debug)]
+pub struct Reprocessed {
+    pub text: String,
+    /// O texto do STT, só se a limpeza o mudou (como no `HistoryEntry`).
+    pub raw_text: Option<String>,
+    pub model: String,
+    pub total_ms: u64,
+}
+
+/// "Reprocessar" no Início: volta a transcrever um áudio guardado com o modelo
+/// de STT atual e a limpá-lo com o nível atual e o estilo do ditado original.
+/// Não cola nada (a janela do Ditok é que tem o foco). As métricas contam como
+/// um ditado: o custo é real.
+///
+/// `Err` traz uma frase pronta a mostrar.
+pub async fn reprocess(
+    state: Arc<AppState>,
+    openrouter: Arc<OpenRouter>,
+    wav: bytes::Bytes,
+    original: &HistoryEntry,
+) -> Result<Reprocessed, String> {
+    let started = Instant::now();
+    let config = state.config();
+    let rules = state.text_rules();
+    // O estilo do ditado original. Só fica guardado quando mudou alguma coisa;
+    // sem ele, o da app onde foi ditado (o mesmo critério do ditado).
+    let style = original
+        .style
+        .unwrap_or_else(|| config.style_for(original.app.as_deref()));
+    let plan = cleanup::plan(config.cleanup_level, style);
+
+    let stt: &dyn SttProvider = &*openrouter;
+    let req = SttRequest {
+        model: &config.stt_model,
+        language: config.language.as_deref(),
+    };
+    let mut m = DictationMetrics {
+        at: metrics::now(),
+        provider: stt.name(),
+        model: config.stt_model.clone(),
+        transport: None,
+        audio_ms: original.audio_ms,
+        wav_bytes: wav.len(),
+        mic_start_ms: None,
+        release_to_wav_ms: 0,
+        stt_ms: None,
+        cleanup_ms: None,
+        paste_ms: None,
+        total_ms: None,
+        cost_usd: None,
+        cleanup_cost_usd: None,
+        chars: 0,
+        generation_id: None,
+        file: false,
+        command: false,
+        error: None,
+    };
+
+    let result = match stt.transcribe(wav, &req).await {
+        Err(e) => {
+            tracing::error!(error = %e, model = %config.stt_model, "reprocessamento: transcrição falhou");
+            m.error = Some(e.to_string());
+            Err(format!("Transcrição falhou: {e}"))
+        }
+        Ok(t) => {
+            m.stt_ms = Some(ms(t.elapsed));
+            m.transport = Some(t.transport);
+            m.cost_usd = t.usage.cost;
+            m.generation_id = t.generation_id;
+            let raw = t.text.trim().to_owned();
+            if raw.is_empty() {
+                Err("Não ouvi nada nesta gravação.".to_owned())
+            } else {
+                let local = rules.apply(&raw);
+                let cleaned = if let Some(plan) = plan
+                    && let Some(input) = local.cleanup_input()
+                {
+                    clean_with_llm(
+                        &openrouter,
+                        &config.cleanup_model,
+                        plan,
+                        &rules,
+                        &local,
+                        input,
+                        &mut m,
+                    )
+                    .await
+                } else {
+                    None
+                };
+                let text = cleaned.unwrap_or(local.text);
+                m.chars = text.chars().count();
+                m.total_ms = Some(ms(started.elapsed()));
+                Ok(Reprocessed {
+                    raw_text: (text != raw).then_some(raw),
+                    text,
+                    model: config.stt_model.clone(),
+                    total_ms: ms(started.elapsed()),
+                })
+            }
+        }
+    };
+    tracing::info!(
+        model = %m.model,
+        audio_ms = m.audio_ms,
+        stt_ms = m.stt_ms,
+        cleanup_ms = m.cleanup_ms,
+        cost_usd = m.cost_usd,
+        level = ?config.cleanup_level,
+        ?style,
+        ok = result.is_ok(),
+        "ditado reprocessado"
+    );
+    let budget = config.monthly_budget_usd;
+    // Espera-se pela escrita para a página de métricas, ao atualizar, já a ver.
+    let _ = tauri::async_runtime::spawn_blocking(move || record_metrics(&state, &m, budget)).await;
+    result
 }
 
 /// A limpeza com IA é um extra: se falhar, demorar mais de 6 s ou estragar o

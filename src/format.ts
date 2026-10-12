@@ -69,6 +69,10 @@ export function dayLabel(d: Date): string {
 
 export const countWords = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
+/** Para pesquisar sem distinguir maiúsculas nem acentos: "Ação" → "acao". O NFD
+ *  separa cada letra do acento (combinado, U+0300–U+036F), que depois se tira. */
+export const foldText = (text: string) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
 const KEY_NAMES: Record<string, string> = {
   Space: "Espaço", Enter: "Enter", Backquote: "`", Minus: "-", Equal: "=", Comma: ",", Period: ".",
   Slash: "/", Backslash: "\\", Semicolon: ";", Quote: "'", BracketLeft: "[", BracketRight: "]",

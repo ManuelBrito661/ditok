@@ -97,7 +97,15 @@
             <p><strong>Ainda não há ditados.</strong></p>
             <p class="muted">Experimenta: segura o atalho, diz uma frase e larga.</p>
           </div>
+          <div id="history-tools" class="history-tools" role="search" hidden>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="history-search" type="search" placeholder="Pesquisar nos ditados" aria-label="Pesquisar nos ditados"
+              aria-describedby="history-search-hint" autocomplete="off" spellcheck="false" />
+            <kbd id="history-search-hint" class="search-hint" title="Atalho para pesquisar">Ctrl+F</kbd>
+          </div>
+          <p id="history-no-results" class="no-results muted" role="status" hidden></p>
           <div id="history-days" class="days"></div>
+          <button id="history-more" type="button" class="secondary history-more" hidden>Mostrar mais</button>
         </section>
 
         <!-- ============================================================ Dicionário -->
@@ -615,6 +623,16 @@
                   <button id="history-clear" type="button" class="secondary danger">Apagar</button>
                 </div>
               </div>
+              <label class="row switch">
+                <span class="row-text">
+                  <span class="row-title">Guardar o áudio dos últimos 20 ditados</span>
+                  <span class="row-desc">
+                    Permite reprocessar um ditado no Início, com outro modelo ou outro nível de limpeza.
+                    É a tua voz: fica só neste computador, os mais antigos são apagados e, se desligares, apago-os todos.
+                  </span>
+                </span>
+                <input id="keep-audio" type="checkbox" role="switch" />
+              </label>
               <label class="row switch">
                 <span class="row-text">
                   <span class="row-title">Guardar a última gravação</span>

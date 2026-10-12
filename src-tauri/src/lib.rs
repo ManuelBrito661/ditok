@@ -137,6 +137,20 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking(move || overlay::create(&handle));
             }
+            // Arruma o áudio guardado dos ditados: um apagado cujo "Desfazer" não
+            // chegou a expirar (a app fechou antes) ou a opção desligada à mão no
+            // config.json. É disco, por isso numa thread à parte.
+            let state_ = Arc::clone(&state);
+            tauri::async_runtime::spawn_blocking(move || {
+                let result = if state_.config().keep_audio {
+                    state_.history.prune_audio(history::AUDIO_KEEP).map(drop)
+                } else {
+                    state_.history.clear_audio()
+                };
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, "não foi possível arrumar o áudio dos ditados");
+                }
+            });
             // O nível do microfone vai diretamente da thread de áudio para a barra.
             let handle = app.handle().clone();
             let level_sink: audio::LevelSink = Box::new(move |level| overlay::emit_level(&handle, level));
@@ -178,6 +192,9 @@ pub fn run() {
             commands::get_stats,
             commands::get_history,
             commands::clear_history,
+            commands::delete_history_entry,
+            commands::restore_history_entry,
+            commands::reprocess_history_entry,
             commands::recent_apps,
             commands::copy_text,
             commands::set_autostart,

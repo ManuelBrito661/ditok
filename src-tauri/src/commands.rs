@@ -10,16 +10,16 @@
 use std::{path::PathBuf, sync::Arc};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     audio::{self, InputDevice, Recorder, decode},
     config::Config,
-    dictation::DictationEvent,
+    dictation::{DictationEvent, pipeline},
     files::{self, JobView},
-    history::HistoryEntry,
+    history::{self, HistoryEntry, HistoryItem},
     hotkey,
     metrics::Stats,
     overlay, paste, secrets, settings_window,
@@ -136,6 +136,8 @@ pub async fn save_settings(
     let transport_changed = config.transport != current.transport;
     let overlay_changed = config.show_overlay != current.show_overlay;
     let show_overlay = config.show_overlay;
+    // Desligar "Guardar o áudio" apaga o que já estava guardado.
+    let audio_turned_off = current.keep_audio && !config.keep_audio;
     let new_shortcut = config.shortcut.clone();
     let state_ = Arc::clone(&state);
     let saved = blocking(move || state_.replace_config(config)).await?;
@@ -165,6 +167,13 @@ pub async fn save_settings(
     }
     if transport_changed {
         let _ = state.events.send(DictationEvent::ProviderChanged);
+    }
+    if audio_turned_off {
+        let state_ = Arc::clone(&state);
+        match blocking(move || state_.history.clear_audio()).await? {
+            Ok(()) => tracing::info!("áudio dos ditados apagado"),
+            Err(e) => tracing::warn!(error = %e, "não foi possível apagar o áudio dos ditados"),
+        }
     }
     if overlay_changed {
         if show_overlay {
@@ -331,9 +340,106 @@ pub async fn get_stats(state: AppStateRef<'_>) -> CmdResult<Stats> {
 }
 
 #[tauri::command]
-pub async fn get_history(state: AppStateRef<'_>) -> CmdResult<Vec<HistoryEntry>> {
+pub async fn get_history(state: AppStateRef<'_>) -> CmdResult<Vec<HistoryItem>> {
     let state = Arc::clone(&state);
-    blocking(move || state.history.list()).await
+    blocking(move || state.history.list_items()).await
+}
+
+/// Quanto tempo o áudio de uma entrada apagada espera pelo "Desfazer". O aviso
+/// fica 5 s, mas não desaparece enquanto o rato estiver por cima: há folga.
+const UNDO_AUDIO_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// O id vem da janela: só serve se tiver o formato dos nossos (ver
+/// `history::is_valid_id`). Nunca chega a ser um caminho sem passar por aqui.
+fn checked_id(id: &str) -> CmdResult<()> {
+    if history::is_valid_id(id) {
+        Ok(())
+    } else {
+        Err("identificador de ditado inválido".into())
+    }
+}
+
+/// Apaga uma entrada do histórico e devolve-a, para o "Desfazer" a poder repor.
+/// O áudio dela (se houver) só é apagado daqui a `UNDO_AUDIO_FOR`.
+#[tauri::command]
+pub async fn delete_history_entry(
+    state: AppStateRef<'_>,
+    id: String,
+) -> CmdResult<Option<HistoryEntry>> {
+    checked_id(&id)?;
+    let state = Arc::clone(&state);
+    let state_ = Arc::clone(&state);
+    let id_ = id.clone();
+    let removed = blocking(move || state_.history.remove(&id_)).await??;
+    if removed.is_some() {
+        tracing::info!("ditado apagado do histórico");
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(UNDO_AUDIO_FOR).await;
+            let _ = blocking(move || {
+                if let Err(e) = state.history.drop_pending_audio(&id) {
+                    tracing::warn!(error = %e, "não foi possível apagar o áudio do ditado");
+                }
+            })
+            .await;
+        });
+    }
+    Ok(removed)
+}
+
+/// "Desfazer" depois de apagar uma entrada.
+#[tauri::command]
+pub async fn restore_history_entry(state: AppStateRef<'_>, entry: HistoryEntry) -> CmdResult<()> {
+    checked_id(&entry.id)?;
+    let state = Arc::clone(&state);
+    let limit = state.config().history_limit;
+    blocking(move || state.history.restore(entry, limit)).await??;
+    Ok(())
+}
+
+/// "Reprocessar": transcreve outra vez o áudio guardado de um ditado e
+/// substitui o texto da entrada. Devolve a entrada atualizada.
+#[tauri::command]
+pub async fn reprocess_history_entry(
+    state: AppStateRef<'_>,
+    id: String,
+) -> CmdResult<HistoryEntry> {
+    checked_id(&id)?;
+    let state = Arc::clone(&state);
+    let (state_, id_) = (Arc::clone(&state), id.clone());
+    let (entry, wav) = blocking(move || {
+        let entry = state_
+            .history
+            .get(&id_)
+            .ok_or("este ditado já não está no histórico")?;
+        if entry.instruction.is_some() {
+            return Err("os comandos não se podem reprocessar");
+        }
+        let wav = state_
+            .history
+            .read_audio(&id_)
+            .map_err(|_| "já não tenho o áudio deste ditado")?;
+        Ok((entry, wav))
+    })
+    .await??;
+    let state_ = Arc::clone(&state);
+    let openrouter = blocking(move || state_.load_openrouter())
+        .await??
+        .ok_or(MISSING_KEY)?;
+    let new = pipeline::reprocess(Arc::clone(&state), openrouter, wav.into(), &entry).await?;
+    let state_ = Arc::clone(&state);
+    let updated = blocking(move || {
+        state_.history.update(&id, |e| {
+            e.text = new.text;
+            e.raw_text = new.raw_text;
+            e.model = new.model;
+            e.total_ms = Some(new.total_ms);
+        })
+    })
+    .await??
+    .ok_or("o ditado foi apagado entretanto")?;
+    // Métricas e Início atualizam-se como depois de um ditado.
+    let _ = state.app.emit(pipeline::EVENT_DICTATION_RECORDED, ());
+    Ok(updated)
 }
 
 /// As últimas apps onde ditaste (só desta sessão), para criar um estilo sem
@@ -353,6 +459,7 @@ pub fn recent_apps(state: AppStateRef<'_>) -> Vec<String> {
 #[tauri::command]
 pub async fn clear_history(state: AppStateRef<'_>) -> CmdResult<()> {
     let state_ = Arc::clone(&state);
+    // Leva também o áudio guardado (ver `HistoryStore::clear`).
     blocking(move || state_.history.clear()).await??;
     // O "Colar o último ditado" também deixa de o ter.
     let _ = state.events.send(DictationEvent::HistoryCleared);

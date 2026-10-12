@@ -1,15 +1,33 @@
 //! Histórico opcional dos últimos ditados (com o texto), só em disco local
 //! (`app_data_dir/history.json`). Desligado por omissão.
+//!
+//! Opcionalmente (`Config::keep_audio`), também o áudio dos últimos
+//! [`AUDIO_KEEP`] ditados, em `app_data_dir/audio/<id>.wav`, para os poder
+//! "Reprocessar" com outro modelo ou outro nível de limpeza.
 
-use std::path::PathBuf;
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard, PoisonError},
+};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::config::Style;
 
+/// Quantos áudios se guardam, no máximo (os dos ditados mais recentes).
+pub const AUDIO_KEEP: usize = 20;
+
+/// Tamanho máximo de um identificador. Os nossos têm ~20 caracteres.
+const MAX_ID_LEN: usize = 40;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryEntry {
+    /// Identifica a entrada (apagar, reprocessar) e dá o nome ao ficheiro de
+    /// áudio. Entradas antigas não o têm: recebem um, derivado de `at`, ao ler.
+    #[serde(default)]
+    pub id: String,
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
     /// O texto colado.
@@ -41,15 +59,83 @@ fn pasted_by_default() -> bool {
     true
 }
 
+/// O que a UI recebe: a entrada e se ainda há áudio para a reprocessar.
+/// `flatten` põe os campos da entrada ao mesmo nível do `has_audio` no JSON, por
+/// isso para o TypeScript é um objeto só. O `has_audio` não vai para o disco: é
+/// calculado ao listar (o ficheiro pode ter sido apagado entretanto).
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryItem {
+    #[serde(flatten)]
+    pub entry: HistoryEntry,
+    pub has_audio: bool,
+}
+
+/// O identificador de uma entrada criada em `at`: os nanossegundos desde 1970.
+/// Só dígitos (e um "-" se fosse antes de 1970), por isso serve de nome de ficheiro.
+pub fn new_id(at: OffsetDateTime) -> String {
+    at.unix_timestamp_nanos().to_string()
+}
+
+/// Um identificador vindo da UI só pode ter letras e algarismos ASCII, "-" e "_".
+/// Sem isto, um id como "../config" faria o `audio/<id>.wav` apontar para fora da
+/// pasta (path traversal). Não há ".", "/", "\\" nem ":" possíveis.
+pub fn is_valid_id(id: &str) -> bool {
+    (1..=MAX_ID_LEN).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Dá um id às entradas que não o têm e garante que não há dois iguais (o
+/// repetido, que é o mais recente, ganha um sufixo "-2", "-3"…).
+fn fill_ids(entries: &mut [HistoryEntry]) {
+    let mut seen = HashSet::new();
+    for e in entries.iter_mut() {
+        if !is_valid_id(&e.id) {
+            e.id = new_id(e.at);
+        }
+        let base = e.id.clone();
+        let mut n = 2;
+        // `insert` devolve `false` se o id já lá estava.
+        while !seen.insert(e.id.clone()) {
+            e.id = format!("{base}-{n}");
+            n += 1;
+        }
+    }
+}
+
 pub struct HistoryStore {
     path: PathBuf,
+    audio_dir: PathBuf,
+    /// Cada alteração lê o ficheiro, muda-o e escreve-o. Sem este `Mutex`, um
+    /// ditado a acabar e um "Apagar" na janela ao mesmo tempo podiam perder-se
+    /// um ao outro. `()`: não protege dados, só a ordem das operações.
+    write_lock: Mutex<()>,
+    /// Áudios de entradas apagadas que ainda podem voltar com "Desfazer": a
+    /// rotação não lhes toca até `drop_pending_audio` (ou até serem repostas).
+    pending: Mutex<HashSet<String>>,
 }
 
 impl HistoryStore {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             path: data_dir.join("history.json"),
+            audio_dir: data_dir.join("audio"),
+            write_lock: Mutex::new(()),
+            pending: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Um `Mutex` fica "envenenado" se uma thread entrar em pânico com ele na
+    /// mão. Aqui os dados continuam válidos, por isso aproveita-se na mesma.
+    fn lock(&self) -> MutexGuard<'_, ()> {
+        self.write_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn pending(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Mais recente primeiro.
@@ -59,27 +145,104 @@ impl HistoryStore {
         entries
     }
 
-    /// Bloqueante. Acrescenta e corta para os últimos `limit` ditados.
-    pub fn push(&self, entry: HistoryEntry, limit: usize) -> std::io::Result<()> {
+    /// Para a UI: mais recente primeiro, com a indicação de áudio guardado.
+    pub fn list_items(&self) -> Vec<HistoryItem> {
+        let audio = self.audio_ids();
+        self.list()
+            .into_iter()
+            .map(|entry| HistoryItem {
+                has_audio: audio.contains(&entry.id),
+                entry,
+            })
+            .collect()
+    }
+
+    pub fn get(&self, id: &str) -> Option<HistoryEntry> {
+        self.read().into_iter().find(|e| e.id == id)
+    }
+
+    /// Bloqueante. Acrescenta e corta para os últimos `limit` ditados. Devolve
+    /// o id com que a entrada ficou (é o nome do ficheiro de áudio).
+    pub fn push(&self, mut entry: HistoryEntry, limit: usize) -> std::io::Result<String> {
+        let _guard = self.lock();
         let mut entries = self.read();
+        // O id é dado aqui (e não por quem cria a entrada) para ser único.
+        entry.id.clear();
         entries.push(entry);
+        fill_ids(&mut entries);
+        let id = entries.last().map(|e| e.id.clone()).unwrap_or_default();
+        let excess = entries.len().saturating_sub(limit);
+        entries.drain(..excess);
+        self.write(&entries)?;
+        Ok(id)
+    }
+
+    /// Tira uma entrada e devolve-a (para o "Desfazer"). O áudio fica até
+    /// `drop_pending_audio`.
+    pub fn remove(&self, id: &str) -> std::io::Result<Option<HistoryEntry>> {
+        let _guard = self.lock();
+        let mut entries = self.read();
+        let Some(pos) = entries.iter().position(|e| e.id == id) else {
+            return Ok(None);
+        };
+        let removed = entries.remove(pos);
+        self.write(&entries)?;
+        self.pending().insert(removed.id.clone());
+        Ok(Some(removed))
+    }
+
+    /// "Desfazer": repõe uma entrada no lugar certo (pela data). Se já lá
+    /// estiver (dois cliques), não faz nada.
+    pub fn restore(&self, entry: HistoryEntry, limit: usize) -> std::io::Result<()> {
+        let _guard = self.lock();
+        self.pending().remove(&entry.id);
+        let mut entries = self.read();
+        if entries.iter().any(|e| e.id == entry.id) {
+            return Ok(());
+        }
+        // A lista no disco está da mais antiga para a mais recente.
+        let pos = entries
+            .iter()
+            .position(|e| e.at > entry.at)
+            .unwrap_or(entries.len());
+        entries.insert(pos, entry);
         let excess = entries.len().saturating_sub(limit);
         entries.drain(..excess);
         self.write(&entries)
     }
 
+    /// Muda uma entrada no sítio (ex.: o texto depois de "Reprocessar"). Devolve
+    /// a entrada já mudada, ou `None` se entretanto foi apagada.
+    pub fn update(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut HistoryEntry),
+    ) -> std::io::Result<Option<HistoryEntry>> {
+        let _guard = self.lock();
+        let mut entries = self.read();
+        let Some(entry) = entries.iter_mut().find(|e| e.id == id) else {
+            return Ok(None);
+        };
+        change(entry);
+        let updated = entry.clone();
+        self.write(&entries)?;
+        Ok(Some(updated))
+    }
+
+    /// Apaga o histórico e todo o áudio guardado.
     pub fn clear(&self) -> std::io::Result<()> {
-        match std::fs::remove_file(&self.path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-            _ => Ok(()),
-        }
+        let _guard = self.lock();
+        remove_if_exists(&self.path)?;
+        self.clear_audio()
     }
 
     fn read(&self) -> Vec<HistoryEntry> {
-        std::fs::read(&self.path)
+        let mut entries: Vec<HistoryEntry> = std::fs::read(&self.path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        fill_ids(&mut entries);
+        entries
     }
 
     fn write(&self, entries: &[HistoryEntry]) -> std::io::Result<()> {
@@ -93,6 +256,104 @@ impl HistoryStore {
         )?;
         std::fs::rename(tmp, &self.path)
     }
+
+    // ------------------------------------------------------------ áudio
+
+    /// O ficheiro de áudio de uma entrada. `None` se o id não for válido: é a
+    /// única forma de chegar a um caminho, por isso nada fora de `audio/`.
+    fn audio_path(&self, id: &str) -> Option<PathBuf> {
+        is_valid_id(id).then(|| self.audio_dir.join(format!("{id}.wav")))
+    }
+
+    /// Bloqueante. Guarda o WAV de um ditado e apaga os mais antigos.
+    pub fn save_audio(&self, id: &str, wav: &[u8]) -> std::io::Result<()> {
+        let path = self
+            .audio_path(id)
+            .ok_or_else(|| std::io::Error::other("identificador inválido"))?;
+        std::fs::create_dir_all(&self.audio_dir)?;
+        let tmp = path.with_extension("wav.tmp");
+        std::fs::write(&tmp, wav)?;
+        std::fs::rename(tmp, &path)?;
+        self.prune_audio(AUDIO_KEEP).map(drop)
+    }
+
+    pub fn read_audio(&self, id: &str) -> std::io::Result<Vec<u8>> {
+        let path = self
+            .audio_path(id)
+            .ok_or_else(|| std::io::Error::other("identificador inválido"))?;
+        std::fs::read(path)
+    }
+
+    /// Os ids que têm áudio guardado.
+    fn audio_ids(&self) -> HashSet<String> {
+        let Ok(dir) = std::fs::read_dir(&self.audio_dir) else {
+            return HashSet::new();
+        };
+        dir.filter_map(Result::ok)
+            .filter_map(|f| {
+                let path = f.path();
+                let is_wav = path.extension().is_some_and(|e| e == "wav");
+                let stem = path.file_stem()?.to_str()?.to_owned();
+                (is_wav && is_valid_id(&stem)).then_some(stem)
+            })
+            .collect()
+    }
+
+    /// Fica com o áudio dos `keep` ditados mais recentes (dos que têm áudio) e
+    /// apaga o resto: os mais antigos e os de entradas que já não existem. Os de
+    /// entradas acabadas de apagar (à espera do "Desfazer") ficam. Devolve
+    /// quantos ficheiros apagou.
+    pub fn prune_audio(&self, keep: usize) -> std::io::Result<usize> {
+        let have = self.audio_ids();
+        if have.is_empty() {
+            return Ok(0);
+        }
+        let mut kept: HashSet<String> = self
+            .list()
+            .into_iter()
+            .map(|e| e.id)
+            .filter(|id| have.contains(id))
+            .take(keep)
+            .collect();
+        kept.extend(self.pending().iter().cloned());
+        let mut removed = 0;
+        for id in have.difference(&kept) {
+            if let Some(path) = self.audio_path(id) {
+                remove_if_exists(&path)?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// O "Desfazer" já não vai chegar: apaga o áudio da entrada `id`, se ela
+    /// continuar apagada (se foi reposta, já saiu de `pending` e fica).
+    pub fn drop_pending_audio(&self, id: &str) -> std::io::Result<()> {
+        if !self.pending().remove(id) {
+            return Ok(());
+        }
+        match self.audio_path(id) {
+            Some(path) => remove_if_exists(&path),
+            None => Ok(()),
+        }
+    }
+
+    /// Apaga todo o áudio guardado (a opção foi desligada, ou o histórico apagado).
+    pub fn clear_audio(&self) -> std::io::Result<()> {
+        self.pending().clear();
+        match std::fs::remove_dir_all(&self.audio_dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Apagar o que já não existe não é erro.
+fn remove_if_exists(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -102,6 +363,7 @@ mod tests {
 
     fn entry(text: &str) -> HistoryEntry {
         HistoryEntry {
+            id: String::new(),
             at: datetime!(2026-10-11 12:00 UTC),
             text: text.into(),
             raw_text: None,
@@ -115,9 +377,16 @@ mod tests {
         }
     }
 
+    /// Uma pasta só para o teste (os testes correm em paralelo).
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ditok-history-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
     #[test]
     fn keeps_only_the_latest_entries_newest_first() {
-        let dir = std::env::temp_dir().join(format!("ditok-history-test-{}", std::process::id()));
+        let dir = temp_dir("latest");
         let store = HistoryStore::new(dir.clone());
         for t in ["um", "dois", "três"] {
             store.push(entry(t), 2).unwrap();
@@ -131,11 +400,105 @@ mod tests {
     }
 
     #[test]
-    fn old_entries_without_the_pasted_field_count_as_pasted() {
+    fn old_entries_without_the_new_fields_still_load() {
         let json = r#"{"at":"2026-10-11T12:00:00Z","text":"olá","raw_text":null,"model":"m","audio_ms":1,"total_ms":null}"#;
         let e: HistoryEntry = serde_json::from_str(json).unwrap();
         assert!(e.pasted);
         assert_eq!((e.app, e.style), (None, None), "sem app nem estilo");
         assert_eq!(e.instruction, None, "um ditado, não um comando");
+        assert_eq!(e.id, "", "sem id no ficheiro…");
+
+        // …mas ao ler o ficheiro todas as entradas ficam com um id válido e único.
+        let dir = temp_dir("old");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("history.json"), format!("[{json},{json}]")).unwrap();
+        let store = HistoryStore::new(dir.clone());
+        let ids: Vec<String> = store.list().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().all(|id| is_valid_id(id)), "{ids:?}");
+        assert_ne!(ids[0], ids[1], "a mesma hora não dá o mesmo id");
+        // E continuam os mesmos de uma leitura para a outra (o Apagar precisa disso).
+        let again: Vec<String> = store.list().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, again);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ids_are_validated() {
+        for ok in ["1760184000000000000", "-5", "abc_DEF-123"] {
+            assert!(is_valid_id(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "..",
+            "../config",
+            "..\\config",
+            "a/b",
+            "a\\b",
+            "C:x",
+            "x.wav",
+            "olá",
+            " 1",
+            &"1".repeat(MAX_ID_LEN + 1),
+        ] {
+            assert!(!is_valid_id(bad), "{bad:?}");
+        }
+        let store = HistoryStore::new(temp_dir("ids"));
+        assert!(store.audio_path("../../etc/passwd").is_none());
+        assert!(store.read_audio("../history").is_err());
+        assert!(store.save_audio("a/b", b"x").is_err());
+    }
+
+    #[test]
+    fn keeps_the_audio_of_the_latest_dictations_only() {
+        let dir = temp_dir("audio");
+        let store = HistoryStore::new(dir.clone());
+        let mut ids = Vec::new();
+        for i in 0..AUDIO_KEEP + 5 {
+            let mut e = entry(&format!("ditado {i}"));
+            e.at += time::Duration::seconds(i as i64);
+            let id = store.push(e, 100).unwrap();
+            store.save_audio(&id, b"RIFF").unwrap();
+            ids.push(id);
+        }
+        let have = store.audio_ids();
+        assert_eq!(have.len(), AUDIO_KEEP);
+        // Os 5 primeiros (os mais antigos) foram-se; os últimos 20 ficaram.
+        assert!(ids[..5].iter().all(|id| !have.contains(id)));
+        assert!(ids[5..].iter().all(|id| have.contains(id)));
+        let items = store.list_items();
+        assert!(items[0].has_audio && !items.last().unwrap().has_audio);
+
+        // Um apagado à espera do "Desfazer" fica até se desistir dele.
+        let newest = ids.last().unwrap().clone();
+        let removed = store.remove(&newest).unwrap().unwrap();
+        store.prune_audio(AUDIO_KEEP).unwrap();
+        assert!(store.audio_ids().contains(&newest));
+        store.restore(removed, 100).unwrap();
+        store.drop_pending_audio(&newest).unwrap();
+        assert!(store.audio_ids().contains(&newest), "foi reposto: fica");
+        assert_eq!(store.list()[0].id, newest, "reposto no mesmo sítio");
+
+        store.remove(&newest).unwrap();
+        store.drop_pending_audio(&newest).unwrap();
+        assert!(!store.audio_ids().contains(&newest));
+
+        // Apagar o histórico leva o áudio todo.
+        store.clear().unwrap();
+        assert!(store.audio_ids().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn update_changes_one_entry_in_place() {
+        let dir = temp_dir("update");
+        let store = HistoryStore::new(dir.clone());
+        let id = store.push(entry("antes"), 10).unwrap();
+        store.push(entry("outro"), 10).unwrap();
+        let updated = store.update(&id, |e| e.text = "depois".into()).unwrap();
+        assert_eq!(updated.map(|e| e.text).as_deref(), Some("depois"));
+        assert_eq!(store.get(&id).unwrap().text, "depois");
+        assert!(store.update("nada", |_| {}).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

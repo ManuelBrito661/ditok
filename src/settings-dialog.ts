@@ -331,6 +331,7 @@ function renderControls() {
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="cleanup-level"]')) r.checked = r.value === c.cleanup_level;
   $<HTMLInputElement>("history-enabled").checked = c.history_enabled;
   $<HTMLInputElement>("history-limit").value = String(c.history_limit);
+  $<HTMLInputElement>("keep-audio").checked = c.keep_audio;
   const p = app.view.paths;
   $("paths").textContent = `Configuração: ${p.config} · Dados: ${p.data} · Logs: ${p.logs}`;
   renderKey();
@@ -346,6 +347,11 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   checkbox("sounds", "sounds");
   checkbox("history-enabled", "history_enabled");
   checkbox("command-enabled", "command_enabled");
+  // Desligar apaga o áudio já guardado (commands.rs, save_settings): digo-o.
+  $<HTMLInputElement>("keep-audio").addEventListener("change", async (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    if ((await save({ keep_audio: on })) && !on) toast("Apaguei o áudio guardado dos ditados");
+  });
   bindDeviceSelect($<HTMLSelectElement>("input-device"));
 
   $<HTMLSelectElement>("language").addEventListener("change", (e) =>

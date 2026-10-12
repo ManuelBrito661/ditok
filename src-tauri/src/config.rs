@@ -48,6 +48,10 @@ pub struct Config {
     /// Guarda os últimos ditados (texto incluído) em disco, só neste computador.
     pub history_enabled: bool,
     pub history_limit: usize,
+    /// Guarda o áudio (WAV 16 kHz) dos últimos `history::AUDIO_KEEP` ditados em
+    /// `audio/`, para os poder reprocessar. Desligado por omissão: é a tua voz,
+    /// e ocupa espaço (~32 KB por segundo).
+    pub keep_audio: bool,
     /// Guarda a última gravação em `debug/last.wav`.
     pub save_last_recording: bool,
     /// Barra flutuante com a mascote. Desligá-la liberta a RAM do WebView dela.
@@ -180,6 +184,7 @@ impl Default for Config {
             keep_in_clipboard: true,
             history_enabled: true,
             history_limit: 50,
+            keep_audio: false,
             save_last_recording: false,
             show_overlay: true,
             voice_commands: true,
@@ -516,6 +521,10 @@ mod tests {
         assert!(c.sounds, "sons ligados por omissão");
         assert_eq!(c.monthly_budget_usd, None);
         assert_eq!(c.input_device, None, "microfone predefinido do sistema");
+        assert!(
+            !c.keep_audio,
+            "o áudio dos ditados não se guarda por omissão"
+        );
         assert!(!c.onboarding_done);
         assert!(c.command_enabled, "modo comando ligado por omissão");
         assert_eq!(c.command_shortcut, DEFAULT_COMMAND_SHORTCUT);

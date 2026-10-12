@@ -21,6 +21,8 @@ export interface Config {
   keep_in_clipboard: boolean;
   history_enabled: boolean;
   history_limit: number;
+  /** Guarda o áudio dos últimos 20 ditados para os poder reprocessar (history.rs, AUDIO_KEEP). */
+  keep_audio: boolean;
   save_last_recording: boolean;
   show_overlay: boolean;
   voice_commands: boolean;
@@ -127,6 +129,8 @@ export interface Stats {
 }
 
 export interface HistoryEntry {
+  /** Identifica a entrada (apagar, reprocessar); só letras, algarismos, "-" e "_". */
+  id: string;
   at: string;
   text: string;
   raw_text: string | null;
@@ -139,6 +143,12 @@ export interface HistoryEntry {
   style?: Style | null;
   /** Modo comando: a instrução falada. Aí `raw_text` é o texto selecionado que foi substituído. */
   instruction?: string | null;
+}
+
+/** Uma entrada como `getHistory` a devolve (history.rs, HistoryItem). */
+export interface HistoryItem extends HistoryEntry {
+  /** Há áudio guardado: pode ser reprocessada. */
+  has_audio: boolean;
 }
 
 export interface MemoryReport {
@@ -189,8 +199,13 @@ export const api = {
   testApiKey: () => invoke<KeyInfo>("test_api_key"),
   listModels: (kind: ModelKind, refresh = false) => invoke<ModelList>("list_models", { kind, refresh }),
   getStats: () => invoke<Stats>("get_stats"),
-  getHistory: () => invoke<HistoryEntry[]>("get_history"),
+  getHistory: () => invoke<HistoryItem[]>("get_history"),
   clearHistory: () => invoke<void>("clear_history"),
+  /** Apaga uma entrada e devolve-a (para o "Desfazer"); `null` se já não existia. */
+  deleteHistoryEntry: (id: string) => invoke<HistoryEntry | null>("delete_history_entry", { id }),
+  restoreHistoryEntry: (entry: HistoryEntry) => invoke<void>("restore_history_entry", { entry }),
+  /** Volta a transcrever e a limpar o áudio guardado; devolve a entrada com o texto novo. */
+  reprocessHistoryEntry: (id: string) => invoke<HistoryEntry>("reprocess_history_entry", { id }),
   /** As últimas apps onde ditaste nesta sessão (mais recente primeiro). */
   recentApps: () => invoke<string[]>("recent_apps"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
