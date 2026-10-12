@@ -1042,7 +1042,7 @@ fn local_models_view(state: &AppState) -> LocalModelsView {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
-        .map(|d| d.id);
+        .and_then(|d| d.id);
     LocalModelsView {
         available: crate::stt::local::AVAILABLE,
         loaded: state.local.is_loaded(),
@@ -1087,7 +1087,7 @@ pub async fn local_model_download(
             return Err("já há um modelo a descarregar: espera que acabe ou cancela-o".into());
         }
         *active = Some(crate::local_models::ActiveDownload {
-            id,
+            id: Some(id),
             cancel: Arc::clone(&cancel),
         });
     }
@@ -1124,7 +1124,7 @@ pub async fn local_model_download(
         }
         let total = spec.total_bytes();
         emit(crate::local_models::Progress {
-            id,
+            id: crate::local_models::dir_name(id),
             file: String::new(),
             done: if result.is_ok() {
                 total
@@ -1358,4 +1358,121 @@ pub async fn notes_export(
 #[tauri::command]
 pub async fn notes_output_devices() -> CmdResult<Vec<InputDevice>> {
     Ok(blocking(crate::notes::capture::output_devices).await??)
+}
+
+// ---------------------------------------------------------------- oradores (notes/speakers.rs)
+
+const EVENT_SPEAKERS: &str = "speakers:progress";
+
+#[derive(Serialize)]
+pub struct SpeakersView {
+    /// Esta compilação inclui o motor local (que também separa oradores)?
+    available: bool,
+    installed: bool,
+    size_bytes: u64,
+    downloading: bool,
+}
+
+#[tauri::command]
+pub fn speakers_status(state: AppStateRef<'_>) -> SpeakersView {
+    let downloading = state
+        .download
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|d| d.id.is_none());
+    SpeakersView {
+        available: crate::notes::speakers::AVAILABLE,
+        installed: crate::notes::speakers::is_installed(&state.models_dir()),
+        size_bytes: crate::notes::speakers::total_bytes(),
+        downloading,
+    }
+}
+
+/// Descarrega os dois modelos de oradores. O progresso vai no evento `speakers:progress`.
+#[tauri::command]
+pub async fn speakers_download(app: AppHandle, state: AppStateRef<'_>) -> CmdResult<()> {
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut active = state
+            .download
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active.is_some() {
+            return Err("já há um modelo a descarregar: espera que acabe ou cancela-o".into());
+        }
+        *active = Some(crate::local_models::ActiveDownload {
+            id: None,
+            cancel: Arc::clone(&cancel),
+        });
+    }
+    let client = crate::local_models::download_client()?;
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn(async move {
+        let emit = {
+            let app = app.clone();
+            move |p: crate::local_models::Progress| {
+                let _ = app.emit_to(settings_window::LABEL, EVENT_SPEAKERS, &p);
+            }
+        };
+        tracing::info!("a descarregar os modelos de oradores");
+        let result =
+            crate::notes::speakers::download(&client, &state.models_dir(), &cancel, emit.clone())
+                .await;
+        *state
+            .download
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let (state_name, message) = match &result {
+            Ok(()) => ("done", None),
+            Err(crate::local_models::DownloadError::Cancelled) => ("cancelled", None),
+            Err(e) => ("error", Some(e.to_string())),
+        };
+        if let Err(e) = &result {
+            tracing::warn!(error = %e, "descarga dos modelos de oradores não concluída");
+        }
+        let total = crate::notes::speakers::total_bytes();
+        emit(crate::local_models::Progress {
+            id: "speakers",
+            file: String::new(),
+            done: if result.is_ok() { total } else { 0 },
+            total,
+            state: state_name,
+            message,
+        });
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn speakers_delete(state: AppStateRef<'_>) -> CmdResult<()> {
+    let dir = state.models_dir();
+    blocking(move || crate::notes::speakers::delete(&dir)).await??;
+    Ok(())
+}
+
+/// Dá um nome a um orador separado ("Orador 2" → "Ana"). Nome vazio volta ao "Orador N".
+#[tauri::command]
+pub async fn notes_rename_speaker(
+    state: AppStateRef<'_>,
+    id: String,
+    speaker: u32,
+    name: String,
+) -> CmdResult<Meta> {
+    not_active(&state, &id)?;
+    let dir = state.data_dir.clone();
+    blocking(move || -> Result<Meta, store::StoreError> {
+        let store = NotesStore::new(&dir);
+        let mut meta = store.meta(&id)?;
+        let name: String = name.trim().chars().take(80).collect();
+        if name.is_empty() {
+            meta.speaker_names.remove(&speaker);
+        } else {
+            meta.speaker_names.insert(speaker, name);
+        }
+        store.save_meta(&meta)?;
+        Ok(meta)
+    })
+    .await?
+    .map_err(Into::into)
 }

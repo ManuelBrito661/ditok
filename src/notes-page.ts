@@ -9,6 +9,8 @@ import {
   onNotesLevel,
   onNotesLine,
   onNotesState,
+  onSpeakersProgress,
+  speakers,
   summaries,
   type NotesLine,
   type NotesMeta,
@@ -17,8 +19,8 @@ import {
   type NotesState,
   type SummaryKind,
 } from "./api";
-import { duration, usd } from "./format";
-import { $, app, confirmDanger, toast } from "./store";
+import { duration, megabytes, usd } from "./format";
+import { $, app, confirmDanger, save, toast } from "./store";
 import { describeResult, describeText, SUMMARY_KINDS } from "./summary";
 
 let state: NotesState | null = null;
@@ -50,12 +52,21 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 }
 
 /** Uma fala por parágrafo, com a hora e o nome. Texto sempre por `textContent`. */
-function renderLines(box: HTMLElement, lines: NotesLine[], names: { mic: string; system: string }) {
+type Names = { mic: string; system: string; speakers?: Record<string, string> };
+
+const namesOf = (m: NotesMeta): Names => ({ mic: m.mic_name, system: m.system_name, speakers: m.speaker_names });
+
+function whoIs(l: NotesLine, names: Names): string {
+  if (l.speaker != null) return names.speakers?.[String(l.speaker)] ?? `Orador ${l.speaker}`;
+  return l.track === "mic" ? names.mic : names.system;
+}
+
+function renderLines(box: HTMLElement, lines: NotesLine[], names: Names) {
   box.replaceChildren(
     ...lines.map((l) => {
       const p = el("p", `note-line ${l.track}${l.failed ? " failed" : ""}`);
       p.append(
-        el("span", "note-who", l.track === "mic" ? names.mic : names.system),
+        el("span", "note-who", whoIs(l, names)),
         el("time", "note-time", stamp(l.start_ms)),
         document.createTextNode(l.failed ? "[trecho não transcrito]" : l.text),
       );
@@ -98,7 +109,7 @@ function renderState(s: NotesState) {
     live = [];
   }
   const finishing = s.phase === "finishing";
-  $("notes-live-title").textContent = finishing ? "A acabar de transcrever…" : (s.title ?? "A gravar");
+  $("notes-live-title").textContent = finishing ? (s.step ?? "A acabar de transcrever…") : (s.title ?? "A gravar");
   $<HTMLButtonElement>("notes-stop").hidden = finishing;
   if (!finishing) {
     tick();
@@ -180,6 +191,7 @@ async function stop() {
 }
 
 export function renderNotesHint() {
+  void renderSpeakers();
   const c = app.view.config;
   $("notes-cost").textContent =
     c.stt_engine === "local"
@@ -227,7 +239,8 @@ async function openDetail(id: string) {
   $<HTMLInputElement>("nd-mic").value = meta.mic_name;
   $<HTMLInputElement>("nd-system").value = meta.system_name;
   $("nd-meta").textContent = `${MODE_TITLE[meta.mode]} · ${metaLine(meta)} · ${meta.model}`;
-  renderLines($("nd-text"), lines, { mic: meta.mic_name, system: meta.system_name });
+  renderLines($("nd-text"), lines, namesOf(meta));
+  renderSpeakerNames(meta, lines);
   const d = describeText(lines.map((l) => l.text).join(" "));
   $("nd-hint").textContent = d.hint;
   $<HTMLButtonElement>("nd-run").disabled = !d.ok;
@@ -257,7 +270,7 @@ async function rename() {
       systemName: $<HTMLInputElement>("nd-system").value,
     });
     detail.meta = meta;
-    renderLines($("nd-text"), detail.lines, { mic: meta.mic_name, system: meta.system_name });
+    renderLines($("nd-text"), detail.lines, namesOf(meta));
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -321,6 +334,98 @@ async function remove() {
   }
 }
 
+/** Um campo por orador separado, para lhe dar o nome ("Orador 2" → "Ana"). */
+function renderSpeakerNames(meta: NotesMeta, lines: NotesLine[]) {
+  const box = $("nd-speakers");
+  const found = [...new Set(lines.map((l) => l.speaker).filter((n): n is number => n != null))].sort((a, b) => a - b);
+  box.hidden = found.length === 0;
+  box.replaceChildren(
+    ...found.map((n) => {
+      const label = el("label", undefined, `Orador ${n}`);
+      const input = el("input");
+      input.type = "text";
+      input.maxLength = 80;
+      input.placeholder = `Orador ${n}`;
+      input.value = meta.speaker_names[String(n)] ?? "";
+      input.addEventListener("change", () => void renameSpeaker(n, input.value));
+      label.append(input);
+      return label;
+    }),
+  );
+}
+
+async function renameSpeaker(n: number, name: string) {
+  if (!detail) return;
+  try {
+    detail.meta = await speakers.rename(detail.meta.id, n, name);
+    renderLines($("nd-text"), detail.lines, namesOf(detail.meta));
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ---------------------------------------------------------------- modelos de oradores
+
+async function renderSpeakers(progress?: string) {
+  const s = await speakers.status().catch(() => null);
+  const box = $("notes-speakers");
+  if (!s) {
+    box.hidden = true;
+    return;
+  }
+  const on = $<HTMLInputElement>("notes-speakers-on");
+  const get = $<HTMLButtonElement>("notes-speakers-get");
+  const usable = s.available && s.installed;
+  on.disabled = !usable;
+  on.checked = usable && app.view.config.notes_speakers;
+  get.hidden = !s.available || s.installed || s.downloading;
+  get.textContent = `Descarregar modelos (${megabytes(s.size_bytes)})`;
+  $("notes-speakers-cancel").hidden = !s.downloading;
+  $("notes-speakers-del").hidden = !usable;
+  $("notes-speakers-hint").textContent = !s.available
+    ? "Esta versão do Ditok não inclui o motor local, que é o que separa as vozes."
+    : s.downloading
+      ? (progress ?? "A descarregar os modelos…")
+      : s.installed
+        ? "Corre neste computador, no fim da reunião (uns segundos). Funciona melhor com poucas pessoas e sem vozes a sobrepor-se."
+        : "Precisa de dois modelos pequenos, que ficam neste computador. Não é perfeito: pode confundir vozes parecidas.";
+}
+
+function setupSpeakers() {
+  $("notes-speakers-on").addEventListener("change", async (e) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    if (await save({ notes_speakers: checked })) return;
+    (e.target as HTMLInputElement).checked = !checked;
+  });
+  $("notes-speakers-get").addEventListener("click", async () => {
+    try {
+      await speakers.download();
+      await renderSpeakers();
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  });
+  $("notes-speakers-cancel").addEventListener("click", () => void speakers.cancel());
+  $("notes-speakers-del").addEventListener("click", async () => {
+    try {
+      await speakers.remove();
+      await save({ notes_speakers: false });
+      await renderSpeakers();
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  });
+  void onSpeakersProgress((p) => {
+    if (p.state === "downloading" || p.state === "verifying") {
+      const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+      void renderSpeakers(`${p.state === "verifying" ? "A verificar" : "A descarregar"} (${pct}%)`);
+    } else {
+      if (p.state === "error") toast(p.message ?? "A descarga falhou.", "error");
+      void renderSpeakers();
+    }
+  });
+}
+
 // ---------------------------------------------------------------- arranque
 
 export async function setupNotes(): Promise<void> {
@@ -346,6 +451,8 @@ export async function setupNotes(): Promise<void> {
   });
   await onNotesLevel((e) => setLevel(e.track, e.level));
 
+  setupSpeakers();
+  await renderSpeakers();
   renderNotesHint();
   renderState(await notes.state());
   await refreshList();

@@ -322,6 +322,18 @@
               <button id="notes-start" type="button" class="primary">Começar a gravar</button>
             </div>
             <p id="notes-cost" class="row-desc"></p>
+            <div id="notes-speakers" class="notes-speakers">
+              <label class="notes-check">
+                <input id="notes-speakers-on" type="checkbox" />
+                <span>Separar quem fala em "Outros" (Orador 1, 2…) no fim da reunião</span>
+              </label>
+              <p id="notes-speakers-hint" class="row-desc"></p>
+              <div class="file-actions">
+                <button id="notes-speakers-get" type="button" class="secondary" hidden>Descarregar modelos</button>
+                <button id="notes-speakers-cancel" type="button" class="ghost" hidden>Cancelar</button>
+                <button id="notes-speakers-del" type="button" class="ghost" hidden>Apagar modelos</button>
+              </div>
+            </div>
             <p class="row-desc">Com colunas, o microfone apanha também o som da outra pessoa. Com auscultadores fica tudo limpo.</p>
           </div>
 
@@ -358,6 +370,7 @@
               <label>O teu nome <input id="nd-mic" type="text" maxlength="80" /></label>
               <label>Os outros <input id="nd-system" type="text" maxlength="80" /></label>
             </div>
+            <div id="nd-speakers" class="notes-names" hidden></div>
             <div id="nd-text" class="transcript notes-transcript" tabindex="0" aria-label="Transcrição"></div>
             <div class="file-summary">
               <div class="file-summary-head">

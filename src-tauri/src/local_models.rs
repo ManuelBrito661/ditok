@@ -218,7 +218,7 @@ impl ModelSpec {
     }
 }
 
-fn dir_name(id: LocalModelId) -> &'static str {
+pub fn dir_name(id: LocalModelId) -> &'static str {
     match id {
         LocalModelId::ParakeetV3 => "parakeet-v3",
         LocalModelId::WhisperSmall => "whisper-small",
@@ -249,7 +249,8 @@ pub fn delete(spec: &ModelSpec, models_dir: &Path) -> std::io::Result<()> {
 /// O progresso de uma descarga, para a janela.
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
-    pub id: LocalModelId,
+    /// O modelo ("parakeet-v3", "speakers"…): o mesmo texto que a UI usa como identificador.
+    pub id: &'static str,
     pub file: String,
     /// Bytes do modelo todo já descarregados.
     pub done: u64,
@@ -323,7 +324,7 @@ pub async fn download(
         .collect();
     download_files(
         client,
-        spec.id,
+        dir_name(spec.id),
         &spec.dir(models_dir),
         &jobs,
         cancel,
@@ -335,7 +336,7 @@ pub async fn download(
 /// Descarrega os ficheiros pela ordem, retomando o que estiver a meio.
 pub async fn download_files(
     client: &reqwest::Client,
-    id: LocalModelId,
+    id: &'static str,
     dir: &Path,
     jobs: &[Job<'_>],
     cancel: &AtomicBool,
@@ -505,7 +506,8 @@ fn free_space(path: &Path) -> Option<u64> {
 
 /// Uma descarga em curso, para a poder cancelar.
 pub struct ActiveDownload {
-    pub id: LocalModelId,
+    /// `None`: a descarga dos modelos de oradores (não é um modelo de transcrição).
+    pub id: Option<LocalModelId>,
     pub cancel: Arc<AtomicBool>,
 }
 
@@ -653,14 +655,9 @@ mod tests {
         };
         let cancel = AtomicBool::new(false);
         let mut states = Vec::new();
-        download_files(
-            &client(),
-            LocalModelId::ParakeetV3,
-            &dir,
-            &[job],
-            &cancel,
-            |p| states.push(p.state),
-        )
+        download_files(&client(), "parakeet-v3", &dir, &[job], &cancel, |p| {
+            states.push(p.state)
+        })
         .await
         .unwrap();
         assert_eq!(std::fs::read(dir.join("modelo.onnx")).unwrap(), data);
@@ -686,16 +683,9 @@ mod tests {
             sha256: &hash,
         };
         let cancel = AtomicBool::new(false);
-        download_files(
-            &client(),
-            LocalModelId::ParakeetV3,
-            &dir,
-            &[job],
-            &cancel,
-            |_| {},
-        )
-        .await
-        .unwrap();
+        download_files(&client(), "parakeet-v3", &dir, &[job], &cancel, |_| {})
+            .await
+            .unwrap();
         assert_eq!(std::fs::read(dir.join("modelo.onnx")).unwrap(), data);
         assert_eq!(
             hits.load(Ordering::Relaxed),
@@ -720,16 +710,9 @@ mod tests {
             sha256: &hash,
         };
         let cancel = AtomicBool::new(false);
-        download_files(
-            &client(),
-            LocalModelId::ParakeetV3,
-            &dir,
-            &[job],
-            &cancel,
-            |_| {},
-        )
-        .await
-        .unwrap();
+        download_files(&client(), "parakeet-v3", &dir, &[job], &cancel, |_| {})
+            .await
+            .unwrap();
         // Se tivesse acrescentado ao .part, o ficheiro ficava com 140 000 bytes.
         assert_eq!(std::fs::read(dir.join("modelo.onnx")).unwrap(), data);
         let _ = std::fs::remove_dir_all(dir);
@@ -748,16 +731,9 @@ mod tests {
             sha256: &wrong,
         };
         let cancel = AtomicBool::new(false);
-        let err = download_files(
-            &client(),
-            LocalModelId::ParakeetV3,
-            &dir,
-            &[job],
-            &cancel,
-            |_| {},
-        )
-        .await
-        .unwrap_err();
+        let err = download_files(&client(), "parakeet-v3", &dir, &[job], &cancel, |_| {})
+            .await
+            .unwrap_err();
         assert!(matches!(err, DownloadError::BadHash(_)), "{err}");
         assert!(
             !dir.join("modelo.onnx").exists(),
@@ -780,16 +756,9 @@ mod tests {
             sha256: &hash,
         };
         let cancel = AtomicBool::new(false);
-        let err = download_files(
-            &client(),
-            LocalModelId::ParakeetV3,
-            &dir,
-            &[job],
-            &cancel,
-            |_| {},
-        )
-        .await
-        .unwrap_err();
+        let err = download_files(&client(), "parakeet-v3", &dir, &[job], &cancel, |_| {})
+            .await
+            .unwrap_err();
         assert!(matches!(err, DownloadError::BadSize(_)), "{err}");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -807,16 +776,9 @@ mod tests {
             sha256: &hash,
         };
         let cancel = AtomicBool::new(true); // já cancelada: pára no primeiro bloco
-        let err = download_files(
-            &client(),
-            LocalModelId::ParakeetV3,
-            &dir,
-            &[job],
-            &cancel,
-            |_| {},
-        )
-        .await
-        .unwrap_err();
+        let err = download_files(&client(), "parakeet-v3", &dir, &[job], &cancel, |_| {})
+            .await
+            .unwrap_err();
         assert!(matches!(err, DownloadError::Cancelled), "{err}");
         assert!(!dir.join("modelo.onnx").exists());
         let _ = std::fs::remove_dir_all(dir);
@@ -835,16 +797,9 @@ mod tests {
             sha256: &sha(b"completo"),
         };
         let cancel = AtomicBool::new(false);
-        download_files(
-            &client(),
-            LocalModelId::ParakeetV3,
-            &dir,
-            &[job],
-            &cancel,
-            |_| {},
-        )
-        .await
-        .unwrap();
+        download_files(&client(), "parakeet-v3", &dir, &[job], &cancel, |_| {})
+            .await
+            .unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 

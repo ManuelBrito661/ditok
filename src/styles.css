@@ -1065,3 +1065,5 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .notes-title-input { flex: 1 1 auto; min-width: 0; font-size: var(--fs-md); font-weight: 600; }
 .notes-names { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .notes-names label { display: grid; gap: 4px; font-size: var(--fs-xs); color: var(--muted); }
+.notes-speakers { display: grid; gap: 6px; padding-top: 4px; }
+.notes-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }

@@ -40,6 +40,7 @@ export interface Config {
   /** Minutos sem ditar até o modelo local ser largado da memória. */
   local_idle_minutes: number;
   notes_consent: boolean;
+  notes_speakers: boolean;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -467,6 +468,8 @@ export interface NotesState {
   lost: string[];
   error: string | null;
   /** Onde se dá a permissão do áudio do sistema neste sistema operativo. */
+  /** O que se faz ao fechar ("A identificar quem fala…"). */
+  step: string | null;
   system_help: string;
 }
 
@@ -483,6 +486,8 @@ export interface NotesMeta {
   finished: boolean;
   mic_name: string;
   system_name: string;
+  /** Nomes dados aos oradores separados, por número. */
+  speaker_names: Record<string, string>;
 }
 
 export interface NotesLine {
@@ -491,6 +496,8 @@ export interface NotesLine {
   end_ms: number;
   text: string;
   failed: boolean;
+  /** Orador (1, 2…) dentro da faixa, se foram separados. */
+  speaker?: number;
 }
 
 export interface NotesOut {
@@ -530,4 +537,27 @@ export function onNotesLine(handler: (e: { id: string; line: NotesLine; cost_usd
 
 export function onNotesLevel(handler: (e: { track: NotesTrack; level: number }) => void): Promise<UnlistenFn> {
   return listen<{ track: NotesTrack; level: number }>("notes:level", (e) => handler(e.payload));
+}
+
+// ---------------------------------------------------------------- oradores (notes/speakers.rs)
+
+export interface SpeakersView {
+  /** Esta versão inclui o motor local (que também separa oradores)? */
+  available: boolean;
+  installed: boolean;
+  size_bytes: number;
+  downloading: boolean;
+}
+
+export const speakers = {
+  status: () => invoke<SpeakersView>("speakers_status"),
+  download: () => invoke<void>("speakers_download"),
+  cancel: () => invoke<void>("local_model_cancel"),
+  remove: () => invoke<void>("speakers_delete"),
+  rename: (id: string, speaker: number, name: string) =>
+    invoke<NotesMeta>("notes_rename_speaker", { id, speaker, name }),
+};
+
+export function onSpeakersProgress(handler: (p: Omit<LocalModelProgress, "id">) => void): Promise<UnlistenFn> {
+  return listen<Omit<LocalModelProgress, "id">>("speakers:progress", (e) => handler(e.payload));
 }

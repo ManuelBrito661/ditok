@@ -8,7 +8,7 @@
 //! Tudo aqui é bloqueante (disco): quem chama usa `spawn_blocking`.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -48,13 +48,25 @@ pub struct Meta {
     /// Como se chama cada faixa no texto; o utilizador pode mudar ("Eu" → "Manuel").
     pub mic_name: String,
     pub system_name: String,
+    /// Nomes dados aos oradores separados ("Orador 2" → "Ana"), por número.
+    #[serde(default)]
+    pub speaker_names: BTreeMap<u32, String>,
 }
 
 impl Meta {
-    pub fn speaker(&self, track: Track) -> &str {
-        match track {
-            Track::Mic => &self.mic_name,
-            Track::System => &self.system_name,
+    /// Quem disse a linha: o orador separado (com o nome dado, ou "Orador N") ou, sem
+    /// ele, o nome da faixa.
+    pub fn who(&self, line: &Line) -> String {
+        match line.speaker {
+            Some(n) => self
+                .speaker_names
+                .get(&n)
+                .cloned()
+                .unwrap_or_else(|| format!("Orador {n}")),
+            None => match line.track {
+                Track::Mic => self.mic_name.clone(),
+                Track::System => self.system_name.clone(),
+            },
         }
     }
 }
@@ -68,6 +80,9 @@ pub struct Line {
     /// O pedido falhou: o texto é um marcador, não fala.
     #[serde(default)]
     pub failed: bool,
+    /// O orador (1, 2…) dentro da faixa, se a separação de oradores correu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<u32>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -81,6 +96,9 @@ pub enum StoreError {
     #[error("meta.json inválido: {0}")]
     Json(#[from] serde_json::Error),
 }
+
+/// O áudio temporário da faixa a separar em oradores (apagado no fim da sessão).
+const PCM_FILE: &str = "diar.pcm";
 
 pub struct NotesStore {
     dir: PathBuf,
@@ -177,6 +195,59 @@ impl NotesStore {
         all
     }
 
+    /// Substitui as linhas da transcrição (por exemplo, depois de lhes dar oradores).
+    /// Escreve para um ficheiro ao lado e renomeia: nunca fica a meio.
+    pub fn set_lines(&self, id: &str, lines: &[Line]) -> Result<(), StoreError> {
+        let dir = self.session_dir(id)?;
+        let tmp = dir.join("transcript.jsonl.tmp");
+        let mut bytes = Vec::new();
+        for l in lines {
+            serde_json::to_writer(&mut bytes, l)?;
+            bytes.push(b'\n');
+        }
+        fs::write(&tmp, bytes)?;
+        fs::rename(tmp, dir.join("transcript.jsonl"))?;
+        Ok(())
+    }
+
+    /// Guarda um enunciado (16 kHz, PCM16) no ficheiro temporário do áudio da faixa a
+    /// separar, na posição do seu início: o ficheiro fica com a linha do tempo da
+    /// sessão (os silêncios são zeros), que é o que a separação de oradores precisa.
+    pub fn write_pcm_at(&self, id: &str, start_ms: u64, samples: &[f32]) -> Result<(), StoreError> {
+        use std::io::{Seek, SeekFrom};
+        let path = self.session_dir(id)?.join(PCM_FILE);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)?;
+        file.seek(SeekFrom::Start(start_ms * 16 * 2))?;
+        let bytes: Vec<u8> = samples
+            .iter()
+            .flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
+            .collect();
+        file.write_all(&bytes)?;
+        Ok(())
+    }
+
+    /// O áudio temporário todo, como amostras f32. Vazio se não existir.
+    pub fn read_pcm(&self, id: &str) -> Result<Vec<f32>, StoreError> {
+        match fs::read(self.session_dir(id)?.join(PCM_FILE)) {
+            Ok(bytes) => Ok(bytes
+                .chunks_exact(2)
+                .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
+                .collect()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn delete_pcm(&self, id: &str) {
+        if let Ok(dir) = self.session_dir(id) {
+            let _ = fs::remove_file(dir.join(PCM_FILE));
+        }
+    }
+
     /// O resumo guardado ao lado da transcrição (`summary.md`), para não se pagar duas vezes.
     pub fn save_summary(&self, id: &str, text: &str) -> Result<(), StoreError> {
         fs::write(self.session_dir(id)?.join("summary.md"), text)?;
@@ -208,6 +279,7 @@ impl NotesStore {
             if meta.finished || skip == Some(meta.id.as_str()) {
                 continue;
             }
+            self.delete_pcm(&meta.id);
             meta.finished = true;
             meta.interrupted = true;
             if meta.ended_at.is_none() {
@@ -284,10 +356,10 @@ fn stamp(ms: u64) -> String {
 }
 
 /// Junta falas seguidas do mesmo orador num só parágrafo, com a hora da primeira.
-fn turns<'a>(meta: &'a Meta, lines: &[Line]) -> Vec<(&'a str, u64, String)> {
-    let mut out: Vec<(&str, u64, String)> = Vec::new();
+fn turns(meta: &Meta, lines: &[Line]) -> Vec<(String, u64, String)> {
+    let mut out: Vec<(String, u64, String)> = Vec::new();
     for l in lines {
-        let who = meta.speaker(l.track);
+        let who = meta.who(l);
         let text = if l.failed {
             "[trecho não transcrito]".to_owned()
         } else {
@@ -350,6 +422,7 @@ mod tests {
             finished: false,
             mic_name: "Eu".into(),
             system_name: "Outros".into(),
+            speaker_names: BTreeMap::new(),
         }
     }
 
@@ -360,6 +433,7 @@ mod tests {
             end_ms: end,
             text: text.into(),
             failed: false,
+            speaker: None,
         }
     }
 
@@ -432,6 +506,57 @@ mod tests {
         );
         assert!(!store.meta(&done.id).unwrap().interrupted);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pcm_keeps_the_session_timeline() {
+        let dir = tmp("pcm");
+        let store = NotesStore::new(&dir);
+        let m = meta("20261012-100000");
+        store.create(&m).unwrap();
+        // 1 s a partir dos 2 s: o ficheiro tem de ter 2 s de zeros antes.
+        store
+            .write_pcm_at(&m.id, 2_000, &vec![0.5; 16_000])
+            .unwrap();
+        let pcm = store.read_pcm(&m.id).unwrap();
+        assert_eq!(pcm.len(), 3 * 16_000);
+        assert!(pcm[..32_000].iter().all(|s| *s == 0.0));
+        assert!((pcm[32_000] - 0.5).abs() < 0.001);
+        store.delete_pcm(&m.id);
+        assert!(store.read_pcm(&m.id).unwrap().is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn set_lines_rewrites_with_speakers() {
+        let dir = tmp("setlines");
+        let store = NotesStore::new(&dir);
+        let m = meta("20261012-100000");
+        store.create(&m).unwrap();
+        store
+            .append(&m.id, &line(Track::System, 0, 1000, "a"))
+            .unwrap();
+        let mut lines = store.lines(&m.id).unwrap();
+        lines[0].speaker = Some(2);
+        store.set_lines(&m.id, &lines).unwrap();
+        assert_eq!(store.lines(&m.id).unwrap()[0].speaker, Some(2));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn separated_speakers_get_their_own_names_in_exports() {
+        let mut m = meta("20261012-100000");
+        m.speaker_names.insert(2, "Ana".into());
+        let mut a = line(Track::System, 1_000, 2_000, "Olá.");
+        a.speaker = Some(1);
+        let mut b = line(Track::System, 3_000, 4_000, "Bom dia.");
+        b.speaker = Some(2);
+        let mut c = line(Track::System, 5_000, 6_000, "Sem orador.");
+        c.speaker = None;
+        let md = export_markdown(&m, &[a, b, c]);
+        assert!(md.contains("**Orador 1** (00:01): Olá."), "{md}");
+        assert!(md.contains("**Ana** (00:03): Bom dia."), "{md}");
+        assert!(md.contains("**Outros** (00:05): Sem orador."), "{md}");
     }
 
     #[test]

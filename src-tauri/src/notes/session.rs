@@ -83,6 +83,8 @@ struct Active {
     lost: Vec<String>,
     /// O último erro que impede de transcrever (chave recusada, sem créditos…).
     error: Option<String>,
+    /// O que se está a fazer no fim ("A identificar quem fala…").
+    step: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -112,6 +114,7 @@ pub struct StateView {
     pub system_device: Option<String>,
     pub lost: Vec<String>,
     pub error: Option<String>,
+    pub step: Option<&'static str>,
     /// Onde se resolve o "só silêncio" do áudio do sistema neste sistema operativo.
     pub system_help: &'static str,
 }
@@ -179,6 +182,7 @@ impl Notes {
                 system_device: None,
                 lost: Vec::new(),
                 error: None,
+                step: None,
                 system_help: super::platform::SYSTEM_AUDIO_HELP,
             },
             Some(a) => StateView {
@@ -194,6 +198,7 @@ impl Notes {
                 system_device: a.system_device.clone(),
                 lost: a.lost.clone(),
                 error: a.error.clone(),
+                step: a.step,
                 system_help: super::platform::SYSTEM_AUDIO_HELP,
             },
         }
@@ -263,6 +268,7 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
             finished: false,
             mic_name: "Eu".into(),
             system_name: "Outros".into(),
+            speaker_names: Default::default(),
         }
     };
     state.notes.begin(Active {
@@ -277,6 +283,7 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
         system_device: None,
         lost: Vec::new(),
         error: None,
+        step: None,
     })?;
 
     let (tx, rx) = unbounded_channel();
@@ -306,7 +313,14 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
     state.notes.update(|a| a.capture = Some(capture));
 
     tracing::info!(id = %meta.id, ?mode, model = %meta.model, "gravação de notas começada");
-    tauri::async_runtime::spawn(pump(Arc::clone(state), providers.stt, meta.clone(), rx));
+    let diar = diarized_track(state, mode);
+    tauri::async_runtime::spawn(pump(
+        Arc::clone(state),
+        providers.stt,
+        meta.clone(),
+        diar,
+        rx,
+    ));
     publish(state);
     Ok(state.notes.view())
 }
@@ -328,6 +342,7 @@ async fn pump(
     state: Arc<AppState>,
     stt: Arc<dyn SttProvider>,
     meta: Meta,
+    diar: Option<Track>,
     mut rx: UnboundedReceiver<CaptureEvent>,
 ) {
     let config = state.config();
@@ -340,6 +355,21 @@ async fn pump(
     while let Some(event) = rx.recv().await {
         match event {
             CaptureEvent::Utterance(u) => {
+                // O áudio da faixa a separar guarda-se (temporário) para depois do fim.
+                if diar == Some(u.track) {
+                    let (state, id, samples, start) = (
+                        Arc::clone(&state),
+                        meta.id.clone(),
+                        u.samples.clone(),
+                        u.start_ms,
+                    );
+                    tasks.spawn(async move {
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            NotesStore::new(&state.data_dir).write_pcm_at(&id, start, &samples)
+                        })
+                        .await;
+                    });
+                }
                 let wav = wav::encode_pcm16_mono(&u.samples, TARGET_RATE);
                 let job = UtteranceJob {
                     state: Arc::clone(&state),
@@ -388,7 +418,7 @@ async fn pump(
     }
     // A captura acabou: falta o que já estava na fila.
     while tasks.join_next().await.is_some() {}
-    finish(&state, meta).await;
+    finish(&state, meta, diar).await;
 }
 
 struct UtteranceJob {
@@ -431,6 +461,7 @@ impl UtteranceJob {
             end_ms: u.end_ms,
             text,
             failed,
+            speaker: None,
         };
         let (state, id, to_save) = (Arc::clone(&self.state), self.id.clone(), line.clone());
         let saved = tauri::async_runtime::spawn_blocking(move || {
@@ -455,7 +486,11 @@ impl UtteranceJob {
 }
 
 /// Fecha a sessão: meta final, métricas, aviso.
-async fn finish(state: &Arc<AppState>, mut meta: Meta) {
+async fn finish(state: &Arc<AppState>, mut meta: Meta, diar: Option<Track>) {
+    let speakers_error = match diar {
+        Some(track) => identify_speakers(state, &meta.id, track).await.err(),
+        None => None,
+    };
     let Some(active) = state.notes.end() else {
         return;
     };
@@ -510,6 +545,67 @@ async fn finish(state: &Arc<AppState>, mut meta: Meta) {
         .app
         .emit(crate::dictation::pipeline::EVENT_DICTATION_RECORDED, ());
     state.notify(&format!("Notas guardadas: {}.", meta.title));
+    if let Some(why) = speakers_error {
+        state.notify(&format!("Não consegui separar os oradores: {why}"));
+    }
+}
+
+/// Que faixa se separa em oradores nesta sessão: a dos outros (ou a do microfone, numa
+/// conversa presencial). `None` se estiver desligado ou faltar o motor ou os modelos.
+fn diarized_track(state: &AppState, mode: Mode) -> Option<Track> {
+    if !state.config().notes_speakers
+        || !super::speakers::AVAILABLE
+        || !super::speakers::is_installed(&state.models_dir())
+    {
+        return None;
+    }
+    Some(if mode == Mode::InPerson {
+        Track::Mic
+    } else {
+        Track::System
+    })
+}
+
+/// Depois da reunião: separa quem falou na `track` e grava o orador em cada linha.
+/// O áudio temporário apaga-se sempre, com ou sem sucesso.
+async fn identify_speakers(state: &Arc<AppState>, id: &str, track: Track) -> Result<(), String> {
+    state
+        .notes
+        .update(|a| a.step = Some("A identificar quem fala…"));
+    publish(state);
+    let (state_, id_) = (Arc::clone(state), id.to_owned());
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
+        let store = NotesStore::new(&state_.data_dir);
+        let outcome = (|| {
+            let samples = store.read_pcm(&id_).map_err(|e| e.to_string())?;
+            if samples.is_empty() {
+                return Ok(0);
+            }
+            let started = std::time::Instant::now();
+            let segments = super::speakers::diarize(&state_.models_dir(), &samples)
+                .map_err(|e| e.to_string())?;
+            let mut lines = store.lines(&id_).map_err(|e| e.to_string())?;
+            super::speakers::assign(&mut lines, track, &segments);
+            store.set_lines(&id_, &lines).map_err(|e| e.to_string())?;
+            let speakers = segments.iter().map(|s| s.speaker).max().unwrap_or(0) as usize;
+            tracing::info!(
+                id = %id_,
+                speakers,
+                seconds = samples.len() / 16_000,
+                took_s = started.elapsed().as_secs_f32(),
+                "oradores separados"
+            );
+            Ok(speakers)
+        })();
+        store.delete_pcm(&id_);
+        outcome
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Err(why) = &result {
+        tracing::warn!(%why, "não foi possível separar os oradores");
+    }
+    result.map(drop)
 }
 
 #[cfg(test)]
@@ -531,6 +627,7 @@ mod tests {
                 finished: false,
                 mic_name: "Eu".into(),
                 system_name: "Outros".into(),
+                speaker_names: Default::default(),
             },
             started_ms: 0,
             capture: None,
@@ -542,6 +639,7 @@ mod tests {
             system_device: None,
             lost: Vec::new(),
             error: None,
+            step: None,
         }
     }
 

@@ -9,4 +9,5 @@ pub mod platform;
 pub mod probe;
 pub mod segmenter;
 pub mod session;
+pub mod speakers;
 pub mod store;
