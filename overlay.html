@@ -26,12 +26,14 @@
          "no-selection" sem texto selecionado). class "wide": motivo de falha comprido.
          class "busy": abanão quando o atalho é premido
          a meio do processamento. data-notice: "key" | "shortcut" | "" (aviso persistente
-         em repouso: falta a chave, o atalho está ocupado). Clique direito: o menu do Ditok. -->
+         em repouso: falta a chave, o atalho está ocupado). Clique direito: o menu do Ditok.
+         Arrastar a pílula (fora dos botões) move-a; a mascote não se arrasta como imagem. -->
+
     <div id="pill" data-state="idle">
       <button id="cancel" class="pill-button" type="button" aria-label="Cancelar o ditado">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
       </button>
-      <img id="mascot" alt="" />
+      <img id="mascot" alt="" draggable="false" />
       <div id="bars" aria-hidden="true"></div>
       <div id="dots" aria-hidden="true"><span></span><span></span><span></span></div>
       <span id="label" aria-hidden="true"></span>

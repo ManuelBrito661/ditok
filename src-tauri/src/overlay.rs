@@ -6,7 +6,9 @@
 //! - nunca recebe foco: senão o Ctrl+V colava dentro dela em vez de na tua app;
 //! - deixa os cliques passar através dela (`set_ignore_cursor_events`), exceto
 //!   quando o rato está mesmo por cima da pílula (ver `watch_hover`);
-//! - é transparente, sem moldura, por cima de tudo e fora da barra de tarefas.
+//! - é transparente, sem moldura, por cima de tudo e fora da barra de tarefas;
+//! - pode ser arrastada (a página chama `startDragging`); onde ficou é guardado em
+//!   `overlay.json` e volta lá no arranque (ver `reposition` e `save_position_soon`).
 //!
 //! O backend envia-lhe eventos (`overlay:state`, `overlay:level`, `overlay:latched`,
 //! `overlay:mode`, `overlay:selection`, `overlay:style`,
@@ -15,21 +17,30 @@
 //! Toda a animação é CSS na página `overlay.html`.
 
 use std::{
+    path::PathBuf,
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 
-use crate::tray::TrayState;
+use crate::{state::AppState, tray::TrayState};
 
 pub const LABEL: &str = "overlay";
+/// Onde o utilizador largou a barra (ver `SavedPosition`), na pasta de configuração.
+/// À parte do config.json: a página de definições reenvia esse ficheiro inteiro e
+/// podia repor aqui uma posição antiga.
+const POSITION_FILE: &str = "overlay.json";
+/// Um arrasto manda uma posição a cada movimento: só se grava quando o rato para
+/// este tempo.
+const SAVE_DELAY: Duration = Duration::from_millis(400);
 /// Tamanho lógico da janela: cabe a pílula no maior estado (a ouvir, com os botões)
 /// e a dica que aparece por cima dela. Fora da pílula é transparente e os cliques
 /// passam.
@@ -68,6 +79,15 @@ static HIT_RECT: Mutex<Option<HitRect>> = Mutex::new(None);
 /// Cada barra criada recebe um número novo; a thread de uma barra antiga vê que o
 /// número mudou e termina (evita duas threads se desligares e voltares a ligar).
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Igual ao `GENERATION`, para as gravações da posição: só a última conta.
+static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Onde a barra está, em píxeis físicos do ecrã (canto superior esquerdo da janela).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct SavedPosition {
+    x: i32,
+    y: i32,
+}
 
 pub fn create(app: &AppHandle) {
     if app.get_webview_window(LABEL).is_some() {
@@ -96,6 +116,12 @@ pub fn create(app: &AppHandle) {
                 tracing::warn!(error = %e, "a barra não deixa passar os cliques");
             }
             reposition(&window);
+            let handle = app.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::Moved(pos) = event {
+                    save_position_soon(&handle, *pos);
+                }
+            });
             watch_hover(app.clone());
             tracing::info!("barra flutuante criada");
         }
@@ -111,16 +137,90 @@ pub fn destroy(app: &AppHandle) {
     }
 }
 
-/// Coloca a barra em baixo ao centro do monitor onde está o cursor, por cima da
-/// barra de tarefas (a "work area" exclui-a). Chamado ao criar e a cada ditado,
-/// para seguir o monitor onde estás a trabalhar.
+/// Coloca a barra no sítio que o utilizador lhe deu. Sem sítio guardado (ou se o
+/// monitor onde estava já não existe), vai para baixo ao centro do monitor onde
+/// está o cursor. Chamado ao criar, e a cada ditado se não houver sítio guardado.
 pub fn reposition_for(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(LABEL) {
+    if let Some(window) = app.get_webview_window(LABEL)
+        && saved_on_screen(&window).is_none()
+    {
         reposition(&window);
     }
 }
 
+/// Esquece o sítio que o utilizador deu e volta ao centro em baixo (menu do tray).
+pub fn reset_position(app: &AppHandle) {
+    if let Some(path) = position_path(app) {
+        // Sem ficheiro não há nada a apagar: não é erro.
+        if let Err(e) = std::fs::remove_file(path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error = %e, "não foi possível apagar a posição da barra");
+        }
+    }
+    reposition_for(app);
+}
+
+fn position_path(app: &AppHandle) -> Option<PathBuf> {
+    let state = app.try_state::<Arc<AppState>>()?;
+    Some(state.config_dir.join(POSITION_FILE))
+}
+
+fn load_position(app: &AppHandle) -> Option<SavedPosition> {
+    let bytes = std::fs::read(position_path(app)?).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Grava a posição quando o rato para (um arrasto manda uma a cada movimento).
+fn save_position_soon(app: &AppHandle, pos: PhysicalPosition<i32>) {
+    let generation = SAVE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("overlay-save".into())
+        .spawn(move || {
+            std::thread::sleep(SAVE_DELAY);
+            if SAVE_GENERATION.load(Ordering::Relaxed) != generation {
+                return; // veio outra posição entretanto
+            }
+            let Some(path) = position_path(&app) else {
+                return;
+            };
+            let saved = SavedPosition { x: pos.x, y: pos.y };
+            let result = serde_json::to_vec(&saved)
+                .map_err(std::io::Error::other)
+                .and_then(|json| std::fs::write(&path, json));
+            if let Err(e) = result {
+                tracing::warn!(error = %e, "não foi possível guardar a posição da barra");
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "a posição da barra não foi guardada");
+    }
+}
+
+/// A posição guardada, se a barra ainda cabe num monitor (basta um pedaço dela
+/// visível: um monitor desligado ou uma resolução menor não a levam para fora).
+fn saved_on_screen(window: &WebviewWindow) -> Option<PhysicalPosition<i32>> {
+    let saved = load_position(window.app_handle())?;
+    let size = window.outer_size().ok()?;
+    let (w, h) = (i64::from(size.width), i64::from(size.height));
+    let (x, y) = (i64::from(saved.x), i64::from(saved.y));
+    let on_a_monitor = window.available_monitors().ok()?.iter().any(|monitor| {
+        let area = monitor.work_area();
+        let (ax, ay) = (i64::from(area.position.x), i64::from(area.position.y));
+        let (aw, ah) = (i64::from(area.size.width), i64::from(area.size.height));
+        x < ax + aw && x + w > ax && y < ay + ah && y + h > ay
+    });
+    on_a_monitor.then(|| PhysicalPosition::new(saved.x, saved.y))
+}
+
 fn reposition(window: &WebviewWindow) {
+    if let Some(pos) = saved_on_screen(window) {
+        if let Err(e) = window.set_position(pos) {
+            tracing::debug!(error = %e, "não foi possível pôr a barra onde a deixaste");
+        }
+        return;
+    }
     let monitor = window
         .cursor_position()
         .ok()

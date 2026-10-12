@@ -36,6 +36,7 @@ const MENU_COMMAND: &str = "command";
 /// (abrir, colar, tentar de novo, separador, atalho → posição 5).
 const COMMAND_POSITION: usize = 5;
 const MENU_MUTE: &str = "mute";
+const MENU_RESET_OVERLAY: &str = "reset_overlay";
 const MENU_QUIT: &str = "quit";
 const MENU_NOTES_STOP: &str = "notes_stop";
 
@@ -244,6 +245,8 @@ impl Tray {
         let mute = CheckMenuItemBuilder::with_id(MENU_MUTE, "Silenciar sons")
             .checked(!config.sounds)
             .build(app)?;
+        let reset_overlay =
+            MenuItemBuilder::with_id(MENU_RESET_OVERLAY, "Repor posição da barra").build(app)?;
         let notes_stop =
             MenuItemBuilder::with_id(MENU_NOTES_STOP, "● A gravar notas: parar").build(app)?;
         let quit = MenuItemBuilder::with_id(MENU_QUIT, "Sair").build(app)?;
@@ -254,6 +257,7 @@ impl Tray {
             .separator()
             .item(&shortcut)
             .item(&mute)
+            .item(&reset_overlay)
             .separator()
             .item(&quit)
             .build()?;
@@ -291,6 +295,10 @@ impl Tray {
                         let _ = events.send(DictationEvent::Retry);
                     }
                     MENU_MUTE => toggle_sounds(app),
+                    MENU_RESET_OVERLAY => {
+                        tracing::info!("menu: repor a posição da barra");
+                        crate::overlay::reset_position(app);
+                    }
                     MENU_NOTES_STOP => {
                         tracing::info!("menu: parar as notas");
                         if let Some(state) = app.try_state::<Arc<AppState>>() {

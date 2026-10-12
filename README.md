@@ -11,6 +11,7 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é fei
 | Ditar (push-to-talk) | segurar **Ctrl+Win** (Mac: a tecla **Fn**) e largar no fim |
 | Ditar (modo alternar) | tocar no atalho (<300 ms), falar, tocar outra vez |
 | Ditar com o rato | clicar na barra com a mascote, falar, clicar no **■** |
+| Mover a barra | arrastar a pílula (fora dos botões) para outro sítio do ecrã |
 | Cancelar a gravação | **Esc** (ou o **✕** na barra) |
 | Modo comando | atalho próprio, ligado em **Definições → Geral** (ver abaixo) |
 | Histórico rápido | atalho próprio, sem nenhum por omissão (ver abaixo) |
@@ -21,7 +22,7 @@ No Mac, o Fn precisa da permissão **Monitorização de entrada** (Definições 
 
 ### A barra com a mascote
 
-Em baixo ao centro do ecrã (no monitor onde está o cursor) há uma pílula pequena com a mascote. Durante o ditado cresce e mostra o que está a acontecer:
+Por omissão, em baixo ao centro do ecrã (no monitor onde está o cursor) há uma pílula pequena com a mascote. Podes arrastá-la para onde quiseres: o sítio fica guardado e volta lá no arranque. Se o monitor onde a deixaste deixar de existir, volta ao centro em baixo; para a repor à mão, usa **Repor posição da barra** no menu do tray (ou clique direito na pílula). Durante o ditado cresce e mostra o que está a acontecer:
 
 | Estado | O que mostra |
 | - | - |
@@ -293,7 +294,7 @@ src-tauri/src/
   sound.rs            sons de início e fim, gerados na app
   hotkey.rs           atalho global, troca com deteção de conflitos
   modkeys.rs, modkeys/  Fn (macOS) e Ctrl+Win (Windows) por hook de teclado
-  overlay.rs          barra flutuante com a mascote (hover e cliques)
+  overlay.rs          barra flutuante com a mascote (hover, cliques, posição guardada em overlay.json)
   settings_window.rs  janela principal criada/destruída a pedido
   usage.rs            estatísticas de uso (palavras por dia, sequências, apps)
   updater.rs          procura e instala atualizações

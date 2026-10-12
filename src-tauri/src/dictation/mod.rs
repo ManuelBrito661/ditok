@@ -412,7 +412,8 @@ impl Orchestrator {
         // Uma seleção de um comando anterior que tenha ficado para trás (não
         // devia) é largada já: repõe o clipboard antes de copiar outra.
         self.selection = None;
-        // A barra segue o monitor onde está o cursor (como no Wispr Flow).
+        // Sem um sítio guardado pelo utilizador, a barra segue o monitor onde está o
+        // cursor (como no Wispr Flow); com um, fica onde a deixaste.
         crate::overlay::reposition_for(&app);
         let stt = Arc::clone(&provider.stt);
         tauri::async_runtime::spawn(async move { stt.prewarm().await });

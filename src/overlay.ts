@@ -17,10 +17,12 @@
 //   repouso); também pedido com overlay_status quando a página carrega
 // e responde com os comandos overlay_click / overlay_cancel / overlay_hit_rect /
 // overlay_open (clique num aviso) / overlay_menu (clique direito).
+// Arrastar a pílula move a janela (startDragging); o Rust guarda onde ficou.
 // Não há polling nem temporizadores a correr em repouso: as animações são CSS, e
 // o único temporizador (o "a demorar…") só existe enquanto se processa.
 
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import parado from "../design/mascot/parado.svg?inline";
 import aOuvir from "../design/mascot/a-ouvir.svg?inline";
 import aProcessar from "../design/mascot/a-processar.svg?inline";
@@ -296,7 +298,40 @@ function onHover(inside: boolean) {
   pill.classList.toggle("hover", inside);
 }
 
+// ---------------------------------------------------------------- arrastar
+
+/** Quanto o rato tem de andar com o botão premido para ser arrasto, e não clique. */
+const DRAG_THRESHOLD_PX = 4;
+/** Onde carregaste no botão esquerdo da pílula (`null` sem botão premido). */
+let pressAt: { x: number; y: number } | null = null;
+/** Este gesto já foi um arrasto: o clique que pode vir a seguir não conta. */
+let dragged = false;
+
+// Arrastar a pílula move a janela inteira (o Windows trata do movimento); a
+// posição é guardada pelo Rust (overlay.rs). Os botões ficam de fora.
+pill.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || (e.target as Element).closest(".pill-button")) return;
+  pressAt = { x: e.clientX, y: e.clientY };
+  dragged = false;
+});
+pill.addEventListener("pointermove", (e) => {
+  if (!pressAt || dragged || !(e.buttons & 1)) return;
+  if (Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < DRAG_THRESHOLD_PX) return;
+  dragged = true;
+  void getCurrentWindow().startDragging().catch(() => {});
+});
+pill.addEventListener("pointerup", () => {
+  pressAt = null;
+});
+// A mascote e o resto nunca se arrastam como imagem (copiam-se para o ecrã).
+document.addEventListener("dragstart", (e) => e.preventDefault());
+
 pill.addEventListener("click", (e) => {
+  // Um arrasto não é um clique: não dita nem abre o aviso.
+  if (dragged) {
+    dragged = false;
+    return;
+  }
   // Os botões tratam de si; aqui só o clique na pílula em repouso ou numa falha
   // que oferece "Tentar de novo" (o backend decide qual dos dois é).
   if ((e.target as Element).closest(".pill-button")) return;
