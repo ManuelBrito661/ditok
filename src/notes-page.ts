@@ -113,9 +113,7 @@ function renderState(s: NotesState) {
 
   const warnings: string[] = [];
   if (s.system_mute) {
-    warnings.push(
-      "O computador não está a enviar som (só silêncio). No Mac, dá ao Ditok a permissão de captura de áudio do sistema; conteúdo protegido (DRM) também chega mudo.",
-    );
+    warnings.push(`O computador não está a enviar som (só silêncio). ${s.system_help}`);
   }
   for (const t of s.lost) warnings.push(`Perdi a faixa ${t === "mic" ? "do microfone" : "do sistema"}; a tentar reabrir.`);
   if (s.error) warnings.push(`Não consigo transcrever: ${s.error}`);

@@ -466,6 +466,8 @@ export interface NotesState {
   system_device: string | null;
   lost: string[];
   error: string | null;
+  /** Onde se dá a permissão do áudio do sistema neste sistema operativo. */
+  system_help: string;
 }
 
 export interface NotesMeta {

@@ -55,6 +55,8 @@ pub enum NotesError {
     Busy,
     #[error("não há nenhuma gravação em curso")]
     NotRecording,
+    #[error("{0}")]
+    Unsupported(String),
     #[error("aceita primeiro o aviso sobre gravar conversas")]
     ConsentRequired,
     #[error("falta a chave do OpenRouter (ou escolhe o motor local) para transcrever")]
@@ -110,6 +112,8 @@ pub struct StateView {
     pub system_device: Option<String>,
     pub lost: Vec<String>,
     pub error: Option<String>,
+    /// Onde se resolve o "só silêncio" do áudio do sistema neste sistema operativo.
+    pub system_help: &'static str,
 }
 
 impl Notes {
@@ -175,6 +179,7 @@ impl Notes {
                 system_device: None,
                 lost: Vec::new(),
                 error: None,
+                system_help: super::platform::SYSTEM_AUDIO_HELP,
             },
             Some(a) => StateView {
                 phase: inner.phase,
@@ -189,6 +194,7 @@ impl Notes {
                 system_device: a.system_device.clone(),
                 lost: a.lost.clone(),
                 error: a.error.clone(),
+                system_help: super::platform::SYSTEM_AUDIO_HELP,
             },
         }
     }
@@ -230,6 +236,9 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
     }
     if state.notes.phase() != Phase::Idle {
         return Err(NotesError::Busy);
+    }
+    if mode != Mode::InPerson {
+        super::platform::check_system_audio().map_err(NotesError::Unsupported)?;
     }
     let state_ = Arc::clone(state);
     let providers = tauri::async_runtime::spawn_blocking(move || state_.load_providers())

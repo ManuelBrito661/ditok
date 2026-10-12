@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>O Ditok usa o microfone para transcrever o que dizes enquanto seguras o atalho.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>O Ditok capta o áudio do computador (por exemplo, a outra pessoa numa chamada) para transcrever as tuas reuniões nas Notas. Só grava quando carregas em "Começar a gravar".</string>
 </dict>
 </plist>
