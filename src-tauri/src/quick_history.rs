@@ -176,6 +176,7 @@ mod tests {
             style: None,
             instruction: None,
             style_used: None,
+            corrected: false,
         }
     }
 

@@ -257,6 +257,7 @@ pub fn run() {
             commands::dictionary_import_preview,
             commands::usage_summary,
             commands::usage_clear,
+            commands::correct_history_entry,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,

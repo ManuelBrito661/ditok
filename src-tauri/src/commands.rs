@@ -507,6 +507,8 @@ pub async fn reprocess_history_entry(
             e.raw_text = new.raw_text;
             e.model = new.model;
             e.total_ms = Some(new.total_ms);
+            // O texto novo substitui a correção feita à mão.
+            e.corrected = false;
         })
     })
     .await??
@@ -514,6 +516,20 @@ pub async fn reprocess_history_entry(
     // Métricas e Início atualizam-se como depois de um ditado.
     let _ = state.app.emit(pipeline::EVENT_DICTATION_RECORDED, ());
     Ok(updated)
+}
+
+/// "Corrigir": troca o texto de um ditado pelo que corrigiste à mão. Devolve a
+/// entrada atualizada. O histórico rápido e o "Copiar" passam a dar o texto corrigido.
+#[tauri::command]
+pub async fn correct_history_entry(
+    state: AppStateRef<'_>,
+    id: String,
+    text: String,
+) -> CmdResult<HistoryEntry> {
+    checked_id(&id)?;
+    let state = Arc::clone(&state);
+    let entry = blocking(move || state.history.correct(&id, &text)).await??;
+    Ok(entry)
 }
 
 /// As últimas apps onde ditaste (só desta sessão), para criar um estilo sem

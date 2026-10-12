@@ -60,7 +60,29 @@ pub struct HistoryEntry {
     /// "Reprocessar" usa-o; sem ele (entradas antigas), o da app de hoje.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style_used: Option<Style>,
+    /// O texto foi corrigido à mão (`HistoryStore::correct`): `text` é o corrigido
+    /// e `raw_text` não mudou. Reprocessar volta a pô-lo a `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub corrected: bool,
 }
+
+/// Porque é que uma correção não foi aceite.
+#[derive(Debug, thiserror::Error)]
+pub enum CorrectError {
+    #[error("o ditado já não está no histórico")]
+    Missing,
+    #[error("os comandos não se corrigem: o texto vem de uma instrução")]
+    Command,
+    #[error("o texto não pode ficar vazio")]
+    Empty,
+    #[error("o texto é demasiado comprido")]
+    TooLong,
+    #[error("não foi possível guardar: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Maior texto que se aceita numa correção (um ditado muito longo ainda cabe).
+const MAX_CORRECTION_CHARS: usize = 20_000;
 
 fn pasted_by_default() -> bool {
     true
@@ -268,6 +290,34 @@ impl HistoryStore {
         Ok(Some(updated))
     }
 
+    /// Troca o texto de um ditado pelo que corrigiste à mão. Só mexe em `text` e em
+    /// `corrected`: o `raw_text` (a transcrição antes da limpeza) fica como estava.
+    /// Os comandos não se corrigem. O estado antigo fica de pé se algo falhar:
+    /// valida-se tudo antes de escrever.
+    pub fn correct(&self, id: &str, text: &str) -> Result<HistoryEntry, CorrectError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(CorrectError::Empty);
+        }
+        if text.chars().count() > MAX_CORRECTION_CHARS {
+            return Err(CorrectError::TooLong);
+        }
+        let _guard = self.lock();
+        let mut entries = self.read();
+        let entry = entries
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or(CorrectError::Missing)?;
+        if entry.instruction.is_some() {
+            return Err(CorrectError::Command);
+        }
+        text.clone_into(&mut entry.text);
+        entry.corrected = true;
+        let corrected = entry.clone();
+        self.write(&entries)?;
+        Ok(corrected)
+    }
+
     /// Apaga o histórico e todo o áudio guardado.
     pub fn clear(&self) -> std::io::Result<()> {
         let _guard = self.lock();
@@ -470,6 +520,7 @@ mod tests {
             style: None,
             instruction: None,
             style_used: None,
+            corrected: false,
         }
     }
 
@@ -505,6 +556,90 @@ mod tests {
         );
         store.clear().unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn correct_replaces_text_and_marks_corrected() {
+        let dir = temp_dir("correct");
+        let store = HistoryStore::new(dir.clone());
+        let id = store.push(entry("o tori é bom"), 10).unwrap();
+        let updated = store
+            .correct(
+                &id,
+                "  O Tauri é bom
+",
+            )
+            .unwrap();
+        assert_eq!(updated.text, "O Tauri é bom", "aparado nas pontas");
+        assert!(updated.corrected);
+        // Fica gravado, e a lista devolve-o corrigido (o histórico rápido cola isto).
+        let listed = store.list();
+        assert_eq!(listed[0].text, "O Tauri é bom");
+        assert!(listed[0].corrected);
+        store.clear().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn raw_text_untouched_by_correction() {
+        let dir = temp_dir("correct-raw");
+        let store = HistoryStore::new(dir.clone());
+        let mut e = entry("texto limpo");
+        e.raw_text = Some("texto cru".into());
+        let id = store.push(e, 10).unwrap();
+        let updated = store.correct(&id, "texto à mão").unwrap();
+        assert_eq!(updated.raw_text.as_deref(), Some("texto cru"));
+        store.clear().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn correct_rejects_commands_empty_long_and_missing() {
+        let dir = temp_dir("correct-bad");
+        let store = HistoryStore::new(dir.clone());
+        let id = store.push(entry("um"), 10).unwrap();
+        let mut command = entry("resultado");
+        command.instruction = Some("traduz".into());
+        let command_id = store.push(command, 10).unwrap();
+        assert!(matches!(
+            store.correct(&id, "   "),
+            Err(CorrectError::Empty)
+        ));
+        let long = "a".repeat(MAX_CORRECTION_CHARS + 1);
+        assert!(matches!(
+            store.correct(&id, &long),
+            Err(CorrectError::TooLong)
+        ));
+        assert!(matches!(
+            store.correct(&command_id, "x"),
+            Err(CorrectError::Command)
+        ));
+        assert!(matches!(
+            store.correct("999", "x"),
+            Err(CorrectError::Missing)
+        ));
+        // Nada disto mexeu no ditado.
+        let listed = store.get(&id).unwrap();
+        assert_eq!(listed.text, "um");
+        assert!(!listed.corrected);
+        store.clear().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn corrected_is_only_written_when_true() {
+        let plain = serde_json::to_string(&entry("x")).unwrap();
+        assert!(!plain.contains("corrected"));
+        let mut e = entry("x");
+        e.corrected = true;
+        assert!(
+            serde_json::to_string(&e)
+                .unwrap()
+                .contains("\"corrected\":true")
+        );
+        // Uma entrada antiga, sem o campo, continua a ler-se.
+        let old: HistoryEntry = serde_json::from_str(&plain).unwrap();
+        assert!(!old.corrected);
     }
 
     #[test]

@@ -388,6 +388,7 @@ async fn transcribe_and_paste(
                         style: cleanup::shown_style(config.cleanup_level, style),
                         instruction: None,
                         style_used: Some(style),
+                        corrected: false,
                     });
                 }
                 outcome
@@ -642,6 +643,7 @@ pub async fn command(
                                 style: None,
                                 instruction: Some(instruction),
                                 style_used: None,
+                                corrected: false,
                             });
                         }
                         outcome
