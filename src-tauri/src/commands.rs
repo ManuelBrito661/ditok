@@ -16,7 +16,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     audio::{self, InputDevice, Recorder, decode},
-    config::Config,
+    config::{Config, SttEngine},
     dict_io,
     dictation::{DictationEvent, pipeline},
     files::{self, JobView},
@@ -145,7 +145,16 @@ pub async fn save_settings(
         // qualquer gravação para voltar a tentar, sem incomodar se falhar.
         now_ok = true;
     }
-    let transport_changed = config.transport != current.transport;
+    // Quem transcreve (ou como) mudou: o orquestrador recria os clientes no próximo
+    // ditado. O idioma só conta no motor local (o Whisper fixa-o ao carregar).
+    let local_changed = config.stt_engine != current.stt_engine
+        || config.local_model != current.local_model
+        || config.local_idle_minutes != current.local_idle_minutes
+        || (config.stt_engine == SttEngine::Local && config.language != current.language);
+    let transport_changed = config.transport != current.transport || local_changed;
+    // Um modelo que já não vai ser usado liberta a memória já, não aos 5 minutos.
+    let drop_local_model = current.stt_engine == SttEngine::Local
+        && (config.stt_engine != SttEngine::Local || config.local_model != current.local_model);
     let overlay_changed = config.show_overlay != current.show_overlay;
     let show_overlay = config.show_overlay;
     // Desligar "Guardar o áudio" apaga o que já estava guardado.
@@ -182,6 +191,9 @@ pub async fn save_settings(
         state.set_shortcut_ok(now_ok);
     } else {
         state.publish();
+    }
+    if drop_local_model {
+        state.local.unload();
     }
     if transport_changed {
         let _ = state.events.send(DictationEvent::ProviderChanged);
@@ -991,4 +1003,171 @@ pub async fn file_save_summary(state: AppStateRef<'_>, text: String) -> CmdResul
     let path = blocking(move || state.files.save_summary_beside(&text)).await??;
     tracing::info!(path = %path.display(), "resumo guardado ao lado do original");
     Ok(path.display().to_string())
+}
+
+// ---------------------------------------------------------------- modelos locais
+
+/// O evento de progresso das descargas (para a janela de definições).
+const EVENT_LOCAL_MODELS: &str = "local-models:progress";
+
+#[derive(Serialize)]
+pub struct LocalModelView {
+    id: crate::local_models::LocalModelId,
+    label: &'static str,
+    description: &'static str,
+    warning: Option<&'static str>,
+    size_bytes: u64,
+    /// Memória aproximada com o modelo carregado.
+    ram_mb: u32,
+    installed: bool,
+    /// Bytes já descarregados (uma descarga parada retoma daí).
+    downloaded_bytes: u64,
+}
+
+#[derive(Serialize)]
+pub struct LocalModelsView {
+    /// Esta versão da app inclui o motor local?
+    available: bool,
+    /// O modelo está carregado em memória agora.
+    loaded: bool,
+    /// Uma descarga a decorrer (o id do modelo).
+    downloading: Option<crate::local_models::LocalModelId>,
+    models: Vec<LocalModelView>,
+}
+
+fn local_models_view(state: &AppState) -> LocalModelsView {
+    let dir = state.models_dir();
+    let downloading = state
+        .download
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map(|d| d.id);
+    LocalModelsView {
+        available: crate::stt::local::AVAILABLE,
+        loaded: state.local.is_loaded(),
+        downloading,
+        models: crate::local_models::CATALOG
+            .iter()
+            .map(|m| LocalModelView {
+                id: m.id,
+                label: m.label,
+                description: m.description,
+                warning: m.warning,
+                size_bytes: m.total_bytes(),
+                ram_mb: m.ram_mb,
+                installed: m.is_installed(&dir),
+                downloaded_bytes: m.downloaded_bytes(&dir),
+            })
+            .collect(),
+    }
+}
+
+#[tauri::command]
+pub async fn local_models_list(state: AppStateRef<'_>) -> CmdResult<LocalModelsView> {
+    let state = Arc::clone(&state);
+    blocking(move || local_models_view(&state)).await
+}
+
+/// Começa a descarregar um modelo (a descarga corre em segundo plano; o progresso vem
+/// pelo evento `local-models:progress`). Uma de cada vez.
+#[tauri::command]
+pub async fn local_model_download(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    id: crate::local_models::LocalModelId,
+) -> CmdResult<()> {
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut active = state
+            .download
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active.is_some() {
+            return Err("já há um modelo a descarregar: espera que acabe ou cancela-o".into());
+        }
+        *active = Some(crate::local_models::ActiveDownload {
+            id,
+            cancel: Arc::clone(&cancel),
+        });
+    }
+    let client = crate::local_models::download_client()?;
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn(async move {
+        let spec = crate::local_models::spec(id);
+        tracing::info!(model = spec.label, "a descarregar o modelo local");
+        let emit = {
+            let app = app.clone();
+            move |p: crate::local_models::Progress| {
+                let _ = app.emit_to(settings_window::LABEL, EVENT_LOCAL_MODELS, &p);
+            }
+        };
+        let result = crate::local_models::download(
+            &client,
+            spec,
+            &state.models_dir(),
+            &cancel,
+            emit.clone(),
+        )
+        .await;
+        *state
+            .download
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let (state_name, message) = match &result {
+            Ok(()) => ("done", None),
+            Err(crate::local_models::DownloadError::Cancelled) => ("cancelled", None),
+            Err(e) => ("error", Some(e.to_string())),
+        };
+        if let Err(e) = &result {
+            tracing::warn!(model = spec.label, error = %e, "descarga do modelo local não concluída");
+        }
+        let total = spec.total_bytes();
+        emit(crate::local_models::Progress {
+            id,
+            file: String::new(),
+            done: if result.is_ok() {
+                total
+            } else {
+                spec.downloaded_bytes(&state.models_dir())
+            },
+            total,
+            state: state_name,
+            message,
+        });
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn local_model_cancel(state: AppStateRef<'_>) {
+    if let Some(active) = state
+        .download
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+    {
+        active
+            .cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Apaga um modelo descarregado (e o que ficou a meio).
+#[tauri::command]
+pub async fn local_model_delete(
+    state: AppStateRef<'_>,
+    id: crate::local_models::LocalModelId,
+) -> CmdResult<()> {
+    if state.config().stt_engine == SttEngine::Local && state.config().local_model == id {
+        return Err("este é o modelo em uso: escolhe outro (ou a nuvem) antes de o apagar".into());
+    }
+    let state = Arc::clone(&state);
+    blocking(move || {
+        state.local.unload();
+        crate::local_models::delete(crate::local_models::spec(id), &state.models_dir())
+    })
+    .await??;
+    tracing::info!(?id, "modelo local apagado");
+    Ok(())
 }

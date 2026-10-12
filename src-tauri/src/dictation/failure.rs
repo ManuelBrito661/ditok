@@ -71,6 +71,7 @@ impl FailReason {
                 Self::KeyLimit
             }
             SttError::InsufficientCredits(_) => Self::NoCredits,
+            SttError::ModelMissing(_) => Self::NoModel,
             SttError::Unauthorized(_) => Self::KeyRejected,
             SttError::Forbidden(_) => Self::Refused,
             _ => Self::Generic,
@@ -92,6 +93,8 @@ impl FailReason {
             | SttError::InsufficientCredits(_) => true,
             SttError::Http { status, .. } => *status >= 500,
             SttError::ModelNotFound { .. }
+            | SttError::ModelMissing(_)
+            | SttError::Inference(_)
             | SttError::PayloadTooLarge
             | SttError::BadRequest(_)
             | SttError::Decode(_) => false,

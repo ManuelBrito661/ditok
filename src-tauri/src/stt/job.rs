@@ -21,7 +21,8 @@ pub fn is_fatal(e: &SttError) -> bool {
         SttError::Unauthorized(_)
         | SttError::Forbidden(_)
         | SttError::InsufficientCredits(_)
-        | SttError::ModelNotFound { .. } => true,
+        | SttError::ModelNotFound { .. }
+        | SttError::ModelMissing(_) => true,
         SttError::RateLimited(_)
         | SttError::ProviderTimeout
         | SttError::PayloadTooLarge
@@ -29,6 +30,7 @@ pub fn is_fatal(e: &SttError) -> bool {
         | SttError::Http { .. }
         | SttError::ClientTimeout
         | SttError::Network(_)
+        | SttError::Inference(_)
         | SttError::Decode(_) => false,
     }
 }
@@ -45,6 +47,8 @@ pub fn is_transient(e: &SttError) -> bool {
         | SttError::Forbidden(_)
         | SttError::InsufficientCredits(_)
         | SttError::ModelNotFound { .. }
+        | SttError::ModelMissing(_)
+        | SttError::Inference(_)
         | SttError::PayloadTooLarge
         | SttError::BadRequest(_)
         | SttError::Decode(_) => false,

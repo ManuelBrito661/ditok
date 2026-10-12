@@ -4,7 +4,11 @@
 //! deste áudio". Cada provider (OpenRouter, Groq, …) implementa-o à sua maneira e o
 //! resto do código não muda quando se acrescenta um novo.
 
+// Só o motor local o usa (e os testes dele).
+#[cfg(any(feature = "local", test))]
+pub mod idle;
 pub mod job;
+pub mod local;
 pub mod models;
 pub mod openrouter;
 
@@ -60,6 +64,13 @@ pub enum SttError {
         "modelo \"{model}\" não encontrado: usa o slug completo, ex.: openai/whisper-large-v3-turbo"
     )]
     ModelNotFound { model: String },
+    /// Motor local: o modelo escolhido não está descarregado (ou ficou incompleto).
+    #[error("o modelo local \"{0}\" não está descarregado: descarrega-o nas Definições")]
+    #[cfg_attr(not(feature = "local"), allow(dead_code))] // só o motor local o cria
+    ModelMissing(String),
+    /// Motor local: o modelo não carregou ou falhou ao descodificar.
+    #[error("o motor local falhou: {0}")]
+    Inference(String),
     #[error("demasiados pedidos; tenta daqui a pouco ({0})")]
     RateLimited(String),
     #[error(
@@ -122,15 +133,15 @@ pub trait SttProvider: Send + Sync {
 }
 
 /// O que um ditado precisa para falar com o exterior: quem transcreve e quem
-/// trata o texto (limpeza, comandos, resumos). Hoje são o mesmo cliente do
-/// OpenRouter, mas são coisas diferentes: um motor de transcrição local não tem
-/// de substituir o LLM, e o `stt` já é um `dyn SttProvider` para isso mesmo.
+/// trata o texto (limpeza, comandos, resumos). Com a nuvem são o mesmo cliente do
+/// OpenRouter; com o motor local o `stt` é local e o `llm` só existe se houver
+/// chave (sem ela, ditar funciona mas a limpeza e os comandos ficam de fora).
 ///
 /// `Clone` é barato: são dois `Arc`.
 #[derive(Clone)]
 pub struct Providers {
     pub stt: std::sync::Arc<dyn SttProvider>,
-    pub llm: std::sync::Arc<openrouter::OpenRouter>,
+    pub llm: Option<std::sync::Arc<openrouter::OpenRouter>>,
 }
 
 /// Cliente HTTP partilhado por todos os providers. O `reqwest::Client` mantém um

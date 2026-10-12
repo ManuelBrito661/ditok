@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     hotkey::{self, DEFAULT_COMMAND_SHORTCUT, DEFAULT_SHORTCUT},
+    local_models::LocalModelId,
     stt::openrouter::Transport,
     text::{Replacement, Snippet},
 };
@@ -71,6 +72,14 @@ pub struct Config {
     pub typing_wpm: u32,
     /// Modelo de texto dos resumos; vazio = o da limpeza (`cleanup_model`).
     pub summary_model: String,
+    /// Quem transcreve: o OpenRouter (nuvem) ou o motor local, neste computador
+    /// (ver `stt/local.rs`). Com o local, o áudio não sai daqui e não custa nada; a
+    /// limpeza com IA, os comandos e os resumos continuam a precisar de rede e de chave.
+    pub stt_engine: SttEngine,
+    /// O modelo do motor local (tem de estar descarregado: `local_models.rs`).
+    pub local_model: LocalModelId,
+    /// Minutos sem ditar até o modelo local ser largado da memória (ocupa 0,7 a 2,4 GB).
+    pub local_idle_minutes: u32,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -91,6 +100,17 @@ pub struct Config {
     /// da limpeza (ver `Config::style_for`). Um config.json sem o campo recebe as
     /// regras iniciais (`default_styles`), por isso quem atualiza também as tem.
     pub styles: Vec<StyleRule>,
+}
+
+/// Quem transcreve os ditados. No JSON: "cloud" ou "local".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SttEngine {
+    /// O OpenRouter, com `stt_model`.
+    #[default]
+    Cloud,
+    /// O motor neste computador, com `local_model`.
+    Local,
 }
 
 /// Quanto a limpeza com IA mexe no texto. `rename_all = "lowercase"`: no JSON
@@ -221,6 +241,9 @@ impl Default for Config {
             quick_history_shortcut: String::new(),
             typing_wpm: 40,
             summary_model: String::new(),
+            stt_engine: SttEngine::Cloud,
+            local_model: LocalModelId::default(),
+            local_idle_minutes: 5,
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,
@@ -266,6 +289,8 @@ pub enum ConfigError {
     QuickShortcutClash,
     #[error("a velocidade a escrever tem de estar entre 5 e 300 palavras por minuto")]
     TypingSpeed,
+    #[error("o tempo até largar o modelo local tem de estar entre 1 e 240 minutos")]
+    LocalIdle,
     #[error(
         "o modelo dos resumos tem de ser o slug completo, com \"/\" (ex.: {DEFAULT_CLEANUP_MODEL}), ou ficar vazio"
     )]
@@ -340,6 +365,9 @@ impl Config {
         if !summary.is_empty() && !slug_ok(summary) {
             return Err(ConfigError::SummaryModel);
         }
+        if !(1..=240).contains(&self.local_idle_minutes) {
+            return Err(ConfigError::LocalIdle);
+        }
         if !(5..=300).contains(&self.typing_wpm) {
             return Err(ConfigError::TypingSpeed);
         }
@@ -368,6 +396,15 @@ impl Config {
             }
         }
         Ok(())
+    }
+
+    /// O "modelo" que vai no pedido de transcrição e fica nas métricas e no histórico:
+    /// o do OpenRouter, ou `local/<modelo>` com o motor local.
+    pub fn active_stt_model(&self) -> String {
+        match self.stt_engine {
+            SttEngine::Cloud => self.stt_model.clone(),
+            SttEngine::Local => crate::stt::local::slug(self.local_model),
+        }
     }
 
     /// O modelo dos resumos: o escolhido, ou o da limpeza se estiver vazio.
@@ -645,6 +682,34 @@ mod tests {
             ..Config::default()
         };
         assert!(off.validate().is_ok());
+    }
+
+    #[test]
+    fn local_engine_is_off_by_default_and_names_its_model() {
+        let mut c = Config::default();
+        assert_eq!(
+            c.stt_engine,
+            SttEngine::Cloud,
+            "a nuvem por omissão (também para quem atualiza)"
+        );
+        assert_eq!(c.local_idle_minutes, 5);
+        assert_eq!(c.active_stt_model(), c.stt_model);
+        c.stt_engine = SttEngine::Local;
+        c.local_model = LocalModelId::WhisperSmall;
+        assert_eq!(c.active_stt_model(), "local/whisper-small");
+        assert!(c.validate().is_ok());
+        c.local_idle_minutes = 0;
+        assert!(matches!(c.validate(), Err(ConfigError::LocalIdle)));
+        c.local_idle_minutes = 241;
+        assert!(matches!(c.validate(), Err(ConfigError::LocalIdle)));
+        // Um config.json antigo, sem os campos, lê-se com os valores por omissão.
+        let old: Config = serde_json::from_str(r#"{"sounds": false}"#).unwrap();
+        assert_eq!(old.stt_engine, SttEngine::Cloud);
+        assert_eq!(old.local_model, LocalModelId::ParakeetV3);
+        // E o JSON usa nomes em minúsculas.
+        let json = serde_json::to_value(&c).unwrap();
+        assert_eq!(json["stt_engine"], "local");
+        assert_eq!(json["local_model"], "whisper-small");
     }
 
     #[test]

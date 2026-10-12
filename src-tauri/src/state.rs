@@ -19,14 +19,15 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::Config,
+    config::{Config, SttEngine},
     dictation::DictationEvent,
     files::FileJobs,
     history::HistoryStore,
     hotkey,
+    local_models::ActiveDownload,
     metrics::MetricsStore,
     overlay, secrets,
-    stt::{Providers, openrouter::OpenRouter},
+    stt::{Providers, local::LocalStt, openrouter::OpenRouter},
     text::TextRules,
     tray,
     usage::UsageStore,
@@ -71,6 +72,10 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub metrics: MetricsStore,
     pub usage: UsageStore,
+    /// O motor de transcrição local (o modelo só se carrega quando é preciso).
+    pub local: LocalStt,
+    /// A descarga de um modelo em curso (só uma de cada vez), para a poder cancelar.
+    pub download: Mutex<Option<ActiveDownload>>,
     pub history: HistoryStore,
     /// O ficheiro a ser transcrito (ou o último), ver `files.rs`.
     pub files: FileJobs,
@@ -127,6 +132,8 @@ impl AppState {
             current: RwLock::new(Current::new(config)),
             metrics: MetricsStore::new(dirs.data.clone()),
             usage: UsageStore::new(dirs.data.clone()),
+            local: LocalStt::new(dirs.data.join("models")),
+            download: Mutex::new(None),
             history: HistoryStore::new(dirs.data.clone()),
             files: FileJobs::default(),
             config_dir: dirs.config,
@@ -147,7 +154,9 @@ impl AppState {
         let config = self.config();
         let shortcut = config.shortcut.clone();
         Status {
-            key_missing: !self.key_set.load(Ordering::Relaxed),
+            // Com o motor local ditar não precisa de chave (só a limpeza e os comandos).
+            key_missing: config.stt_engine == SttEngine::Cloud
+                && !self.key_set.load(Ordering::Relaxed),
             shortcut_ok: self.shortcut_ok(),
             shortcut_label: hotkey::pretty(&shortcut),
             shortcut,
@@ -235,13 +244,33 @@ impl AppState {
         Ok(Arc::clone(&guard.config))
     }
 
-    /// Os clientes de um ditado (transcrição e texto). Sem chave, `Ok(None)`.
+    /// Os clientes de um ditado (transcrição e texto). Com a nuvem, sem chave, `None`;
+    /// com o motor local há sempre `stt`, e `llm` só com chave.
+    pub fn models_dir(&self) -> PathBuf {
+        self.data_dir.join("models")
+    }
+
     pub fn load_providers(&self) -> Result<Option<Providers>, secrets::SecretError> {
-        Ok(self.load_openrouter()?.map(|llm| Providers {
-            // O mesmo cliente a fazer de `dyn SttProvider` (coerção de `Arc`).
-            stt: llm.clone(),
-            llm,
-        }))
+        let config = self.config();
+        let llm = self.load_openrouter()?;
+        Ok(match config.stt_engine {
+            SttEngine::Cloud => llm.map(|llm| Providers {
+                // O mesmo cliente a fazer de `dyn SttProvider` (coerção de `Arc`).
+                stt: llm.clone(),
+                llm: Some(llm),
+            }),
+            SttEngine::Local => {
+                self.local.configure(
+                    config.local_model,
+                    config.language.as_deref(),
+                    config.local_idle_minutes,
+                );
+                Some(Providers {
+                    stt: Arc::new(self.local.clone()),
+                    llm,
+                })
+            }
+        })
     }
 
     /// Cria o cliente do OpenRouter se a chave existir no cofre. `Ok(None)` = sem chave.

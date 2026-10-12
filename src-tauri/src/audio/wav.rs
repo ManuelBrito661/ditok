@@ -41,6 +41,57 @@ fn f32_to_i16(s: f32) -> i16 {
     (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
 }
 
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(not(feature = "local"), allow(dead_code))] // só o motor local descodifica WAV
+pub enum WavError {
+    #[error("o áudio não é um WAV")]
+    NotWav,
+    #[error("o WAV tem de ser PCM de 16 bits e mono")]
+    Unsupported,
+    #[error("o WAV está cortado")]
+    Truncated,
+}
+
+/// O contrário de `encode_pcm16_mono`: WAV PCM16 mono → amostras f32 (-1.0..1.0) e
+/// taxa. Só aceita o que o Ditok escreve (e o que o histórico guarda); percorre os
+/// blocos em vez de assumir um cabeçalho de 44 bytes, para tolerar blocos extra.
+#[cfg_attr(not(feature = "local"), allow(dead_code))] // só o motor local descodifica WAV
+pub fn decode_pcm16_mono(wav: &[u8]) -> Result<(Vec<f32>, u32), WavError> {
+    if wav.len() < 12 || &wav[0..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
+        return Err(WavError::NotWav);
+    }
+    let mut rate = None;
+    let mut at = 12;
+    while at + 8 <= wav.len() {
+        let id = &wav[at..at + 4];
+        let size =
+            u32::from_le_bytes([wav[at + 4], wav[at + 5], wav[at + 6], wav[at + 7]]) as usize;
+        let body = at + 8;
+        if id == b"fmt " {
+            let fmt = wav.get(body..body + 16).ok_or(WavError::Truncated)?;
+            let format = u16::from_le_bytes([fmt[0], fmt[1]]);
+            let channels = u16::from_le_bytes([fmt[2], fmt[3]]);
+            let bits = u16::from_le_bytes([fmt[14], fmt[15]]);
+            if format != 1 || channels != 1 || bits != 16 {
+                return Err(WavError::Unsupported);
+            }
+            rate = Some(u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]));
+        } else if id == b"data" {
+            let rate = rate.ok_or(WavError::NotWav)?;
+            // Um ficheiro cortado a meio: lê-se o que há (um número par de bytes).
+            let end = (body + size).min(wav.len());
+            let samples = wav[body..end]
+                .chunks_exact(2)
+                .map(|c| f32::from(i16::from_le_bytes([c[0], c[1]])) / 32768.0)
+                .collect();
+            return Ok((samples, rate));
+        }
+        // Os blocos têm tamanho par (com um byte de enchimento se for ímpar).
+        at = body + size + (size & 1);
+    }
+    Err(WavError::Truncated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +127,51 @@ mod tests {
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
         assert_eq!(s, vec![0, 32767, -32767, 32767, -32767, 16383, 0]);
+    }
+
+    #[test]
+    fn decode_is_the_inverse_of_encode() {
+        let original = [0.0, 0.5, -0.5, 0.999, -0.999, 0.25];
+        let wav = encode_pcm16_mono(&original, 16_000);
+        let (samples, rate) = decode_pcm16_mono(&wav).unwrap();
+        assert_eq!(rate, 16_000);
+        assert_eq!(samples.len(), original.len());
+        for (a, b) in samples.iter().zip(original) {
+            assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn decode_rejects_other_formats() {
+        assert_eq!(decode_pcm16_mono(b"nao sou um wav"), Err(WavError::NotWav));
+        assert_eq!(decode_pcm16_mono(b""), Err(WavError::NotWav));
+        // Estéreo (o canal está no byte 22 do cabeçalho).
+        let mut stereo = encode_pcm16_mono(&[0.0; 4], 16_000).to_vec();
+        stereo[22] = 2;
+        assert_eq!(decode_pcm16_mono(&stereo), Err(WavError::Unsupported));
+        // 8 bits por amostra (byte 34).
+        let mut eight = encode_pcm16_mono(&[0.0; 4], 16_000).to_vec();
+        eight[34] = 8;
+        assert_eq!(decode_pcm16_mono(&eight), Err(WavError::Unsupported));
+    }
+
+    #[test]
+    fn decode_reads_what_is_there_of_a_cut_file_and_skips_extra_chunks() {
+        let wav = encode_pcm16_mono(&[0.5; 100], 16_000).to_vec();
+        // Cortado a meio de uma amostra: lê-se um número inteiro de amostras.
+        let cut = &wav[..44 + 51];
+        let (samples, _) = decode_pcm16_mono(cut).unwrap();
+        assert_eq!(samples.len(), 25);
+        // Um bloco "LIST" entre o fmt e os dados.
+        let mut with_list = wav[..36].to_vec();
+        with_list.extend_from_slice(b"LIST");
+        with_list.extend_from_slice(&3u32.to_le_bytes());
+        with_list.extend_from_slice(&[1, 2, 3, 0]); // 3 bytes + 1 de enchimento
+        with_list.extend_from_slice(&wav[36..]);
+        let (samples, rate) = decode_pcm16_mono(&with_list).unwrap();
+        assert_eq!((samples.len(), rate), (100, 16_000));
+        // Sem bloco de dados.
+        assert_eq!(decode_pcm16_mono(&wav[..36]), Err(WavError::Truncated));
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod files;
 mod focus;
 mod history;
 mod hotkey;
+mod local_models;
 mod logging;
 mod metrics;
 mod modkeys;
@@ -261,6 +262,10 @@ pub fn run() {
             commands::correct_history_entry,
             commands::summarize_text,
             commands::file_save_summary,
+            commands::local_models_list,
+            commands::local_model_download,
+            commands::local_model_cancel,
+            commands::local_model_delete,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,

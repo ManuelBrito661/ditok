@@ -286,8 +286,9 @@ async fn transcribe_and_paste(
     // O pipeline fala com o STT através do trait; o tipo concreto só é preciso
     // para a limpeza, que é uma funcionalidade específica do OpenRouter.
     let stt: &dyn SttProvider = &*providers.stt;
+    let stt_model = config.active_stt_model();
     let req = SttRequest {
-        model: &config.stt_model,
+        model: &stt_model,
         language: config.language.as_deref(),
     };
     let mut m = new_metrics(stt, &config, &rec, release_to_wav, false);
@@ -298,7 +299,7 @@ async fn transcribe_and_paste(
 
     let outcome = match stt.transcribe(rec.wav.clone(), &req).await {
         Err(e) => {
-            tracing::error!(error = %e, model = %config.stt_model, "transcrição falhou");
+            tracing::error!(error = %e, model = %stt_model, "transcrição falhou");
             state.notify(&format!("Transcrição falhou: {e}"));
             m.error = Some(e.to_string());
             Outcome::Failed {
@@ -331,9 +332,10 @@ async fn transcribe_and_paste(
                 applied = local.applied;
                 let cleaned = if let Some(plan) = plan
                     && let Some(input) = local.cleanup_input()
+                    && let Some(llm) = providers.llm.as_deref()
                 {
                     clean_with_llm(
-                        &providers.llm,
+                        llm,
                         &config.cleanup_model,
                         plan,
                         &rules,
@@ -380,7 +382,7 @@ async fn transcribe_and_paste(
                         at: m.at,
                         raw_text: (text != raw).then_some(raw),
                         text,
-                        model: config.stt_model.clone(),
+                        model: config.active_stt_model(),
                         audio_ms: m.audio_ms,
                         total_ms: m.total_ms,
                         pasted: matches!(outcome, Outcome::Pasted),
@@ -473,7 +475,7 @@ fn new_metrics(
     DictationMetrics {
         at: metrics::now(),
         provider: stt.name(),
-        model: config.stt_model.clone(),
+        model: config.active_stt_model(),
         transport: None,
         audio_ms: ms(rec.audio),
         wav_bytes: rec.wav.len(),
@@ -525,10 +527,17 @@ pub async fn command(
         state.notify("O modo comando precisa de um modelo de texto: escolhe um em Definições → Limpeza com IA.");
         return Outcome::failed(FailReason::NoModel);
     }
+    // Com o motor local pode não haver chave, e o comando precisa do LLM.
+    let Some(llm) = providers.llm.clone() else {
+        tracing::warn!("modo comando sem chave do OpenRouter");
+        state.notify(crate::state::MISSING_KEY);
+        return Outcome::failed(FailReason::NoKey);
+    };
 
     let stt: &dyn SttProvider = &*providers.stt;
+    let stt_model = config.active_stt_model();
     let req = SttRequest {
-        model: &config.stt_model,
+        model: &stt_model,
         language: config.language.as_deref(),
     };
     let mut m = new_metrics(stt, &config, &rec, release_to_wav, true);
@@ -543,7 +552,7 @@ pub async fn command(
 
     let outcome = match transcribed {
         Err(e) => {
-            tracing::error!(error = %e, model = %config.stt_model, "transcrição do comando falhou");
+            tracing::error!(error = %e, model = %stt_model, "transcrição do comando falhou");
             state.notify(&format!("Transcrição falhou: {e}"));
             m.error = Some(e.to_string());
             Outcome::failed(FailReason::from_stt(&e))
@@ -581,8 +590,7 @@ pub async fn command(
                     selection_chars = chars,
                     "a pedir o comando ao LLM"
                 );
-                match command::run(&providers.llm, &model, &instruction, selected.as_deref()).await
-                {
+                match command::run(&llm, &model, &instruction, selected.as_deref()).await {
                     Err(e) => {
                         tracing::error!(error = %e, model, "comando falhou");
                         state.notify(&format!("O comando falhou: {e}"));
@@ -710,14 +718,15 @@ pub async fn reprocess(
     let plan = cleanup::plan(config.cleanup_level, style);
 
     let stt: &dyn SttProvider = &*providers.stt;
+    let stt_model = config.active_stt_model();
     let req = SttRequest {
-        model: &config.stt_model,
+        model: &stt_model,
         language: config.language.as_deref(),
     };
     let mut m = DictationMetrics {
         at: metrics::now(),
         provider: stt.name(),
-        model: config.stt_model.clone(),
+        model: config.active_stt_model(),
         transport: None,
         audio_ms: original.audio_ms,
         wav_bytes: wav.len(),
@@ -741,7 +750,7 @@ pub async fn reprocess(
 
     let result = match stt.transcribe(wav, &req).await {
         Err(e) => {
-            tracing::error!(error = %e, model = %config.stt_model, "reprocessamento: transcrição falhou");
+            tracing::error!(error = %e, model = %stt_model, "reprocessamento: transcrição falhou");
             m.error = Some(e.to_string());
             Err(format!("Transcrição falhou: {e}"))
         }
@@ -757,9 +766,10 @@ pub async fn reprocess(
                 let local = rules.apply_styled(&raw, style);
                 let cleaned = if let Some(plan) = plan
                     && let Some(input) = local.cleanup_input()
+                    && let Some(llm) = providers.llm.as_deref()
                 {
                     clean_with_llm(
-                        &providers.llm,
+                        llm,
                         &config.cleanup_model,
                         plan,
                         &rules,
@@ -777,7 +787,7 @@ pub async fn reprocess(
                 Ok(Reprocessed {
                     raw_text: (text != raw).then_some(raw),
                     text,
-                    model: config.stt_model.clone(),
+                    model: config.active_stt_model(),
                     total_ms: ms(started.elapsed()),
                 })
             }

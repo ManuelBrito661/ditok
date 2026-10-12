@@ -172,7 +172,7 @@ pub fn start(
     let view = JobView {
         name: file_name(&path),
         status: Status::Running,
-        model: config.stt_model.clone(),
+        model: config.active_stt_model(),
         total_s: info.duration.map(|d| d.as_secs_f64()),
         done_s: 0.0,
         cost_usd: 0.0,
@@ -215,7 +215,7 @@ async fn run(
     let outcome = transcribe_file(
         Arc::clone(&stt),
         path.clone(),
-        config.stt_model.clone(),
+        config.active_stt_model(),
         config.language.clone(),
         cancel,
         move |p| {
@@ -307,7 +307,7 @@ async fn run(
     let m = DictationMetrics {
         at: metrics::now(),
         provider: stt.name(),
-        model: config.stt_model.clone(),
+        model: config.active_stt_model(),
         transport: None,
         audio_ms: outcome.sent.as_millis() as u64,
         wav_bytes: 0,

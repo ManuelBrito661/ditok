@@ -377,6 +377,14 @@ impl Orchestrator {
             self.show_failure(FailReason::NoKey, false);
             return;
         };
+        // Com o motor local pode não haver chave: ditar funciona, mas o modo comando
+        // precisa do LLM. Melhor dizê-lo antes de a pessoa falar.
+        if mode == Mode::Command && provider.llm.is_none() {
+            self.machine.handle(Input::Cancel, at);
+            self.deps.state.notify(MISSING_KEY);
+            self.show_failure(FailReason::NoKey, false);
+            return;
+        }
         // A janela onde estás a escrever, antes de o Ditok fazer o que quer que seja.
         let window = focus::foreground();
         // Primeiro o microfone (é o que tem latência), depois o som, a
