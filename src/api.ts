@@ -206,6 +206,8 @@ export interface HistoryEntry {
   style?: Style | null;
   /** Modo comando: a instrução falada. Aí `raw_text` é o texto selecionado que foi substituído. */
   instruction?: string | null;
+  /** O texto foi corrigido à mão (history.rs, `corrected`); ausente quando não. */
+  corrected?: boolean;
 }
 
 /** Uma entrada como `getHistory` a devolve (history.rs, HistoryItem). */
@@ -269,6 +271,7 @@ export const api = {
   restoreHistoryEntry: (entry: HistoryEntry) => invoke<void>("restore_history_entry", { entry }),
   /** Volta a transcrever e a limpar o áudio guardado; devolve a entrada com o texto novo. */
   reprocessHistoryEntry: (id: string) => invoke<HistoryEntry>("reprocess_history_entry", { id }),
+  correctHistoryEntry: (id: string, text: string) => invoke<HistoryEntry>("correct_history_entry", { id, text }),
   /** As últimas apps onde ditaste nesta sessão (mais recente primeiro). */
   recentApps: () => invoke<string[]>("recent_apps"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),

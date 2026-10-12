@@ -18,8 +18,9 @@ import {
   timeOfDay,
   usd,
 } from "./format";
+import { addDictionaryEntry, countWordIn, suggestFrom } from "./dictionary-add";
 import { openSettings } from "./settings-dialog";
-import { $, app, onViewChange, save, toast } from "./store";
+import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 
 /** Quantos ditados se desenham de cada vez (com "Mostrar mais" para o resto). */
 const PAGE = 200;
@@ -95,6 +96,7 @@ async function remove(h: HistoryItem) {
   }
   history = history.filter((x) => x.id !== h.id);
   openRaw.delete(h.id);
+  if (editing?.id === h.id) editing = null;
   renderHistory();
   renderStats();
   if (!removed) return; // já tinha sido apagado (ex.: noutra ação): nada para desfazer
@@ -117,6 +119,17 @@ async function remove(h: HistoryItem) {
 }
 
 async function reprocess(h: HistoryItem) {
+  // O texto novo substitui o corrigido à mão: pergunta antes.
+  if (
+    h.corrected &&
+    !(await confirmDanger(
+      "Reprocessar substitui a tua correção",
+      "O texto que corrigiste à mão vai ser trocado pelo da nova transcrição.",
+      "Reprocessar",
+    ))
+  ) {
+    return;
+  }
   reprocessing.add(h.id);
   renderHistory();
   try {
@@ -129,6 +142,129 @@ async function reprocess(h: HistoryItem) {
     reprocessing.delete(h.id);
     renderHistory();
   }
+}
+
+
+/** O ditado que está a ser corrigido (só um de cada vez), o que já escreveste nele e,
+ *  se abriste "Ensinar uma palavra", os dois campos dessa pequena caixa. */
+let editing: { id: string; draft: string; teach: { from: string; to: string } | null } | null = null;
+
+function startEdit(h: HistoryItem) {
+  editing = { id: h.id, draft: h.text, teach: null };
+  renderHistory();
+  document.querySelector<HTMLTextAreaElement>(`.entry[data-id="${CSS.escape(h.id)}"] textarea`)?.focus();
+}
+
+function cancelEdit() {
+  const id = editing?.id;
+  editing = null;
+  renderHistory();
+  // O editor desapareceu: o foco volta ao botão "Corrigir" do mesmo ditado.
+  if (id) document.querySelector<HTMLElement>(`.entry[data-id="${CSS.escape(id)}"] [data-action="edit"]`)?.focus();
+}
+
+async function saveEdit(h: HistoryItem) {
+  if (!editing || editing.id !== h.id) return;
+  const text = editing.draft.trim();
+  if (text === h.text.trim()) return cancelEdit(); // nada mudou
+  try {
+    const updated = await api.correctHistoryEntry(h.id, text);
+    editing = null;
+    // `updated` não traz o `has_audio`: junta-se ao que já se sabia.
+    history = history.map((x) => (x.id === h.id ? { ...x, ...updated } : x));
+    renderHistory();
+    toast("Texto corrigido");
+    document.querySelector<HTMLElement>(`.entry[data-id="${CSS.escape(h.id)}"] [data-action="edit"]`)?.focus();
+  } catch (e) {
+    toast(`Não consegui guardar: ${errorText(e)}`, "error");
+  }
+}
+
+/** O editor inline: o texto numa caixa, "Guardar" e "Cancelar", e uma pequena caixa
+ *  para ensinar ao dicionário uma palavra que o modelo escreve mal. */
+function editorFor(h: HistoryItem): HTMLDivElement {
+  const state = editing!;
+  const box = document.createElement("div");
+  box.className = "entry-edit";
+
+  const area = document.createElement("textarea");
+  area.value = state.draft; // .value: o texto nunca é interpretado como HTML
+  area.rows = Math.min(10, Math.max(3, Math.ceil(state.draft.length / 70)));
+  area.dataset.action = "edit-text";
+  area.setAttribute("aria-label", "Texto corrigido");
+  area.addEventListener("input", () => (state.draft = area.value));
+  area.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      void saveEdit(h);
+    }
+  });
+
+  const buttons = document.createElement("div");
+  buttons.className = "entry-edit-buttons";
+  const saveButton = smallButton("Guardar", "edit-save", "primary small");
+  saveButton.addEventListener("click", () => void saveEdit(h));
+  const cancel = smallButton("Cancelar", "edit-cancel");
+  cancel.addEventListener("click", cancelEdit);
+  const teach = smallButton("Ensinar uma palavra…", "edit-teach", "secondary small");
+  teach.setAttribute("aria-expanded", String(!!state.teach));
+  teach.addEventListener("click", () => {
+    if (state.teach) {
+      state.teach = null;
+    } else {
+      // A palavra que tiveres selecionado na caixa de cima é a que "deve ficar".
+      const { selectionStart: start, selectionEnd: end } = area;
+      state.teach = { from: suggestFrom(h.text, area.value, start, end), to: area.value.slice(start, end).trim() };
+    }
+    renderHistory();
+  });
+  buttons.append(saveButton, cancel, teach);
+  box.append(area, buttons);
+
+  const teachState = state.teach;
+  if (teachState) {
+    const panel = document.createElement("div");
+    panel.className = "entry-teach";
+    const hint = document.createElement("p");
+    hint.className = "muted";
+    hint.textContent =
+      "À esquerda, como o modelo escreveu (opcional: vazio só acerta as maiúsculas); à direita, como deve ficar. " +
+      "Seleciona a palavra certa no texto antes de abrir isto e eu preencho-a.";
+    const row = document.createElement("div");
+    row.className = "pair add-row";
+    const from = document.createElement("input");
+    from.placeholder = "Como saiu (opcional)";
+    from.setAttribute("aria-label", "Como o modelo escreveu");
+    from.value = teachState.from;
+    from.spellcheck = false;
+    from.addEventListener("input", () => (teachState.from = from.value));
+    const arrow = document.createElement("span");
+    arrow.className = "arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "→";
+    const to = document.createElement("input");
+    to.placeholder = "Como deve ficar";
+    to.setAttribute("aria-label", "Como deve ficar escrito");
+    to.value = teachState.to;
+    to.spellcheck = false;
+    to.addEventListener("input", () => (teachState.to = to.value));
+    const add = smallButton("Adicionar ao dicionário", "teach-add", "primary small");
+    add.addEventListener("click", async () => {
+      // Os outros ditados: este ainda tem a palavra errada no texto guardado.
+      const others = history.filter((x) => x.id !== h.id).map((x) => x.text);
+      if (await addDictionaryEntry(teachState.from, teachState.to, (form) => countWordIn(others, form))) {
+        state.teach = null;
+        renderHistory();
+      }
+    });
+    row.append(from, arrow, to, add);
+    panel.append(hint, row);
+    box.append(panel);
+  }
+  return box;
 }
 
 function smallButton(label: string, action: string, className = "ghost small"): HTMLButtonElement {
@@ -153,7 +289,7 @@ function entryRow(h: HistoryItem): HTMLLIElement {
   body.className = "entry-body";
   const text = document.createElement("p");
   text.textContent = h.text; // textContent: o texto ditado nunca é interpretado como HTML
-  body.append(text);
+  body.append(editing?.id === h.id ? editorFor(h) : text);
   // Discreto, mas à vista: quanto tempo demorou e com que modelo.
   const meta = document.createElement("p");
   meta.className = "entry-meta";
@@ -163,6 +299,7 @@ function entryRow(h: HistoryItem): HTMLLIElement {
   if (h.style && h.style !== "default") parts.push(STYLE_LABEL[h.style]);
   // Um comando diz qual foi a instrução, à frente de tudo.
   if (h.instruction) parts.unshift(`Comando: ${h.instruction}`);
+  if (h.corrected) parts.push("corrigido");
   meta.textContent = parts.join(" · ");
   const where = h.instruction ? "comando em" : "ditado em";
   meta.title = h.app ? `${h.model} · ${where} ${h.app}` : h.model;
@@ -200,7 +337,14 @@ function entryRow(h: HistoryItem): HTMLLIElement {
     panel.append(label, raw, copyRaw);
     body.append(panel);
   }
-  // Só os ditados se reprocessam: um comando precisava da mesma seleção.
+  // Só os ditados se corrigem e reprocessam: um comando vem de uma instrução e
+  // precisava da mesma seleção.
+  if (!h.instruction && editing?.id !== h.id) {
+    const edit = smallButton("Corrigir", "edit");
+    edit.title = "Corrigir o texto à mão (e ensinar palavras ao dicionário)";
+    edit.addEventListener("click", () => startEdit(h));
+    links.append(edit);
+  }
   if (h.has_audio && !h.instruction) {
     const busy = reprocessing.has(h.id);
     const again = smallButton(busy ? "A reprocessar…" : "Reprocessar", "reprocess");

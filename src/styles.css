@@ -999,3 +999,13 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .usage-apps .pairs-empty { display: block; padding: 8px 20px; }
 .usage-tools { margin-top: 12px; }
 .usage-tools input[type="number"] { width: 84px; }
+
+/* ---------------------------------------------------------------- corrigir um ditado */
+.entry-edit { display: grid; gap: 8px; margin: 2px 0 4px; }
+.entry-edit textarea { width: 100%; min-height: 72px; resize: vertical; }
+.entry-edit-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.entry-teach { display: grid; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.entry-teach p { margin: 0; font-size: var(--fs-sm); }
+.entry-teach .pair { grid-template-columns: minmax(0, 1fr); padding: 8px; border-radius: var(--radius-sm); }
+.entry-teach .arrow { display: none; }
+.entry-teach .pair button { justify-self: start; }
