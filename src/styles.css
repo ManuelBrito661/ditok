@@ -1071,6 +1071,7 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .notes-test .row-desc { margin: 0; }
 .notes-speakers { display: grid; gap: 6px; padding-top: 4px; }
 .notes-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.beta-badge { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.04em; color: var(--muted); vertical-align: middle; }
 
 /* ---------------------------------------------------------------- notas: vista da transcrição */
 .nd-names { font-size: var(--fs-sm); }

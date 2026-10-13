@@ -118,6 +118,8 @@ No fim, cada sessão fica numa pasta com a transcrição e os metadados, e pode 
 
 "Outros" não é separado por pessoa por omissão. Se marcares **Separar quem fala em "Outros" (Orador 1, 2…)**, no fim da reunião um modelo de voz local agrupa os trechos parecidos. Precisa dos modelos de voz (descarregados à parte) e só existe nos builds com o motor local (ver abaixo).
 
+**BETA: filtro de fala.** Com **Ignorar sons sem fala (teclado, tosse, música)** ligado, cada enunciado passa pelo Silero VAD (embebido na app) antes de ser transcrito, e os que não têm fala são descartados. Só existe nos builds com o motor local. Pode falhar em canto e música com voz, porque aí há fala de facto.
+
 ### Transcrever ficheiros
 
 Arrasta a gravação de uma aula, de uma reunião ou um vídeo para a janela (ou usa **Ficheiros → Escolher ficheiro…**). Funciona com mp3, m4a, aac, wav, flac, ogg (vorbis), mp4, mov, mkv e outros contentores de áudio ou vídeo comuns. Opus (notas de voz do WhatsApp, webm) ainda não.

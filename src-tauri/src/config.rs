@@ -87,6 +87,10 @@ pub struct Config {
     pub notes_speakers: bool,
     /// O modelo que separa as vozes (ver `notes/speakers.rs`). Tem de estar descarregado.
     pub notes_speaker_model: crate::notes::speakers::Model,
+    /// BETA. Nas Notas, descartar os enunciados sem fala (teclado, tosse, música sem voz)
+    /// antes de os transcrever, com o Silero VAD (ver `notes/speech_gate.rs`). Precisa do
+    /// motor local.
+    pub notes_speech_gate: bool,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -258,6 +262,7 @@ impl Default for Config {
             notes_consent: false,
             notes_speakers: false,
             notes_speaker_model: Default::default(),
+            notes_speech_gate: false,
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,

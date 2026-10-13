@@ -310,6 +310,7 @@ function setupTest() {
 
 export function renderNotesHint() {
   void renderSpeakers();
+  void renderSpeechGate();
   void renderOutputDevices();
   const c = app.view.config;
   $("notes-cost").textContent =
@@ -683,6 +684,26 @@ async function renderSpeakers() {
       : `Corre neste computador, no fim da reunião (uns segundos), com o modelo ${chosen.label}. Funciona melhor com poucas pessoas e sem vozes a sobrepor-se.`;
 }
 
+// BETA: o filtro usa o Silero VAD, que vem embebido no motor local. Só se liga com ele.
+async function renderSpeechGate() {
+  const s = await speakers.list().catch(() => null);
+  const on = $<HTMLInputElement>("notes-speech-on");
+  on.disabled = !s?.available;
+  on.checked = !!s?.available && app.view.config.notes_speech_gate;
+  $("notes-speech-hint").textContent = !s?.available
+    ? "Esta versão do Ditok não inclui o motor local, que traz o filtro."
+    : "Descarta os enunciados sem fala antes de os transcrever, com o Silero VAD. Pode falhar em canto e música com voz.";
+}
+
+function setupSpeechGate() {
+  $("notes-speech-on").addEventListener("change", async (e) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    if (await save({ notes_speech_gate: checked })) return;
+    (e.target as HTMLInputElement).checked = !checked;
+  });
+  onViewChange(() => void renderSpeechGate());
+}
+
 function setupSpeakers() {
   $("notes-speakers-on").addEventListener("change", async (e) => {
     const checked = (e.target as HTMLInputElement).checked;
@@ -719,6 +740,7 @@ export async function setupNotes(): Promise<void> {
   await onNotesLevel((e) => setLevel(e.track, e.level));
 
   setupSpeakers();
+  setupSpeechGate();
   setupOutputDevice();
   setupTest();
   await renderSpeakers();

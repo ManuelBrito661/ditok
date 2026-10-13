@@ -371,6 +371,9 @@ async fn pump(
     let rules = state.text_rules();
     let model = meta.model.clone();
     let language = config.language.clone();
+    // BETA: com o filtro ligado, cada enunciado passa pelo Silero antes do STT.
+    let speech_dir =
+        (config.notes_speech_gate && super::speech_gate::AVAILABLE).then(|| state.models_dir());
     let gate = Arc::new(Semaphore::new(PARALLEL));
     let mut tasks: JoinSet<()> = JoinSet::new();
 
@@ -392,7 +395,8 @@ async fn pump(
                         .await;
                     });
                 }
-                let wav = wav::encode_pcm16_mono(&u.samples, TARGET_RATE);
+                let counted = Arc::clone(&state);
+                let speech_dir = speech_dir.clone();
                 let job = UtteranceJob {
                     state: Arc::clone(&state),
                     stt: Arc::clone(&stt),
@@ -403,6 +407,32 @@ async fn pump(
                 };
                 let gate = Arc::clone(&gate);
                 tasks.spawn(async move {
+                    // O filtro (BETA) corre antes do pedido: um enunciado sem fala não se
+                    // transcreve nem se paga.
+                    let u = match speech_dir {
+                        None => u,
+                        Some(dir) => {
+                            let Ok((u, speech)) = tauri::async_runtime::spawn_blocking(move || {
+                                let speech = super::speech_gate::has_speech(&dir, &u.samples);
+                                (u, speech)
+                            })
+                            .await
+                            else {
+                                return;
+                            };
+                            if !speech {
+                                tracing::debug!(
+                                    start_ms = u.start_ms,
+                                    "enunciado sem fala, não transcrito"
+                                );
+                                let audio_ms = u.end_ms.saturating_sub(u.start_ms);
+                                counted.notes.update(|a| a.audio_ms += audio_ms);
+                                return;
+                            }
+                            u
+                        }
+                    };
+                    let wav = wav::encode_pcm16_mono(&u.samples, TARGET_RATE);
                     // O pedido espera a sua vez aqui, sem travar a receção de eventos.
                     let Ok(_permit) = gate.acquire().await else {
                         return;

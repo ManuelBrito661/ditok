@@ -43,6 +43,8 @@ export interface Config {
   notes_speakers: boolean;
   /** Que modelo separa as vozes nas Notas. */
   notes_speaker_model: SpeakerModelId;
+  /** BETA: descartar os enunciados sem fala (Silero VAD) antes de os transcrever. */
+  notes_speech_gate: boolean;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;

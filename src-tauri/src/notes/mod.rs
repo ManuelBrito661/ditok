@@ -3,6 +3,7 @@
 //!
 //! - `segmenter`: corta um fluxo de áudio em enunciados, nas pausas (puro, testável).
 //! - `capture`: abre as duas faixas (microfone e loopback) e alimenta os segmentadores.
+//! - `speech_gate` (BETA): descarta os enunciados sem fala, com o Silero VAD, antes do STT.
 
 pub mod capture;
 pub mod check;
@@ -11,4 +12,5 @@ pub mod probe;
 pub mod segmenter;
 pub mod session;
 pub mod speakers;
+pub mod speech_gate;
 pub mod store;
