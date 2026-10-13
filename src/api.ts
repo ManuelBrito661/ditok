@@ -41,6 +41,8 @@ export interface Config {
   local_idle_minutes: number;
   notes_consent: boolean;
   notes_speakers: boolean;
+  /** Que modelo separa as vozes nas Notas. */
+  notes_speaker_model: SpeakerModelId;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -562,23 +564,40 @@ export function onNotesTest(handler: (e: NotesTestEvent) => void): Promise<Unlis
 
 // ---------------------------------------------------------------- oradores (notes/speakers.rs)
 
+export type SpeakerModelId = "wespeaker" | "titanet-small" | "titanet-large";
+
+/** Um modelo de oradores (commands.rs, SpeakerModelView). */
+export interface SpeakerModel {
+  id: SpeakerModelId;
+  label: string;
+  description: string;
+  size_bytes: number;
+  installed: boolean;
+}
+
 export interface SpeakersView {
   /** Esta versão inclui o motor local (que também separa oradores)? */
   available: boolean;
-  installed: boolean;
-  size_bytes: number;
-  downloading: boolean;
+  /** O modelo escolhido nas definições: é o que as Notas usam. */
+  selected: SpeakerModelId;
+  models: SpeakerModel[];
+  downloading: SpeakerModelId | null;
+}
+
+/** O progresso de uma descarga de oradores: o de uma descarga local mais o modelo. */
+export interface SpeakersProgress extends Omit<LocalModelProgress, "id"> {
+  model: SpeakerModelId;
 }
 
 export const speakers = {
-  status: () => invoke<SpeakersView>("speakers_status"),
-  download: () => invoke<void>("speakers_download"),
+  list: () => invoke<SpeakersView>("speakers_list"),
+  download: (id: SpeakerModelId) => invoke<void>("speakers_download", { id }),
   cancel: () => invoke<void>("local_model_cancel"),
-  remove: () => invoke<void>("speakers_delete"),
+  remove: (id: SpeakerModelId) => invoke<void>("speakers_delete", { id }),
   rename: (id: string, speaker: number, name: string) =>
     invoke<NotesMeta>("notes_rename_speaker", { id, speaker, name }),
 };
 
-export function onSpeakersProgress(handler: (p: Omit<LocalModelProgress, "id">) => void): Promise<UnlistenFn> {
-  return listen<Omit<LocalModelProgress, "id">>("speakers:progress", (e) => handler(e.payload));
+export function onSpeakersProgress(handler: (p: SpeakersProgress) => void): Promise<UnlistenFn> {
+  return listen<SpeakersProgress>("speakers:progress", (e) => handler(e.payload));
 }

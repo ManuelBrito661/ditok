@@ -10,7 +10,6 @@ import {
   onNotesLine,
   onNotesState,
   onNotesTest,
-  onSpeakersProgress,
   speakers,
   summaries,
   type InputDevice,
@@ -22,8 +21,8 @@ import {
   type NotesState,
   type SummaryKind,
 } from "./api";
-import { duration, megabytes, usd } from "./format";
-import { $, app, confirmDanger, save, toast } from "./store";
+import { duration, usd } from "./format";
+import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 import { describeResult, describeText, SUMMARY_KINDS } from "./summary";
 
 let state: NotesState | null = null;
@@ -661,31 +660,27 @@ async function renameSpeaker(n: number, name: string) {
   }
 }
 
-// ---------------------------------------------------------------- modelos de oradores
+// ---------------------------------------------------------------- oradores
+// Os modelos (escolher, descarregar, apagar) estão nas Definições › Transcrição
+// (speakers-engine.ts). Aqui só se liga e desliga a separação.
 
-async function renderSpeakers(progress?: string) {
-  const s = await speakers.status().catch(() => null);
+async function renderSpeakers() {
+  const s = await speakers.list().catch(() => null);
   const box = $("notes-speakers");
   if (!s) {
     box.hidden = true;
     return;
   }
+  const chosen = s.models.find((m) => m.id === s.selected);
+  const ready = s.available && !!chosen?.installed;
   const on = $<HTMLInputElement>("notes-speakers-on");
-  const get = $<HTMLButtonElement>("notes-speakers-get");
-  const usable = s.available && s.installed;
-  on.disabled = !usable;
-  on.checked = usable && app.view.config.notes_speakers;
-  get.hidden = !s.available || s.installed || s.downloading;
-  get.textContent = `Descarregar modelos (${megabytes(s.size_bytes)})`;
-  $("notes-speakers-cancel").hidden = !s.downloading;
-  $("notes-speakers-del").hidden = !usable;
+  on.disabled = !ready;
+  on.checked = ready && app.view.config.notes_speakers;
   $("notes-speakers-hint").textContent = !s.available
     ? "Esta versão do Ditok não inclui o motor local, que é o que separa as vozes."
-    : s.downloading
-      ? (progress ?? "A descarregar os modelos…")
-      : s.installed
-        ? "Corre neste computador, no fim da reunião (uns segundos). Funciona melhor com poucas pessoas e sem vozes a sobrepor-se."
-        : "Precisa de dois modelos pequenos, que ficam neste computador. Não é perfeito: pode confundir vozes parecidas.";
+    : !chosen?.installed
+      ? `Falta o modelo ${chosen?.label ?? ""}: descarrega-o nas Definições, em Transcrição.`
+      : `Corre neste computador, no fim da reunião (uns segundos), com o modelo ${chosen.label}. Funciona melhor com poucas pessoas e sem vozes a sobrepor-se.`;
 }
 
 function setupSpeakers() {
@@ -694,33 +689,7 @@ function setupSpeakers() {
     if (await save({ notes_speakers: checked })) return;
     (e.target as HTMLInputElement).checked = !checked;
   });
-  $("notes-speakers-get").addEventListener("click", async () => {
-    try {
-      await speakers.download();
-      await renderSpeakers();
-    } catch (e) {
-      toast(errorText(e), "error");
-    }
-  });
-  $("notes-speakers-cancel").addEventListener("click", () => void speakers.cancel());
-  $("notes-speakers-del").addEventListener("click", async () => {
-    try {
-      await speakers.remove();
-      await save({ notes_speakers: false });
-      await renderSpeakers();
-    } catch (e) {
-      toast(errorText(e), "error");
-    }
-  });
-  void onSpeakersProgress((p) => {
-    if (p.state === "downloading" || p.state === "verifying") {
-      const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
-      void renderSpeakers(`${p.state === "verifying" ? "A verificar" : "A descarregar"} (${pct}%)`);
-    } else {
-      if (p.state === "error") toast(p.message ?? "A descarga falhou.", "error");
-      void renderSpeakers();
-    }
-  });
+  onViewChange(() => void renderSpeakers());
 }
 
 // ---------------------------------------------------------------- arranque

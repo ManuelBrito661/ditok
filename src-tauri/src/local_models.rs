@@ -224,7 +224,9 @@ pub const CATALOG: &[ModelSpec] = &[
         id: LocalModelId::WhisperLargeV3,
         label: "Whisper large v3",
         description: "O Whisper maior e mais preciso, multilíngue. Usa o idioma das definições.",
-        warning: Some("Muito pesado (cerca de 1,8 GB de ficheiros e mais de 3 GB de memória). Lento."),
+        warning: Some(
+            "Muito pesado (cerca de 1,8 GB de ficheiros e mais de 3 GB de memória). Lento.",
+        ),
         family: Family::Whisper { prefix: "large-v3" },
         repo: "csukuangfj/sherpa-onnx-whisper-large-v3",
         commit: "2a6507094dd6020d939d78e3f1834a1d06267fca",
@@ -571,8 +573,10 @@ fn free_space(path: &Path) -> Option<u64> {
 
 /// Uma descarga em curso, para a poder cancelar.
 pub struct ActiveDownload {
-    /// `None`: a descarga dos modelos de oradores (não é um modelo de transcrição).
+    /// `None`: a descarga é de um modelo de oradores (ver `speaker`), não de transcrição.
     pub id: Option<LocalModelId>,
+    /// Qual dos modelos de oradores está a descarregar.
+    pub speaker: Option<crate::notes::speakers::Model>,
     pub cancel: Arc<AtomicBool>,
 }
 

@@ -328,11 +328,6 @@
                 <span>Separar quem fala em "Outros" (Orador 1, 2…) no fim da reunião</span>
               </label>
               <p id="notes-speakers-hint" class="row-desc"></p>
-              <div class="file-actions">
-                <button id="notes-speakers-get" type="button" class="secondary" hidden>Descarregar modelos</button>
-                <button id="notes-speakers-cancel" type="button" class="ghost" hidden>Cancelar</button>
-                <button id="notes-speakers-del" type="button" class="ghost" hidden>Apagar modelos</button>
-              </div>
             </div>
             <p class="row-desc">Com colunas, o microfone apanha também o som da outra pessoa. Com auscultadores fica tudo limpo.</p>
           </div>
@@ -804,6 +799,18 @@
                   <input id="local-idle" type="number" min="1" max="240" step="1" inputmode="numeric" />
                   <span class="row-desc">minutos sem ditar</span>
                 </div>
+              </div>
+              <div id="speakers-engine" class="row stacked" hidden>
+                <div class="row-text">
+                  <span class="row-title">Separar oradores nas Notas</span>
+                  <span class="row-desc">
+                    No fim de uma reunião, quem fala dentro de "Outros" fica como Orador 1, 2… Corre neste computador, com um
+                    modelo que se descarrega uma vez. Os três modelos são de inglês: escolhe o que separa melhor as vozes da tua
+                    conversa.
+                  </span>
+                </div>
+                <ul id="speaker-models" class="local-models"></ul>
+                <p id="speaker-error" class="error" role="alert" hidden></p>
               </div>
               <div class="row stacked">
                 <div class="row-text">

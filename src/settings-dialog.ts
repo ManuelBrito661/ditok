@@ -14,6 +14,7 @@ import {
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
 import { ago, heldModifiers, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
 import { setupLocalEngine } from "./local-engine";
+import { setupSpeakersEngine } from "./speakers-engine";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
 import { renderOutputDevices } from "./notes-page";
 import { refreshRecentApps, setupStyles } from "./styles-panel";
@@ -492,6 +493,7 @@ export function setupSettings(onHistoryCleared: () => void) {
   bindSimpleControls(onHistoryCleared);
   setupStyles();
   setupLocalEngine();
+  setupSpeakersEngine();
   onViewChange(renderControls);
   renderControls();
   // As listas de modelos só são pedidas quando o modal abre pela primeira vez.

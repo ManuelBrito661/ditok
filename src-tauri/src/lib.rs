@@ -289,7 +289,7 @@ pub fn run() {
             commands::notes_output_devices,
             commands::notes_test_start,
             commands::notes_rename_speaker,
-            commands::speakers_status,
+            commands::speakers_list,
             commands::speakers_download,
             commands::speakers_delete,
             commands::overlay_status,

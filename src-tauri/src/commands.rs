@@ -1088,6 +1088,7 @@ pub async fn local_model_download(
         }
         *active = Some(crate::local_models::ActiveDownload {
             id: Some(id),
+            speaker: None,
             cancel: Arc::clone(&cancel),
         });
     }
@@ -1176,6 +1177,7 @@ pub async fn local_model_delete(
 
 use crate::notes::{
     session::{self, StateView},
+    speakers,
     store::{self, Line, Meta, Mode, NotesStore},
 };
 
@@ -1380,33 +1382,71 @@ pub async fn notes_test_start(state: AppStateRef<'_>, seconds: u64) -> CmdResult
 const EVENT_SPEAKERS: &str = "speakers:progress";
 
 #[derive(Serialize)]
+pub struct SpeakerModelView {
+    id: speakers::Model,
+    label: &'static str,
+    description: &'static str,
+    size_bytes: u64,
+    installed: bool,
+}
+
+#[derive(Serialize)]
 pub struct SpeakersView {
     /// Esta compilação inclui o motor local (que também separa oradores)?
     available: bool,
-    installed: bool,
-    size_bytes: u64,
-    downloading: bool,
+    /// O modelo escolhido nas definições: é o que as Notas usam.
+    selected: speakers::Model,
+    models: Vec<SpeakerModelView>,
+    /// Qual dos modelos está a descarregar agora, se algum.
+    downloading: Option<speakers::Model>,
 }
 
-#[tauri::command]
-pub fn speakers_status(state: AppStateRef<'_>) -> SpeakersView {
+/// O progresso de uma descarga de oradores: o de `local_models::Progress` e o modelo.
+#[derive(Serialize)]
+struct SpeakersProgress {
+    model: speakers::Model,
+    #[serde(flatten)]
+    progress: crate::local_models::Progress,
+}
+
+fn speakers_view(state: &AppState) -> SpeakersView {
+    let dir = state.models_dir();
     let downloading = state
         .download
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
-        .is_some_and(|d| d.id.is_none());
+        .and_then(|d| d.speaker);
     SpeakersView {
-        available: crate::notes::speakers::AVAILABLE,
-        installed: crate::notes::speakers::is_installed(&state.models_dir()),
-        size_bytes: crate::notes::speakers::total_bytes(),
+        available: speakers::AVAILABLE,
+        selected: state.config().notes_speaker_model,
+        models: speakers::Model::ALL
+            .iter()
+            .map(|&m| SpeakerModelView {
+                id: m,
+                label: m.label(),
+                description: m.description(),
+                size_bytes: m.total_bytes(),
+                installed: speakers::is_installed(&dir, m),
+            })
+            .collect(),
         downloading,
     }
 }
 
-/// Descarrega os dois modelos de oradores. O progresso vai no evento `speakers:progress`.
 #[tauri::command]
-pub async fn speakers_download(app: AppHandle, state: AppStateRef<'_>) -> CmdResult<()> {
+pub async fn speakers_list(state: AppStateRef<'_>) -> CmdResult<SpeakersView> {
+    let state = Arc::clone(&state);
+    blocking(move || speakers_view(&state)).await
+}
+
+/// Descarrega um modelo de oradores. O progresso vai no evento `speakers:progress`.
+#[tauri::command]
+pub async fn speakers_download(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    id: speakers::Model,
+) -> CmdResult<()> {
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let mut active = state
@@ -1418,6 +1458,7 @@ pub async fn speakers_download(app: AppHandle, state: AppStateRef<'_>) -> CmdRes
         }
         *active = Some(crate::local_models::ActiveDownload {
             id: None,
+            speaker: Some(id),
             cancel: Arc::clone(&cancel),
         });
     }
@@ -1427,13 +1468,25 @@ pub async fn speakers_download(app: AppHandle, state: AppStateRef<'_>) -> CmdRes
         let emit = {
             let app = app.clone();
             move |p: crate::local_models::Progress| {
-                let _ = app.emit_to(settings_window::LABEL, EVENT_SPEAKERS, &p);
+                let _ = app.emit_to(
+                    settings_window::LABEL,
+                    EVENT_SPEAKERS,
+                    &SpeakersProgress {
+                        model: id,
+                        progress: p,
+                    },
+                );
             }
         };
-        tracing::info!("a descarregar os modelos de oradores");
-        let result =
-            crate::notes::speakers::download(&client, &state.models_dir(), &cancel, emit.clone())
-                .await;
+        tracing::info!(model = ?id, "a descarregar o modelo de oradores");
+        let result = crate::notes::speakers::download(
+            &client,
+            &state.models_dir(),
+            id,
+            &cancel,
+            emit.clone(),
+        )
+        .await;
         *state
             .download
             .lock()
@@ -1444,9 +1497,9 @@ pub async fn speakers_download(app: AppHandle, state: AppStateRef<'_>) -> CmdRes
             Err(e) => ("error", Some(e.to_string())),
         };
         if let Err(e) = &result {
-            tracing::warn!(error = %e, "descarga dos modelos de oradores não concluída");
+            tracing::warn!(error = %e, "descarga do modelo de oradores não concluída");
         }
-        let total = crate::notes::speakers::total_bytes();
+        let total = id.total_bytes();
         emit(crate::local_models::Progress {
             id: "speakers",
             file: String::new(),
@@ -1459,10 +1512,11 @@ pub async fn speakers_download(app: AppHandle, state: AppStateRef<'_>) -> CmdRes
     Ok(())
 }
 
+/// Apaga um modelo de oradores descarregado (e o que ficou a meio).
 #[tauri::command]
-pub async fn speakers_delete(state: AppStateRef<'_>) -> CmdResult<()> {
+pub async fn speakers_delete(state: AppStateRef<'_>, id: speakers::Model) -> CmdResult<()> {
     let dir = state.models_dir();
-    blocking(move || crate::notes::speakers::delete(&dir)).await??;
+    blocking(move || crate::notes::speakers::delete(&dir, id)).await??;
     Ok(())
 }
 

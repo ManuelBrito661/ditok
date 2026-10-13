@@ -253,7 +253,7 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
     if config.stt_engine == SttEngine::Local
         && !(config.notes_speakers
             && super::speakers::AVAILABLE
-            && super::speakers::is_installed(&state.models_dir()))
+            && super::speakers::is_installed(&state.models_dir(), config.notes_speaker_model))
     {
         return Err(NotesError::NeedsSpeakers);
     }
@@ -575,9 +575,10 @@ async fn finish(state: &Arc<AppState>, mut meta: Meta, diar: Option<Track>) {
 /// Que faixa se separa em oradores nesta sessão: a dos outros (ou a do microfone, numa
 /// conversa presencial). `None` se estiver desligado ou faltar o motor ou os modelos.
 fn diarized_track(state: &AppState, mode: Mode) -> Option<Track> {
-    if !state.config().notes_speakers
+    let config = state.config();
+    if !config.notes_speakers
         || !super::speakers::AVAILABLE
-        || !super::speakers::is_installed(&state.models_dir())
+        || !super::speakers::is_installed(&state.models_dir(), config.notes_speaker_model)
     {
         return None;
     }
@@ -596,6 +597,7 @@ async fn identify_speakers(state: &Arc<AppState>, id: &str, track: Track) -> Res
         .update(|a| a.step = Some("A identificar quem fala…"));
     publish(state);
     let (state_, id_) = (Arc::clone(state), id.to_owned());
+    let model = state.config().notes_speaker_model;
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
         let store = NotesStore::new(&state_.data_dir);
         let outcome = (|| {
@@ -604,7 +606,7 @@ async fn identify_speakers(state: &Arc<AppState>, id: &str, track: Track) -> Res
                 return Ok(0);
             }
             let started = std::time::Instant::now();
-            let segments = super::speakers::diarize(&state_.models_dir(), &samples)
+            let segments = super::speakers::diarize(&state_.models_dir(), model, &samples)
                 .map_err(|e| e.to_string())?;
             let mut lines = store.lines(&id_).map_err(|e| e.to_string())?;
             super::speakers::assign(&mut lines, track, &segments);

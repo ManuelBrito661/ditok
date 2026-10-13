@@ -85,6 +85,8 @@ pub struct Config {
     /// Nas Notas, separar quem fala dentro de "Outros" (Orador 1, 2…) no fim da reunião,
     /// neste computador (ver `notes/speakers.rs`). Precisa do motor local e de dois modelos.
     pub notes_speakers: bool,
+    /// O modelo que separa as vozes (ver `notes/speakers.rs`). Tem de estar descarregado.
+    pub notes_speaker_model: crate::notes::speakers::Model,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -255,6 +257,7 @@ impl Default for Config {
             local_idle_minutes: 5,
             notes_consent: false,
             notes_speakers: false,
+            notes_speaker_model: Default::default(),
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,
@@ -731,6 +734,23 @@ mod tests {
         let json = serde_json::to_value(&c).unwrap();
         assert_eq!(json["stt_engine"], "local");
         assert_eq!(json["local_model"], "whisper-small");
+    }
+
+    #[test]
+    fn speaker_model_defaults_to_wespeaker_and_names_itself_in_json() {
+        let c = Config::default();
+        assert_eq!(
+            c.notes_speaker_model,
+            crate::notes::speakers::Model::WeSpeaker
+        );
+        let json = serde_json::to_value(&c).unwrap();
+        assert_eq!(json["notes_speaker_model"], "wespeaker");
+        let titanet: Config =
+            serde_json::from_str(r#"{"notes_speaker_model": "titanet-large"}"#).unwrap();
+        assert_eq!(
+            titanet.notes_speaker_model,
+            crate::notes::speakers::Model::TitaNetLarge
+        );
     }
 
     #[test]
