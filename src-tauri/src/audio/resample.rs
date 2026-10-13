@@ -56,6 +56,53 @@ pub struct To16k {
     cached: Option<(u32, Fft<f32>)>,
 }
 
+/// Frequência de corte do filtro passa-alto (80 Hz): abaixo da nota fundamental
+/// mais grave da voz humana (~85 Hz), corta o zumbido da secretária, ventoinhas,
+/// ar condicionado e o desvio DC do microfone.
+const HIGH_PASS_HZ: f32 = 80.0;
+/// Pico alvo após normalização (-3 dBFS ≈ 0.708): coloca as sílabas átonas e as
+/// consoantes finais do português europeu na zona onde os modelos locais (Whisper
+/// e Parakeet) foram treinados, deixando margem contra saturação.
+const TARGET_PEAK: f32 = 0.708;
+/// Ganho máximo aplicado (+20 dB = 10×): se o áudio for quase só silêncio ou um
+/// sussurro muito distante, não amplifica o ruído de fundo até à escala cheia.
+const MAX_GAIN: f32 = 10.0;
+/// Abaixo disto (~-60 dBFS) não há fala útil para normalizar.
+const MIN_PEAK: f32 = 0.001;
+
+/// Prepara um trecho de fala a 16 kHz antes de o codificar em WAV para o STT:
+/// 1. Filtro passa-alto de 1.ª ordem a 80 Hz (remove DC offset e ruído grave de
+///    secretária/pop, que mascaram as consoantes surdas nos espetrogramas log-mel).
+/// 2. Normalização de pico para -3 dBFS (com limite de +20 dB), apenas quando o
+///    áudio está demasiado baixo (abaixo de -6 dBFS ≈ 0.5) ou a clipar (> 0.99).
+pub fn condition_speech(samples: &mut [f32], rate: u32) {
+    if samples.is_empty() || rate == 0 {
+        return;
+    }
+    // Filtro passa-alto RC: y[n] = α · (y[n-1] + x[n] - x[n-1])
+    let rc = 1.0 / (std::f32::consts::TAU * HIGH_PASS_HZ);
+    let dt = 1.0 / rate as f32;
+    let alpha = rc / (rc + dt);
+    let mut prev_x = samples[0];
+    let mut prev_y = 0.0f32;
+    let mut peak = 0.0f32;
+    for s in samples.iter_mut() {
+        let x = *s;
+        let y = alpha * (prev_y + x - prev_x);
+        prev_x = x;
+        prev_y = y;
+        *s = y;
+        peak = peak.max(y.abs());
+    }
+
+    if peak >= MIN_PEAK && (peak < 0.5 || peak > 0.99) {
+        let gain = (TARGET_PEAK / peak).min(MAX_GAIN);
+        for s in samples.iter_mut() {
+            *s = (*s * gain).clamp(-1.0, 1.0);
+        }
+    }
+}
+
 impl To16k {
     pub fn convert(&mut self, input: &[f32], input_rate: u32) -> Result<Vec<f32>, ResampleError> {
         if input_rate == TARGET_RATE || input.is_empty() {
@@ -213,6 +260,29 @@ mod tests {
             vec![0.25, -0.25]
         );
         assert!(r.convert(&[], 48_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn condition_speech_removes_dc_offset_and_normalizes_quiet_speech() {
+        // Voz baixa (-26 dBFS, amplitude 0.05) a 300 Hz com um forte desvio DC (+0.2).
+        let mut s: Vec<f32> = (0..TARGET_RATE as usize)
+            .map(|i| 0.2 + (TAU * 300.0 * i as f32 / TARGET_RATE as f32).sin() * 0.05)
+            .collect();
+        condition_speech(&mut s, TARGET_RATE);
+        // Na segunda metade o filtro passa-alto já estabilizou: média ~0 e pico ~0.5 (ganho 10×).
+        let tail = &s[TARGET_RATE as usize / 2..];
+        let mean = tail.iter().sum::<f32>() / tail.len() as f32;
+        let peak = tail.iter().fold(0.0f32, |p, &x| p.max(x.abs()));
+        assert!(mean.abs() < 0.01, "média DC residual = {mean}");
+        assert!((0.40..=0.75).contains(&peak), "pico normalizado = {peak}");
+    }
+
+    #[test]
+    fn condition_speech_does_not_amplify_digital_silence() {
+        let mut s = vec![0.0001f32; 1600];
+        condition_speech(&mut s, TARGET_RATE);
+        let peak = s.iter().fold(0.0f32, |p, &x| p.max(x.abs()));
+        assert!(peak < 0.001, "silêncio amplificado: {peak}");
     }
 
     /// Mede o custo pós-gravação de 5 s de fala. Corre com:

@@ -242,12 +242,15 @@ impl Lane {
         let start_ms = self.base_ms + cut.start * 1000 / rate;
         let end_ms = start_ms + cut.samples.len() as u64 * 1000 / rate;
         match to16k.convert(&cut.samples, self.rate()) {
-            Ok(samples) => Some(Utterance {
-                track,
-                start_ms,
-                end_ms,
-                samples,
-            }),
+            Ok(mut samples) => {
+                resample::condition_speech(&mut samples, resample::TARGET_RATE);
+                Some(Utterance {
+                    track,
+                    start_ms,
+                    end_ms,
+                    samples,
+                })
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "enunciado descartado: não foi possível passar para 16 kHz");
                 None

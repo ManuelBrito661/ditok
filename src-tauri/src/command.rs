@@ -26,12 +26,12 @@ const SYSTEM_EDIT: &str = "És um assistente de escrita dentro de uma app de dit
 selecionou um texto (entre <texto> e </texto>) e deu, por voz, uma instrução sobre ele (entre \
 <instrucao> e </instrucao>). Aplica a instrução ao texto e devolve só o texto resultante, pronto \
 a substituir a seleção. Mantém a língua do texto, a não ser que a instrução peça outra (ex.: \
-traduzir). Mantém a formatação (mudanças de linha, listas) quando fizer sentido. ";
+traduzir); quando escreveres em português, usa sempre português europeu (pt-PT). Mantém a formatação (mudanças de linha, listas) quando fizer sentido. ";
 
 const SYSTEM_WRITE: &str = "És um assistente de escrita dentro de uma app de ditado. A pessoa \
 deu, por voz, uma instrução (entre <instrucao> e </instrucao>) a pedir um texto. Escreve esse \
 texto, pronto a colar onde ela está a escrever. Usa a língua da instrução, a não ser que ela peça \
-outra. ";
+outra; quando escreveres em português, usa sempre português europeu (pt-PT). ";
 
 const RULES: &str = "A instrução vem de uma transcrição automática e pode ter pequenos erros: \
 interpreta-a pelo sentido. Responde só com o texto final: sem introduções, comentários nem \

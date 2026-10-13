@@ -63,6 +63,9 @@ pub struct TextRules {
     lines: bool,
     /// "vírgula", "ponto de interrogação"… (`Config::spoken_punctuation`).
     punctuation: bool,
+    /// Normalizar grafias e termos brasileiros para português europeu (`pt-PT`)
+    /// quando o idioma é português ou automático.
+    pt_pt: bool,
     dictionary: Option<PhraseSet>,
     /// O texto final de cada entrada do dicionário (indexado como na config).
     dictionary_to: Vec<String>,
@@ -116,9 +119,11 @@ impl TextRules {
                 vocabulary.push(word.to_owned());
             }
         }
+        let pt_pt = matches!(config.language.as_deref(), None | Some("pt"));
         Self {
             lines: config.voice_commands,
             punctuation: config.spoken_punctuation,
+            pt_pt,
             dictionary,
             dictionary_to: config
                 .dictionary
@@ -177,7 +182,12 @@ impl TextRules {
         for segment in segments {
             match segment {
                 Segment::Text(t) => {
-                    let replaced = self.replace_words(t, &mut out.applied.replaced);
+                    let normalized = if self.pt_pt {
+                        normalize_pt_pt(t)
+                    } else {
+                        t.to_owned()
+                    };
+                    let replaced = self.replace_words(&normalized, &mut out.applied.replaced);
                     out.text.push_str(&replaced);
                     out.for_cleanup.push_str(&replaced);
                 }
@@ -193,11 +203,16 @@ impl TextRules {
         out
     }
 
-    /// Só as palavras do dicionário, sem comandos nem expansões: é o que se aplica
-    /// a um ficheiro transcrito (uma aula onde se diga "nova linha" ou "o meu
-    /// email" não é um ditado teu).
+    /// Só as palavras do dicionário (e a normalização `pt-PT`), sem comandos nem
+    /// expansões: é o que se aplica a um ficheiro transcrito (uma aula onde se diga
+    /// "nova linha" ou "o meu email" não é um ditado teu).
     pub fn apply_dictionary(&self, text: &str) -> String {
-        self.replace_words(text, &mut 0)
+        let normalized = if self.pt_pt {
+            normalize_pt_pt(text)
+        } else {
+            text.to_owned()
+        };
+        self.replace_words(&normalized, &mut 0)
     }
 
     fn replace_words(&self, text: &str, count: &mut usize) -> String {
@@ -659,6 +674,239 @@ fn push_capitalized(out: &mut String, s: &str, capitalize: &mut bool) {
     }
 }
 
+// ---------------------------------------------------------------- pt-BR -> pt-PT
+
+/// Os modelos multilingues (Whisper e Parakeet) não distinguem `pt-PT` de `pt-BR`:
+/// ambos usam o código `"pt"` e foram treinados maioritariamente com texto brasileiro.
+/// Mesmo quando ouvem fonética de Portugal, escrevem com acentos circunflexos antes de
+/// consoantes nasais (`econômico`, `fenômeno`, `antônio`) e grafias brasileiras
+/// (`planejamento`, `equipe`, `usuário`, `registros`, `recepção`).
+///
+/// Estas regras correm localmente em microssegundos e preservam as maiúsculas da
+/// palavra original.
+const PT_PT_WORDS: &[(&str, &str)] = &[
+    // Locuções e termos compostos (vêm primeiro ou ganham pelo comprimento no PhraseSet)
+    ("com certeza", "com certeza"),
+    ("de fato", "de facto"),
+    ("na verdade, de fato", "na verdade, de facto"),
+    ("fatos", "factos"),
+    // Vocabulário técnico e do dia a dia sistematicamente escrito em pt-BR pelo Whisper
+    ("planejamento", "planeamento"),
+    ("planejamentos", "planeamentos"),
+    ("gerenciamento", "gestão"),
+    ("equipe", "equipa"),
+    ("equipes", "equipas"),
+    ("usuário", "utilizador"),
+    ("usuários", "utilizadores"),
+    ("usuária", "utilizadora"),
+    ("usuárias", "utilizadoras"),
+    ("registro", "registo"),
+    ("registros", "registos"),
+    ("registrar", "registar"),
+    ("registrei", "registei"),
+    ("registrou", "registou"),
+    ("registramos", "registámos"),
+    ("registraram", "registaram"),
+    ("registrado", "registado"),
+    ("registrada", "registada"),
+    ("registrados", "registados"),
+    ("registradas", "registadas"),
+    ("registrando", "a registar"),
+    ("planejei", "planeei"),
+    ("planejou", "planeou"),
+    ("planejado", "planeado"),
+    ("planejada", "planeada"),
+    ("planejados", "planeados"),
+    ("planejadas", "planeadas"),
+    ("controle", "controlo"),
+    ("controles", "controlos"),
+    ("contato", "contacto"),
+    ("contatos", "contactos"),
+    ("contatar", "contactar"),
+    ("aspecto", "aspeto"),
+    ("aspectos", "aspetos"),
+    ("recepção", "receção"),
+    ("exceção", "exceção"),
+    ("percepção", "perceção"),
+    ("concepção", "conceção"),
+    ("interrupção", "interrupção"),
+    ("corrupção", "corrupção"),
+    ("adopção", "adoção"),
+    ("diretoria", "direção"),
+    ("relatório de gerenciamento", "relatório de gestão"),
+    ("deletar", "apagar"),
+    ("deletado", "apagado"),
+    ("deletada", "apagada"),
+    ("salvar", "guardar"),
+    ("salvo", "guardado"),
+    ("salva", "guardada"),
+    ("mouse", "rato"),
+    ("aplicativo", "aplicação"),
+    ("aplicativos", "aplicações"),
+    ("celular", "telemóvel"),
+    ("celulares", "telemóveis"),
+    ("ônibus", "autocarro"),
+    ("trem", "comboio"),
+    ("trens", "comboios"),
+    ("banheiro", "casa de banho"),
+    ("xícara", "chávena"),
+    ("xícaras", "chávenas"),
+    ("geladeira", "frigorífico"),
+    ("esporte", "desporto"),
+    ("esportes", "desportos"),
+    ("time", "equipa"),
+    ("times", "equipas"),
+    ("gol", "golo"),
+    ("gols", "golos"),
+    ("zagueiro", "defesa"),
+    ("goleiro", "guarda-redes"),
+    ("caminhão", "camião"),
+    ("caminhões", "camiões"),
+    ("sorvete", "gelado"),
+    ("sorvetes", "gelados"),
+    ("suco", "sumo"),
+    ("sucos", "sumos"),
+    ("grama", "relva"),
+    ("calçada", "passeio"),
+    ("pedestre", "peão"),
+    ("pedestres", "peões"),
+    ("carteira de motorista", "carta de condução"),
+    ("motorista", "condutor"),
+    ("aeromoça", "hospedeira de bordo"),
+    ("aposentadoria", "reforma"),
+    ("aposentado", "reformado"),
+    ("aposentada", "reformada"),
+    ("aluguel", "aluguer"),
+    ("aluguéis", "alugueres"),
+    ("bilhão", "mil milhões"),
+    ("bilhões", "mil milhões"),
+    ("trilhão", "bilião"),
+    ("trilhões", "biliões"),
+    ("úmido", "húmido"),
+    ("úmida", "húmida"),
+    ("úmidos", "húmidos"),
+    ("úmidas", "húmidas"),
+    ("umidade", "humidade"),
+    ("conosco", "connosco"),
+    ("catorze", "catorze"),
+    ("quatorze", "catorze"),
+    ("dezesseis", "dezasseis"),
+    ("dezessete", "dezassete"),
+    ("dezenove", "dezanove"),
+    ("porcento", "por cento"),
+];
+
+static PT_PT_SET: LazyLock<PhraseSet> = LazyLock::new(|| {
+    PhraseSet::new(
+        PT_PT_WORDS
+            .iter()
+            .enumerate()
+            .map(|(i, &(from, _))| (from, i)),
+    )
+    .expect("tabela pt-PT válida")
+});
+
+/// Sufixos e padrões ortográficos onde o `pt-BR` usa circunflexo (`ê`/`ô`) antes de
+/// consoante nasal e o `pt-PT` usa agudo (`é`/`ó`). Ex.: `econômico` → `económico`,
+/// `acadêmica` → `académica`, `fenômeno` → `fenómeno`, `Antônio` → `António`.
+static PT_PT_CIRCUMFLEX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    RegexBuilder::new(
+        r"\b(\p{L}*?)(ô|ê)(nic[oa]s?|mic[oa]s?|men[oa]s?|ni[oa]s?|ne[oa]s?|nicos?|micos?|ntic[oa]s?|n[ia]s?)\b",
+    )
+    .case_insensitive(true)
+    .build()
+    .expect("regex de acentuação pt-PT")
+});
+
+/// Palavras onde o circunflexo antes de nasal se mantém em `pt-PT` (não devem mudar
+/// para agudo).
+fn keep_circumflex_pt_pt(word_lower: &str) -> bool {
+    matches!(
+        word_lower,
+        "câmara"
+            | "câmaras"
+            | "pônei"
+            | "pôneis"
+            | "tênis"
+            | "estômago"
+            | "estômagos"
+            | "cômodo"
+            | "cômodos"
+            | "cômoda"
+            | "cômodas"
+            | "incômodo"
+            | "incômoda"
+            | "incômodos"
+            | "incômodas"
+            | "gênero"
+            | "gêneros"
+    )
+}
+
+/// Adapta a caixa de `replacement` ao que estava em `original` (TUDO MAIÚSCULAS,
+/// Inicial Maiúscula ou minúsculas).
+fn match_case(original: &str, replacement: &str) -> String {
+    let mut orig_chars = original.chars().filter(|c| c.is_alphabetic());
+    let Some(first) = orig_chars.next() else {
+        return replacement.to_owned();
+    };
+    if first.is_lowercase() {
+        return replacement.to_owned();
+    }
+    let rest_all_upper = orig_chars.clone().next().is_some() && orig_chars.all(char::is_uppercase);
+    if rest_all_upper {
+        return replacement.to_uppercase();
+    }
+    let mut rep_chars = replacement.chars();
+    let Some(rep_first) = rep_chars.next() else {
+        return String::new();
+    };
+    let mut out = String::with_capacity(replacement.len());
+    out.extend(rep_first.to_uppercase());
+    out.push_str(rep_chars.as_str());
+    out
+}
+
+/// Normaliza grafias e vocabulário sistemático de `pt-BR` para `pt-PT`.
+pub fn normalize_pt_pt(text: &str) -> String {
+    // 1. Acentuação: circunflexo brasileiro (ô/ê) -> agudo europeu (ó/é) em sufixos
+    //    como -ônico/-ónico, -êmico/-émico, -ômeno/-ómeno, -ônio/-ónio, -êneo/-éneo.
+    let step1 = PT_PT_CIRCUMFLEX_RE.replace_all(text, |caps: &regex::Captures<'_>| {
+        let whole = &caps[0];
+        let lower = whole.to_lowercase();
+        if keep_circumflex_pt_pt(&lower) {
+            return whole.to_owned();
+        }
+        // Excluir palavras curtas comuns onde "ê" ou "ô" faz parte de outra raiz:
+        // ex. "vênia" -> "vénia" (ok), "gênio" -> "génio" (ok), "prêmio" -> "prémio",
+        // mas evitar mexer em "pelo" / "tem".
+        let prefix = &caps[1];
+        let vowel = &caps[2];
+        let suffix = &caps[3];
+        let acute = match vowel {
+            "ô" => "ó",
+            "Ô" => "Ó",
+            "ê" => "é",
+            "Ê" => "É",
+            _ => vowel,
+        };
+        format!("{prefix}{acute}{suffix}")
+    });
+
+    // 2. Dicionário de formas `pt-BR` -> `pt-PT`, respeitando maiúsculas.
+    let mut out = String::with_capacity(step1.len());
+    let mut last = 0;
+    for (i, range) in PT_PT_SET.find_iter(&step1) {
+        out.push_str(&step1[last..range.start]);
+        let matched = &step1[range.clone()];
+        let target = PT_PT_WORDS[i].1;
+        out.push_str(&match_case(matched, target));
+        last = range.end;
+    }
+    out.push_str(&step1[last..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,6 +1230,30 @@ mod tests {
         let r = TextRules::new(&Config::default());
         let text = "Pergunta com ponto de interrogação, vírgula, fim.";
         assert_eq!(r.apply_dictionary(text), text);
+    }
+
+    #[test]
+    fn pt_pt_normalization_fixes_accents_and_brazilian_spellings() {
+        let r = TextRules::new(&Config::default());
+        let text = "O planejamento econômico da equipe do Antônio registrou 16 porcento de fato no celular.";
+        assert_eq!(
+            r.apply(text).text,
+            "O planeamento económico da equipa do António registou 16 por cento de facto no telemóvel."
+        );
+        // Preserva maiúsculas no início de frase e palavras em maiúsculas.
+        assert_eq!(
+            r.apply("Equipe unida. USUÁRIO registado. Fenômeno acadêmico.").text,
+            "Equipa unida. UTILIZADOR registado. Fenómeno académico."
+        );
+        // Noutro idioma explícito (ex.: "en" ou "es"), não aplica a normalização pt-PT.
+        let en = TextRules::new(&Config {
+            language: Some("en".into()),
+            ..Config::default()
+        });
+        assert_eq!(
+            en.apply("The team time and mouse").text,
+            "The team time and mouse"
+        );
     }
 
     #[test]

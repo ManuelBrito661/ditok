@@ -161,21 +161,51 @@ fn split_for_model(samples: &[f32], rate: u32, max: std::time::Duration) -> Vec<
         .collect()
 }
 
-#[cfg(feature = "local")]
+#[cfg(any(feature = "local", test))]
 mod engine {
+    #[cfg(feature = "local")]
     use std::path::Path;
 
+    #[cfg(feature = "local")]
     use sherpa_onnx::{
-        OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig,
-        OfflineWhisperModelConfig,
+        OfflineQwen3ASRModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
+        OfflineTransducerModelConfig, OfflineWhisperModelConfig,
     };
 
+    #[cfg(feature = "local")]
     use crate::{
         local_models::{self, Family, LocalModelId},
         stt::SttError,
     };
 
+    /// Margem de silêncio acrescentada nas pontas de cada pedaço (250 ms a 16 kHz = 4000
+    /// amostras): sem isto, quando um ditado longo é partido nas pausas, a última
+    /// consoante antes do corte ou o ataque da palavra seguinte ficam encostados à
+    /// fronteira da janela STFT e o decoder engole-os.
+    const CHUNK_PAD_MS: u64 = 250;
+
+    /// Acolchoa `piece` com silêncio no início e no fim se ainda couber dentro de `max`,
+    /// para os modelos locais não perderem fonemas nas fronteiras dos cortes.
+    pub fn pad_piece(piece: &[f32], rate: u32, max: std::time::Duration) -> Vec<f32> {
+        let pad = (rate as u64 * CHUNK_PAD_MS / 1000) as usize;
+        let max_samples = (max.as_secs_f64() * f64::from(rate)) as usize;
+        if piece.is_empty() || pad == 0 || piece.len() >= max_samples {
+            return piece.to_vec();
+        }
+        let room = max_samples - piece.len();
+        let each = pad.min(room / 2);
+        if each == 0 {
+            return piece.to_vec();
+        }
+        let mut out = Vec::with_capacity(piece.len() + 2 * each);
+        out.resize(each, 0.0);
+        out.extend_from_slice(piece);
+        out.resize(out.len() + each, 0.0);
+        out
+    }
+
     /// Um modelo em memória. O idioma só conta no Whisper (o Parakeet deteta sozinho).
+    #[cfg(feature = "local")]
     pub struct Loaded {
         pub id: LocalModelId,
         pub language: Option<String>,
@@ -184,13 +214,15 @@ mod engine {
 
     /// O idioma que conta para este modelo: o do Parakeet é sempre `None`, para mudar
     /// de idioma não o obrigar a recarregar.
+    #[cfg(feature = "local")]
     pub fn effective_language(id: LocalModelId, language: Option<&str>) -> Option<String> {
         match local_models::spec(id).family {
-            Family::Parakeet => None,
+            Family::Parakeet | Family::Qwen3Asr => None,
             Family::Whisper { .. } => language.filter(|l| !l.is_empty()).map(str::to_owned),
         }
     }
 
+    #[cfg(feature = "local")]
     pub fn load(
         id: LocalModelId,
         language: Option<String>,
@@ -226,10 +258,23 @@ mod engine {
                     // Vazio = o Whisper deteta o idioma.
                     language: Some(language.clone().unwrap_or_default()),
                     task: Some("transcribe".into()),
-                    tail_paddings: -1,
+                    // Preenchimento no fim da janela de 30 s: evita que o Whisper corte
+                    // a última sílaba átona ou consoante final em português europeu.
+                    tail_paddings: 1000,
                     ..Default::default()
                 };
                 config.model_config.tokens = path(&format!("{prefix}-tokens.txt"));
+            }
+            Family::Qwen3Asr => {
+                config.model_config.qwen3_asr = OfflineQwen3ASRModelConfig {
+                    conv_frontend: path("conv_frontend.onnx"),
+                    encoder: path("encoder.int8.onnx"),
+                    decoder: path("decoder.int8.onnx"),
+                    tokenizer: path("tokenizer"),
+                    ..Default::default()
+                };
+                // Este modelo não usa `tokens.txt`, mas o campo não pode ficar por definir.
+                config.model_config.tokens = Some(String::new());
             }
         }
         let started = std::time::Instant::now();
@@ -280,8 +325,9 @@ impl LocalStt {
             .unwrap_or_else(PoisonError::into_inner);
         let mut texts = Vec::new();
         for piece in split_for_model(&samples, rate, spec.max_chunk) {
+            let padded = engine::pad_piece(&piece, rate, spec.max_chunk);
             let stream = model.recognizer.create_stream();
-            stream.accept_waveform(rate as i32, &piece);
+            stream.accept_waveform(rate as i32, &padded);
             model.recognizer.decode(&stream);
             if let Some(result) = stream.get_result() {
                 let text = result.text.trim();
@@ -394,6 +440,7 @@ mod tests {
             LocalModelId::WhisperTurbo,
             LocalModelId::WhisperMedium,
             LocalModelId::WhisperLargeV3,
+            LocalModelId::Qwen3Asr,
         ] {
             assert_eq!(id_from_slug(&slug(id)), Some(id));
         }
@@ -454,6 +501,22 @@ mod tests {
         let pieces = split_for_model(&samples, 16_000, Duration::from_secs(30));
         let total: usize = pieces.iter().map(Vec::len).sum();
         assert_eq!(total, samples.len());
+    }
+
+    #[test]
+    fn pad_piece_adds_silence_without_exceeding_max_chunk() {
+        let piece = vec![0.5f32; 16_000 * 10]; // 10 s
+        let padded = engine::pad_piece(&piece, 16_000, Duration::from_secs(25));
+        // 250 ms = 4000 amostras de cada lado.
+        assert_eq!(padded.len(), piece.len() + 8_000);
+        assert!(padded[..4_000].iter().all(|&s| s == 0.0));
+        assert!(padded[padded.len() - 4_000..].iter().all(|&s| s == 0.0));
+        assert_eq!(&padded[4_000..padded.len() - 4_000], &piece[..]);
+
+        // Pedaço já no limite máximo: não ultrapassa `max_chunk`.
+        let at_max = vec![0.5f32; 16_000 * 25];
+        let capped = engine::pad_piece(&at_max, 16_000, Duration::from_secs(25));
+        assert_eq!(capped.len(), at_max.len());
     }
 
     /// Com os modelos e um WAV reais (a spike deixou-os em Ditok-spike):

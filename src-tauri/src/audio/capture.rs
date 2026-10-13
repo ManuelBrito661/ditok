@@ -542,13 +542,16 @@ impl Session {
         }
         self.drain();
 
-        let mono16k = to16k.convert(&self.samples, self.rate)?;
+        let mut mono16k = to16k.convert(&self.samples, self.rate)?;
         let voice = vad::detect(&mono16k, TARGET_RATE, self.start_cue);
         let kept = voice.speech.clone().unwrap_or(0..mono16k.len());
         let duration =
             |samples: usize| Duration::from_secs_f64(samples as f64 / f64::from(TARGET_RATE));
         let audio = duration(kept.len());
         let trimmed = duration(mono16k.len() - kept.len());
+        if voice.has_speech() {
+            resample::condition_speech(&mut mono16k[kept.clone()], TARGET_RATE);
+        }
         // `&mono16k[kept]` é uma fatia: corta sem copiar as amostras.
         let wav = wav::encode_pcm16_mono(&mono16k[kept], TARGET_RATE);
 

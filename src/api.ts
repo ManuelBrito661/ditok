@@ -411,7 +411,8 @@ export type LocalModelId =
   | "whisper-small"
   | "whisper-turbo"
   | "whisper-medium"
-  | "whisper-large-v3";
+  | "whisper-large-v3"
+  | "qwen3-asr";
 
 /** Um modelo do catálogo (commands.rs, LocalModelView). */
 export interface LocalModel {

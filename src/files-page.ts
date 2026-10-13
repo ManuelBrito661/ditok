@@ -57,7 +57,7 @@ async function renderConfirm(p: FileProbe) {
   // Com o motor local não há custo: só quanto tempo leva, que depende do computador.
   if (app.view.config.stt_engine === "local") {
     // Velocidades medidas num portátil de 8 núcleos (vezes o tempo real), com folga.
-    const speed = { "parakeet-v3": 12, "whisper-small": 3, "whisper-turbo": 2.5, "whisper-medium": 1.5, "whisper-large-v3": 1 }[app.view.config.local_model];
+    const speed = { "parakeet-v3": 12, "whisper-small": 3, "whisper-turbo": 2.5, "whisper-medium": 1.5, "whisper-large-v3": 1, "qwen3-asr": 2 }[app.view.config.local_model];
     const minutes = p.duration_s != null ? Math.max(1, Math.round(p.duration_s / speed / 60)) : null;
     $("fc-estimate").textContent =
       `Neste computador, sem custo${minutes != null ? `: leva cerca de ${minutes} min` : ""} (depende do teu computador).`;

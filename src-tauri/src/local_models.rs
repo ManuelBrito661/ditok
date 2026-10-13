@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// O modelo escolhido. No JSON: "parakeet-v3", "whisper-small", "whisper-turbo",
-/// "whisper-medium", "whisper-large-v3".
+/// "whisper-medium", "whisper-large-v3", "qwen3-asr".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LocalModelId {
@@ -37,6 +37,7 @@ pub enum LocalModelId {
     WhisperTurbo,
     WhisperMedium,
     WhisperLargeV3,
+    Qwen3Asr,
 }
 
 /// Que tipo de modelo é (decide como o motor o carrega).
@@ -46,6 +47,9 @@ pub enum Family {
     Parakeet,
     /// Whisper: `<prefixo>-encoder`, `<prefixo>-decoder`, `<prefixo>-tokens`.
     Whisper { prefix: &'static str },
+    /// Qwen3-ASR: `conv_frontend.onnx`, `encoder.int8.onnx`, `decoder.int8.onnx` e a
+    /// pasta `tokenizer/`.
+    Qwen3Asr,
 }
 
 pub struct ModelFile {
@@ -169,6 +173,40 @@ const WHISPER_LARGE_V3_FILES: &[ModelFile] = &[
     },
 ];
 
+// Os nomes com `/` ficam em subpastas (o tokenizer do Qwen3 é uma pasta).
+const QWEN3_ASR_FILES: &[ModelFile] = &[
+    ModelFile {
+        name: "conv_frontend.onnx",
+        size: 44_148_281,
+        sha256: "d22dc4423e0940e49884e903d2ea2f7e5567c14fc1aed97e4e26d6b8f208ef9e",
+    },
+    ModelFile {
+        name: "encoder.int8.onnx",
+        size: 182_491_662,
+        sha256: "60748d3e6744a57c9c91e1b17424a6c2990567e8adceb0783940c03ed98fa9d9",
+    },
+    ModelFile {
+        name: "decoder.int8.onnx",
+        size: 755_914_231,
+        sha256: "4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771",
+    },
+    ModelFile {
+        name: "tokenizer/merges.txt",
+        size: 1_671_853,
+        sha256: "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+    },
+    ModelFile {
+        name: "tokenizer/tokenizer_config.json",
+        size: 12_487,
+        sha256: "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+    },
+    ModelFile {
+        name: "tokenizer/vocab.json",
+        size: 2_776_833,
+        sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+    },
+];
+
 pub const CATALOG: &[ModelSpec] = &[
     ModelSpec {
         id: LocalModelId::ParakeetV3,
@@ -234,6 +272,19 @@ pub const CATALOG: &[ModelSpec] = &[
         ram_mb: 3000,
         files: WHISPER_LARGE_V3_FILES,
     },
+    ModelSpec {
+        id: LocalModelId::Qwen3Asr,
+        label: "Qwen3-ASR 0.6B",
+        description: "Multilíngue (52 línguas e dialetos) com deteção automática de idioma. Escreve com pontuação e maiúsculas.",
+        warning: Some("Novo e ainda pouco testado: a velocidade e o uso de memória são estimativas."),
+        family: Family::Qwen3Asr,
+        repo: "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+        commit: "68818b2313fe77bd06f6a7c5068ff3ef59d02b8a",
+        // Pedaços curtos: o decoder gera no máximo 128 palavras-pedaço por pedaço.
+        max_chunk: Duration::from_secs(15),
+        ram_mb: 1500,
+        files: QWEN3_ASR_FILES,
+    },
 ];
 
 pub fn spec(id: LocalModelId) -> &'static ModelSpec {
@@ -290,6 +341,7 @@ pub fn dir_name(id: LocalModelId) -> &'static str {
         LocalModelId::WhisperTurbo => "whisper-turbo",
         LocalModelId::WhisperMedium => "whisper-medium",
         LocalModelId::WhisperLargeV3 => "whisper-large-v3",
+        LocalModelId::Qwen3Asr => "qwen3-asr",
     }
 }
 
@@ -455,6 +507,9 @@ pub async fn download_files(
             continue;
         }
         let part = part_path(&final_path);
+        if let Some(parent) = final_path.parent() {
+            std::fs::create_dir_all(parent)?; // nomes como `tokenizer/vocab.json`
+        }
         download_one(client, job, &part, cancel, |got| {
             emit(job.name, done_before + got, "downloading", false);
         })
@@ -699,9 +754,14 @@ mod tests {
             LocalModelId::WhisperTurbo,
             LocalModelId::WhisperMedium,
             LocalModelId::WhisperLargeV3,
+            LocalModelId::Qwen3Asr,
         ] {
             assert_eq!(spec(id).id, id);
         }
+        assert_eq!(
+            serde_json::to_string(&LocalModelId::Qwen3Asr).unwrap(),
+            "\"qwen3-asr\""
+        );
     }
 
     #[test]
@@ -712,6 +772,7 @@ mod tests {
         assert!(spec(LocalModelId::WhisperMedium).max_chunk < Duration::from_secs(30));
         assert!(spec(LocalModelId::WhisperLargeV3).max_chunk < Duration::from_secs(30));
         assert!(spec(LocalModelId::ParakeetV3).max_chunk <= Duration::from_secs(30));
+        assert!(spec(LocalModelId::Qwen3Asr).max_chunk <= Duration::from_secs(20));
     }
 
     #[tokio::test]
@@ -737,6 +798,29 @@ mod tests {
         assert!(!dir.join("modelo.onnx.part").exists());
         assert!(states.contains(&"verifying"));
         assert_eq!(states.last(), Some(&"done"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn download_creates_subfolders_for_nested_names() {
+        let data = body(10_000);
+        let (url, _) = serve(data.clone(), true, 1);
+        let dir = temp_dir("nested");
+        let hash = sha(&data);
+        let job = Job {
+            url,
+            name: "tokenizer/vocab.json",
+            size: data.len() as u64,
+            sha256: &hash,
+        };
+        let cancel = AtomicBool::new(false);
+        download_files(&client(), "qwen3-asr", &dir, &[job], &cancel, |_| {})
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(dir.join("tokenizer").join("vocab.json")).unwrap(),
+            data
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

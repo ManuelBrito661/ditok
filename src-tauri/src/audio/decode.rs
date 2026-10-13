@@ -222,9 +222,12 @@ pub fn decode(path: &Path, mut on_chunk: impl FnMut(Chunk) -> bool) -> Result<()
 
 /// Passa um pedaço para 16 kHz, decide se tem voz e codifica-o em WAV.
 fn prepare(piece: Piece, rate: u32, to16k: &mut To16k) -> Result<Chunk, DecodeError> {
-    let samples = to16k.convert(&piece.samples, rate)?;
+    let mut samples = to16k.convert(&piece.samples, rate)?;
     let voice = vad::detect(&samples, TARGET_RATE, false);
     let silent = !voice.has_speech() && voice.peak_db < SILENT_PEAK_DB;
+    if !silent {
+        resample::condition_speech(&mut samples, TARGET_RATE);
+    }
     Ok(Chunk {
         index: piece.index,
         start: seconds(piece.start, rate),
