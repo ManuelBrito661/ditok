@@ -25,7 +25,7 @@ use crate::{
     focus, hotkey,
     sound::{Cue, Sounds},
     state::{AppState, MISSING_KEY},
-    stt::Providers,
+    stt::{LiveSession, Providers},
     tray::{Tray, TrayState},
 };
 use failure::FailReason;
@@ -131,6 +131,9 @@ struct Orchestrator {
     /// curso. Largá-la repõe o clipboard (ver `selection.rs`), por isso basta
     /// pôr `None` para "desistir" dela.
     selection: Option<Selection>,
+    /// O stream de transcrição do ditado em curso (motor xAI). Largá-lo fecha a
+    /// ligação; ao parar passa para o processamento, que espera pelo texto final.
+    live: Option<LiveSession>,
     job: Option<Job>,
     next_job: u64,
     /// A última gravação cuja transcrição falhou, para o "Tentar de novo". Fica
@@ -183,6 +186,7 @@ async fn run(
         providers,
         target: focus::Target::default(),
         selection: None,
+        live: None,
         job: None,
         next_job: 0,
         failed: None,
@@ -328,6 +332,7 @@ impl Orchestrator {
             Some(Action::CancelRecording) => {
                 // Um comando cancelado: o clipboard volta ao que era.
                 self.selection = None;
+                self.live = None;
                 self.deps.recorder.cancel();
                 self.deps.cue(Cue::Cancel);
                 hotkey::set_cancel_enabled(&app, false);
@@ -373,7 +378,7 @@ impl Orchestrator {
         let Some(provider) = &self.providers else {
             // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
             self.machine.handle(Input::Cancel, at);
-            self.deps.state.notify(MISSING_KEY);
+            self.deps.state.notify(self.deps.state.missing_key_message());
             self.show_failure(FailReason::NoKey, false);
             return;
         };
@@ -390,9 +395,25 @@ impl Orchestrator {
         // Primeiro o microfone (é o que tem latência), depois o som, a
         // ligação HTTP (corre enquanto falas) e o resto.
         let config = self.deps.state.config();
+        // O stream abre-se antes do microfone: a ligação faz-se enquanto se fala e o
+        // áudio que chegar entretanto espera no canal. Só no ditado (o comando é curto
+        // e fica em lote).
+        let tap = match (&provider.stream, mode) {
+            (Some(stream), Mode::Dictation) => {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                let session = stream.open(config.language.clone(), rx);
+                forward_partials(&app, session.partials.clone());
+                self.live = Some(session);
+                Some(tx)
+            }
+            _ => {
+                self.live = None;
+                None
+            }
+        };
         self.deps
             .recorder
-            .start(at, config.sounds, config.input_device.clone());
+            .start(at, config.sounds, config.input_device.clone(), tap);
         self.deps.cue(Cue::Start);
         // O nome da app da janela já capturada (microssegundos; depois do
         // microfone para não o atrasar).
@@ -469,8 +490,9 @@ impl Orchestrator {
             });
             return;
         }
+        let live = self.live.take();
         self.spawn_job(commit.clone(), false, async move {
-            pipeline::process(state, provider, recording, released_at, target, commit).await
+            pipeline::process(state, provider, recording, released_at, target, commit, live).await
         });
     }
 
@@ -486,7 +508,7 @@ impl Orchestrator {
         let (Some(provider), Some(rec)) = (self.providers.clone(), self.failed.clone()) else {
             self.machine.handle(Input::Cancel, Instant::now());
             if self.providers.is_none() {
-                self.deps.state.notify(MISSING_KEY);
+                self.deps.state.notify(self.deps.state.missing_key_message());
                 self.show_failure(FailReason::NoKey, false);
             }
             return;
@@ -645,6 +667,7 @@ impl Orchestrator {
                 // de continuar a fingir que grava.
                 self.machine.handle(Input::Cancel, Instant::now());
                 self.selection = None;
+                self.live = None;
                 self.deps.recorder.cancel();
                 hotkey::set_cancel_enabled(&app, false);
                 self.deps.state.notify(reason);
@@ -665,16 +688,38 @@ impl Orchestrator {
     }
 }
 
+/// Quanto tempo se agrupam as atualizações do texto ao vivo antes de chegarem à barra.
+const PARTIAL_EVERY: Duration = Duration::from_millis(100);
+
+/// Leva o texto que o stream vai ouvindo à barra, no máximo ~10 vezes por segundo.
+/// Acaba sozinha quando o stream termina (o emissor é largado).
+fn forward_partials(app: &tauri::AppHandle, mut partials: tokio::sync::watch::Receiver<String>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while partials.changed().await.is_ok() {
+            let text = partials.borrow_and_update().clone();
+            crate::overlay::emit_partial(&app, &text);
+            tokio::time::sleep(PARTIAL_EVERY).await;
+        }
+    });
+}
+
 /// A chave pode ter sido trocada ou apagada fora da app (bin/set-key.rs): a barra
 /// e o tray seguem o cofre ao começar um ditado. Se não der para ler, fica como está.
 fn sync_key_set(state: &AppState) {
-    let Ok(key) = crate::secrets::get() else {
-        return;
-    };
-    let set = key.is_some();
-    if state.key_set() != set {
-        tracing::info!(set, "a chave mudou fora da app; a atualizar o estado");
-        state.set_key_set(set); // publica a barra e o tray
+    if let Ok(key) = crate::secrets::get() {
+        let set = key.is_some();
+        if state.key_set() != set {
+            tracing::info!(set, "a chave mudou fora da app; a atualizar o estado");
+            state.set_key_set(set); // publica a barra e o tray
+        }
+    }
+    if let Ok(key) = crate::secrets::get_xai() {
+        let set = key.is_some();
+        if state.xai_key_set() != set {
+            tracing::info!(set, "a chave da xAI mudou fora da app; a atualizar o estado");
+            state.set_xai_key_set(set);
+        }
     }
 }
 
@@ -685,7 +730,7 @@ fn load_providers(state: &AppState) -> Option<Providers> {
             Some(p)
         }
         Ok(None) => {
-            tracing::warn!("{MISSING_KEY}");
+            tracing::warn!("{}", state.missing_key_message());
             None
         }
         Err(e) => {

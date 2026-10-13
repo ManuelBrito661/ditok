@@ -11,6 +11,7 @@ pub mod job;
 pub mod local;
 pub mod models;
 pub mod openrouter;
+pub mod xai;
 
 use std::time::Duration;
 
@@ -56,7 +57,7 @@ pub enum SttError {
     #[error("chave da API rejeitada ({0}). Confirma a chave guardada no cofre do sistema.")]
     Unauthorized(String),
     // 403: a chave existe mas o pedido foi recusado (limite da chave, moderação…).
-    #[error("pedido recusado pelo OpenRouter ({0})")]
+    #[error("pedido recusado pelo servidor ({0})")]
     Forbidden(String),
     #[error("sem créditos suficientes na conta ({0})")]
     InsufficientCredits(String),
@@ -132,16 +133,72 @@ pub trait SttProvider: Send + Sync {
     ) -> Result<Transcription, SttError>;
 }
 
+/// Blocos de áudio para o stream: PCM s16le, 16 kHz, mono. O fim do canal (todos os
+/// `Sender` largados) é o fim do áudio: o stream pede então o texto final.
+pub type AudioRx = tokio::sync::mpsc::UnboundedReceiver<Bytes>;
+
+/// Transcrição em tempo real: o áudio segue para o servidor enquanto se fala e o
+/// texto vai aparecendo. Fica ao lado de `SttProvider` (que recebe o áudio completo):
+/// o WAV continua a ser gravado sempre e serve de alternativa se o stream falhar.
+pub trait StreamingStt: Send + Sync {
+    /// Devolve logo, sem esperar pela ligação: a tarefa liga-se em fundo e o áudio
+    /// que chegar entretanto fica no canal. `language`: código ISO-639-1 do utilizador.
+    fn open(&self, language: Option<String>, audio: AudioRx) -> LiveSession;
+}
+
+/// Um stream em curso. Largá-lo (ex.: Esc) aborta a tarefa e fecha a ligação.
+pub struct LiveSession {
+    /// O texto até agora (frases acabadas + a frase em curso), para mostrar ao vivo.
+    pub partials: tokio::sync::watch::Receiver<String>,
+    result: Option<tauri::async_runtime::JoinHandle<Result<Transcription, SttError>>>,
+}
+
+impl LiveSession {
+    pub fn new(
+        partials: tokio::sync::watch::Receiver<String>,
+        result: tauri::async_runtime::JoinHandle<Result<Transcription, SttError>>,
+    ) -> Self {
+        Self {
+            partials,
+            result: Some(result),
+        }
+    }
+
+    /// Espera pelo texto final. `Err` (incluindo o tempo esgotado) significa que se
+    /// deve voltar ao caminho em lote com o WAV.
+    pub async fn finish(mut self, wait: Duration) -> Result<Transcription, SttError> {
+        let Some(handle) = self.result.take() else {
+            return Err(SttError::Decode("stream já terminado".into()));
+        };
+        match tokio::time::timeout(wait, handle).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => Err(SttError::Network(format!("tarefa do stream: {e}"))),
+            Err(_) => Err(SttError::ClientTimeout),
+        }
+    }
+}
+
+impl Drop for LiveSession {
+    fn drop(&mut self) {
+        if let Some(handle) = self.result.take() {
+            handle.abort();
+        }
+    }
+}
+
 /// O que um ditado precisa para falar com o exterior: quem transcreve e quem
 /// trata o texto (limpeza, comandos, resumos). Com a nuvem são o mesmo cliente do
 /// OpenRouter; com o motor local o `stt` é local e o `llm` só existe se houver
-/// chave (sem ela, ditar funciona mas a limpeza e os comandos ficam de fora).
+/// chave (sem ela, ditar funciona mas a limpeza e os comandos ficam de fora). Com a
+/// xAI, o `stt` é a xAI, o `stream` é o mesmo cliente em tempo real e o `llm` idem.
 ///
-/// `Clone` é barato: são dois `Arc`.
+/// `Clone` é barato: são `Arc`s.
 #[derive(Clone)]
 pub struct Providers {
     pub stt: std::sync::Arc<dyn SttProvider>,
     pub llm: Option<std::sync::Arc<openrouter::OpenRouter>>,
+    /// `None` nos motores sem streaming (OpenRouter, local).
+    pub stream: Option<std::sync::Arc<dyn StreamingStt>>,
 }
 
 /// Cliente HTTP partilhado por todos os providers. O `reqwest::Client` mantém um
@@ -164,21 +221,20 @@ pub fn http_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
-/// Corpo de erro no formato OpenAI/OpenRouter: `{"error": {"message": …, "code": …}}`.
-#[derive(Deserialize)]
-struct ErrorBody {
-    error: ErrorDetail,
-}
-#[derive(Deserialize)]
-struct ErrorDetail {
-    message: String,
+/// A mensagem de um corpo de erro JSON. Aceita o formato OpenAI/OpenRouter
+/// (`{"error": {"message": …}}`) e os mais simples (`{"error": "…"}`, `{"message": "…"}`).
+fn error_message(body: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let from = |v: &serde_json::Value| v.as_str().map(str::to_owned);
+    from(&v["error"]["message"])
+        .or_else(|| from(&v["error"]))
+        .or_else(|| from(&v["message"]))
 }
 
 /// Traduz uma resposta de erro HTTP num `SttError` com significado.
 pub fn error_from_response(status: u16, body: &[u8], model: &str) -> SttError {
-    let message = serde_json::from_slice::<ErrorBody>(body)
-        .map(|b| b.error.message)
-        .unwrap_or_else(|_| String::from_utf8_lossy(body).chars().take(300).collect());
+    let message = error_message(body)
+        .unwrap_or_else(|| String::from_utf8_lossy(body).chars().take(300).collect());
     let lower = message.to_lowercase();
 
     match status {

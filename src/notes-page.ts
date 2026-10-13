@@ -316,7 +316,9 @@ export function renderNotesHint() {
   $("notes-cost").textContent =
     c.stt_engine === "local"
       ? "Transcrição neste computador, sem custo: o áudio não sai daqui."
-      : `O áudio vai ao OpenRouter (${c.stt_model}) e custa como transcrever um ficheiro: só se paga o que se fala.`;
+      : c.stt_engine === "xai"
+        ? "O áudio vai à xAI (grok-voice-transcribe) e custa como transcrever um ficheiro: 0,10 US$ por hora de fala."
+        : `O áudio vai ao OpenRouter (${c.stt_model}) e custa como transcrever um ficheiro: só se paga o que se fala.`;
 }
 
 // ---------------------------------------------------------------- vista da transcrição

@@ -27,7 +27,7 @@ use crate::{
     local_models::ActiveDownload,
     metrics::MetricsStore,
     overlay, secrets,
-    stt::{Providers, local::LocalStt, openrouter::OpenRouter},
+    stt::{Providers, local::LocalStt, openrouter::OpenRouter, xai::Xai},
     text::TextRules,
     tray,
     usage::UsageStore,
@@ -88,6 +88,8 @@ pub struct AppState {
     /// Há chave no cofre? Guardado aqui para a barra não ter de ir ao cofre.
     /// `AtomicBool`: escrito pelos comandos, lido por quem quiser, sem `Mutex`.
     key_set: AtomicBool,
+    /// O mesmo para a chave da xAI (motor de transcrição "xAI").
+    xai_key_set: AtomicBool,
     shortcut_ok: AtomicBool,
     /// O atalho de comando não está em falta (desligado conta como "ok").
     command_ok: AtomicBool,
@@ -148,6 +150,7 @@ impl AppState {
             http,
             events,
             key_set: AtomicBool::new(false),
+            xai_key_set: AtomicBool::new(false),
             shortcut_ok: AtomicBool::new(true),
             command_ok: AtomicBool::new(true),
             quick_ok: AtomicBool::new(true),
@@ -159,9 +162,13 @@ impl AppState {
         let config = self.config();
         let shortcut = config.shortcut.clone();
         Status {
-            // Com o motor local ditar não precisa de chave (só a limpeza e os comandos).
-            key_missing: config.stt_engine == SttEngine::Cloud
-                && !self.key_set.load(Ordering::Relaxed),
+            // Com o motor local ditar não precisa de chave (só a limpeza e os comandos);
+            // com a xAI é a chave dela que conta.
+            key_missing: match config.stt_engine {
+                SttEngine::Cloud => !self.key_set(),
+                SttEngine::Xai => !self.xai_key_set(),
+                SttEngine::Local => false,
+            },
             shortcut_ok: self.shortcut_ok(),
             shortcut_label: hotkey::pretty(&shortcut),
             shortcut,
@@ -207,6 +214,23 @@ impl AppState {
 
     pub fn key_set(&self) -> bool {
         self.key_set.load(Ordering::Relaxed)
+    }
+
+    pub fn set_xai_key_set(&self, set: bool) {
+        self.xai_key_set.store(set, Ordering::Relaxed);
+        self.publish();
+    }
+
+    pub fn xai_key_set(&self) -> bool {
+        self.xai_key_set.load(Ordering::Relaxed)
+    }
+
+    /// O aviso de "falta a chave" do motor de transcrição em uso.
+    pub fn missing_key_message(&self) -> &'static str {
+        match self.config().stt_engine {
+            SttEngine::Xai => MISSING_XAI_KEY,
+            SttEngine::Cloud | SttEngine::Local => MISSING_KEY,
+        }
     }
 
     pub fn set_shortcut_ok(&self, ok: bool) {
@@ -264,6 +288,17 @@ impl AppState {
                 // O mesmo cliente a fazer de `dyn SttProvider` (coerção de `Arc`).
                 stt: llm.clone(),
                 llm: Some(llm),
+                stream: None,
+            }),
+            // A xAI transcreve (em lote e em streaming); a limpeza e os comandos
+            // continuam a precisar da chave do OpenRouter, como com o motor local.
+            SttEngine::Xai => secrets::get_xai()?.map(|key| {
+                let xai = Arc::new(Xai::new(self.http.clone(), key));
+                Providers {
+                    stt: xai.clone(),
+                    llm,
+                    stream: Some(xai),
+                }
             }),
             SttEngine::Local => {
                 self.local.configure(
@@ -274,6 +309,7 @@ impl AppState {
                 Some(Providers {
                     stt: Arc::new(self.local.clone()),
                     llm,
+                    stream: None,
                 })
             }
         })
@@ -322,6 +358,9 @@ impl AppState {
 
 pub const MISSING_KEY: &str =
     "Falta a chave do OpenRouter: abre as definições no ícone do Ditok e cola a tua chave.";
+
+pub const MISSING_XAI_KEY: &str =
+    "Falta a chave da xAI: abre as definições no ícone do Ditok e cola a tua chave.";
 
 /// Põe `app` à frente da lista, sem repetidos, e corta para `RECENT_APPS`.
 fn push_recent(recent: &mut VecDeque<String>, app: &str) {

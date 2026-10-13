@@ -63,6 +63,13 @@ async function renderConfirm(p: FileProbe) {
       `Neste computador, sem custo${minutes != null ? `: leva cerca de ${minutes} min` : ""} (depende do teu computador).`;
     return;
   }
+  // A xAI cobra 0,10 US$ por hora de áudio em lote (sem dependência do modelo).
+  if (app.view.config.stt_engine === "xai") {
+    $("fc-estimate").textContent = p.duration_s != null
+      ? `Custo estimado: ~${usd((p.duration_s / 3600) * 0.1, 3)} com a xAI.`
+      : "Não sei estimar o custo com a xAI.";
+    return;
+  }
   $("fc-estimate").textContent = "A estimar o custo…";
 
   const stats = await api.getStats().catch(() => null);

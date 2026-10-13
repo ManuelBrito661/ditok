@@ -162,13 +162,16 @@ function render() {
   const local = $<HTMLInputElement>("engine-local");
   cloud.checked = c.stt_engine === "cloud";
   local.checked = c.stt_engine === "local";
+  $<HTMLInputElement>("engine-xai").checked = c.stt_engine === "xai";
+  // A chave da xAI só interessa com a xAI; o seletor de modelos é só do OpenRouter.
+  $("xai-key-row").hidden = c.stt_engine !== "xai";
 
   const available = view?.available ?? true;
   local.disabled = !available;
   $("engine-unavailable").hidden = available;
 
   // O seletor de modelos da nuvem só interessa com a nuvem.
-  $("stt-model-row").hidden = c.stt_engine === "local";
+  $("stt-model-row").hidden = c.stt_engine !== "cloud";
 
   // A lista de modelos locais vê-se com o motor local escolhido (ou já com algum modelo
   // descarregado ou a descarregar: é assim que se prepara antes de mudar).

@@ -16,6 +16,10 @@
       <span id="tip-notice" hidden></span>
     </div>
 
+    <!-- O que a transcrição em streaming já ouviu (só com o motor xAI): aparece enquanto se fala.
+         Fica fora das regiões anunciadas: lê-lo a cada palavra seria insuportável. -->
+    <div id="caption" aria-hidden="true" hidden></div>
+
     <!-- Só as mudanças de estado são anunciadas aos leitores de ecrã. O cronómetro
          (que muda a cada segundo) fica fora desta região, senão seria lido sem parar. -->
     <span id="announce" class="sr-only" role="status" aria-live="polite"></span>

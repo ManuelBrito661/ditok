@@ -142,10 +142,178 @@ impl To16k {
     }
 }
 
+/// Passa-alto de 1.ª ordem com estado, para o áudio do stream (a versão de
+/// `condition_speech` precisa da gravação inteira para normalizar o pico).
+struct HighPass {
+    alpha: f32,
+    prev_x: f32,
+    prev_y: f32,
+    started: bool,
+}
+
+impl HighPass {
+    fn new(rate: u32) -> Self {
+        let rc = 1.0 / (std::f32::consts::TAU * HIGH_PASS_HZ);
+        let dt = 1.0 / rate as f32;
+        Self {
+            alpha: rc / (rc + dt),
+            prev_x: 0.0,
+            prev_y: 0.0,
+            started: false,
+        }
+    }
+
+    fn apply(&mut self, x: f32) -> f32 {
+        if !self.started {
+            // Como em `condition_speech`: o primeiro valor não é um degrau.
+            self.prev_x = x;
+            self.started = true;
+        }
+        let y = self.alpha * (self.prev_y + x - self.prev_x);
+        self.prev_x = x;
+        self.prev_y = y;
+        y
+    }
+}
+
+/// O áudio do microfone, aos poucos (blocos de ~50 ms), para 16 kHz mono PCM16 — o
+/// que a transcrição em streaming recebe enquanto se fala. Ao contrário de `To16k`,
+/// guarda o estado entre blocos: o resto que não enche um bloco do resampler fica à
+/// espera do próximo, e o passa-alto continua de onde ficou.
+pub struct StreamResampler {
+    fft: Option<Fft<f32>>,
+    pending: Vec<f32>,
+    high_pass: HighPass,
+}
+
+impl StreamResampler {
+    pub fn new(input_rate: u32) -> Result<Self, ResampleError> {
+        let fft = if input_rate == TARGET_RATE {
+            None
+        } else {
+            Some(
+                Fft::<f32>::new(
+                    input_rate as usize,
+                    TARGET_RATE as usize,
+                    1024,
+                    1,
+                    FixedSync::Both,
+                )
+                .map_err(|source| ResampleError::Construct {
+                    rate: input_rate,
+                    source,
+                })?,
+            )
+        };
+        Ok(Self {
+            fft,
+            pending: Vec::new(),
+            high_pass: HighPass::new(TARGET_RATE),
+        })
+    }
+
+    /// Mono à taxa do microfone → PCM16 a 16 kHz. Pode devolver menos do que o
+    /// equivalente à entrada (o resto espera pelo próximo bloco).
+    pub fn push(&mut self, input: &[f32]) -> Result<Vec<i16>, ResampleError> {
+        self.pending.extend_from_slice(input);
+        self.process(false)
+    }
+
+    /// No fim do áudio: processa o que sobrou (completado com silêncio).
+    pub fn finish(&mut self) -> Result<Vec<i16>, ResampleError> {
+        self.process(true)
+    }
+
+    fn process(&mut self, flush: bool) -> Result<Vec<i16>, ResampleError> {
+        let mut mono16k: Vec<f32> = Vec::new();
+        match self.fft.as_mut() {
+            None => mono16k.append(&mut self.pending),
+            Some(fft) => loop {
+                let need = fft.input_frames_next();
+                if self.pending.len() < need {
+                    if !flush || self.pending.is_empty() {
+                        break;
+                    }
+                    self.pending.resize(need, 0.0);
+                }
+                let mut block = vec![0.0f32; fft.output_frames_next()];
+                let out_len = block.len();
+                let buf_in = InterleavedSlice::new(&self.pending[..need], 1, need)
+                    .map_err(|e| ResampleError::Buffer(e.to_string()))?;
+                let mut buf_out = InterleavedSlice::new_mut(&mut block, 1, out_len)
+                    .map_err(|e| ResampleError::Buffer(e.to_string()))?;
+                let (read, written) = fft.process_into_buffer(&buf_in, &mut buf_out, None)?;
+                mono16k.extend_from_slice(&block[..written]);
+                self.pending.drain(..read);
+            },
+        }
+        Ok(mono16k
+            .into_iter()
+            .map(|s| (self.high_pass.apply(s).clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::f32::consts::TAU;
+
+    fn stream_in_blocks(rate: u32, input: &[f32], block: usize) -> Vec<i16> {
+        let mut r = StreamResampler::new(rate).unwrap();
+        let mut out = Vec::new();
+        for chunk in input.chunks(block) {
+            out.extend(r.push(chunk).unwrap());
+        }
+        out.extend(r.finish().unwrap());
+        out
+    }
+
+    fn crossings_i16(s: &[i16]) -> usize {
+        s.windows(2).filter(|w| w[0] <= 0 && w[1] > 0).count()
+    }
+
+    #[test]
+    fn stream_resampler_keeps_duration_and_frequency_in_50ms_blocks() {
+        // 48 kHz: blocos de 50 ms = 2400 amostras, como o tap do microfone.
+        let out = stream_in_blocks(48_000, &sine(1000.0, 48_000, 1.0), 2400);
+        assert!(
+            (out.len() as i64 - 16_000).abs() <= 1100,
+            "len = {} (o último bloco completa-se com silêncio)",
+            out.len()
+        );
+        let zc = crossings_i16(&out);
+        assert!((985..=1015).contains(&zc), "zero crossings = {zc}");
+        // 44,1 kHz tem um rácio fracionário.
+        let out = stream_in_blocks(44_100, &sine(440.0, 44_100, 2.0), 2205);
+        assert!((out.len() as i64 - 32_000).abs() <= 1100, "len = {}", out.len());
+        // Só o miolo (440 Hz × 1,75 s = 770): as pontas têm o arranque do filtro e o silêncio de fecho.
+        let zc = crossings_i16(&out[2_000..30_000]);
+        assert!((760..=780).contains(&zc), "zero crossings = {zc}");
+    }
+
+    #[test]
+    fn stream_resampler_does_not_depend_on_the_block_size() {
+        let input = sine(700.0, 48_000, 0.5);
+        let small = stream_in_blocks(48_000, &input, 480);
+        let big = stream_in_blocks(48_000, &input, 4800);
+        assert_eq!(small.len(), big.len());
+        let worst = small
+            .iter()
+            .zip(&big)
+            .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+            .max()
+            .unwrap();
+        assert!(worst <= 1, "diferença máxima = {worst}");
+    }
+
+    #[test]
+    fn stream_resampler_at_16k_passes_through_and_filters_dc() {
+        let out = stream_in_blocks(16_000, &vec![0.5f32; 16_000], 800);
+        assert_eq!(out.len(), 16_000);
+        // O desvio DC (0,5 constante) é cortado pelo passa-alto.
+        assert!(out[15_000..].iter().all(|s| s.abs() < 800), "{:?}", &out[15_000..15_005]);
+    }
 
     fn sine(freq: f32, rate: u32, secs: f32) -> Vec<f32> {
         let n = (rate as f32 * secs) as usize;

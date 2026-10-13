@@ -74,7 +74,7 @@
           </header>
 
           <div id="key-banner" class="banner" role="alert" hidden>
-            <span>Falta a chave do OpenRouter. Sem ela não consigo transcrever.</span>
+            <span id="key-banner-text">Falta a chave do OpenRouter. Sem ela não consigo transcrever.</span>
             <button id="key-banner-open" type="button" class="primary small">Configurar</button>
           </div>
 
@@ -782,6 +782,11 @@
                     <p id="engine-cloud-desc" class="choice-desc">O OpenRouter, com a tua chave. Precisa de rede e custa uns cêntimos por hora de fala.</p>
                   </div>
                   <div class="choice">
+                    <input type="radio" id="engine-xai" name="stt-engine" value="xai" aria-describedby="engine-xai-desc" />
+                    <label for="engine-xai" class="choice-title">xAI, em tempo real</label>
+                    <p id="engine-xai-desc" class="choice-desc">A API da xAI, com a tua chave. O áudio segue enquanto falas e vês o texto a aparecer; custa 0,20 US$ por hora de fala. A limpeza com IA e os comandos continuam no OpenRouter.</p>
+                  </div>
+                  <div class="choice">
                     <input type="radio" id="engine-local" name="stt-engine" value="local" aria-describedby="engine-local-desc" />
                     <label for="engine-local" class="choice-title">Neste computador</label>
                     <p id="engine-local-desc" class="choice-desc">O áudio não sai daqui e não custa nada. Descarrega-se um modelo (centenas de MB) e, enquanto ditas, usa 1 a 2 GB de memória.</p>
@@ -818,6 +823,20 @@
                 </div>
                 <ul id="speaker-models" class="local-models"></ul>
                 <p id="speaker-error" class="error" role="alert" hidden></p>
+              </div>
+              <div id="xai-key-row" class="row stacked" hidden>
+                <div class="row-text">
+                  <span class="row-title">Chave da xAI <span id="xai-key-status" class="pill"></span></span>
+                  <span class="row-desc">Cria-a em console.x.ai. Guardo-a no cofre do sistema; nunca a mostro nem a gravo em ficheiros.</span>
+                  <span id="xai-key-info" class="row-desc"></span>
+                </div>
+                <form id="xai-key-form" class="row-control">
+                  <input id="xai-key-input" type="password" autocomplete="off" spellcheck="false"
+                         placeholder="xai-…" aria-label="Nova chave da xAI" />
+                  <button type="submit" class="primary">Guardar</button>
+                  <button id="xai-key-test" type="button" class="secondary">Testar</button>
+                  <button id="xai-key-delete" type="button" class="ghost danger">Apagar</button>
+                </form>
               </div>
               <div class="row stacked">
                 <div class="row-text">

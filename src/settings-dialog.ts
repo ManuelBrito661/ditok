@@ -245,6 +245,64 @@ function setupKey() {
   });
 }
 
+function renderXaiKey() {
+  const set = app.view.xai_key_set;
+  const status = $("xai-key-status");
+  status.textContent = set ? "Configurada" : "Não configurada";
+  status.className = `pill ${set ? "ok" : "warn"}`;
+  $<HTMLButtonElement>("xai-key-test").disabled = !set;
+  $<HTMLButtonElement>("xai-key-delete").disabled = !set;
+}
+
+function setupXaiKey() {
+  const input = $<HTMLInputElement>("xai-key-input");
+  const info = $("xai-key-info");
+
+  $("xai-key-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await api.setXaiKey(input.value);
+      input.value = ""; // a chave não fica no DOM
+      app.view.xai_key_set = true;
+      notifyViewChange();
+      info.textContent = "Guardada e validada.";
+      toast("Chave da xAI guardada");
+    } catch (err) {
+      toast(errorText(err), "error");
+    }
+  });
+
+  $("xai-key-test").addEventListener("click", async () => {
+    info.textContent = "A testar…";
+    try {
+      await api.testXaiKey();
+      info.textContent = "Válida.";
+    } catch (err) {
+      info.textContent = "";
+      toast(errorText(err), "error");
+    }
+  });
+
+  $("xai-key-delete").addEventListener("click", async () => {
+    const ok = await confirmDanger(
+      "Apagar a chave da xAI?",
+      "Tiro-a do cofre do sistema. Não consigo transcrever com a xAI até guardares outra.",
+      "Apagar chave",
+    );
+    if (!ok) return;
+    try {
+      await api.deleteXaiKey();
+      app.view.xai_key_set = false;
+      info.textContent = "";
+      notifyViewChange();
+      toast("Chave da xAI apagada");
+    } catch (err) {
+      toast(errorText(err), "error");
+    }
+  });
+}
+
+
 // ---------------------------------------------------------------- modelos
 
 function price(m: ModelInfo, kind: ModelKind): string {
@@ -376,6 +434,7 @@ function renderControls() {
   const p = app.view.paths;
   $("paths").textContent = `Configuração: ${p.config} · Dados: ${p.data} · Logs: ${p.logs}`;
   renderKey();
+  renderXaiKey();
 }
 
 function bindSimpleControls(onHistoryCleared: () => void) {
@@ -490,6 +549,7 @@ export function setupSettings(onHistoryCleared: () => void) {
   setupShortcut("command-shortcut", "command_shortcut");
   setupShortcut("quick-history", "quick_history_shortcut");
   setupKey();
+  setupXaiKey();
   bindSimpleControls(onHistoryCleared);
   setupStyles();
   setupLocalEngine();

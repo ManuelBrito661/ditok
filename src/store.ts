@@ -130,3 +130,16 @@ export const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
   if (!el) throw new Error(`#${id} não existe no HTML`);
   return el as T;
 };
+
+/** O motor de transcrição escolhido tem o que precisa para ditar? A nuvem precisa da
+ *  chave do OpenRouter, a xAI da dela, o motor local de nenhuma. */
+export function engineKeyOk(view: SettingsView): boolean {
+  switch (view.config.stt_engine) {
+    case "local":
+      return true;
+    case "xai":
+      return view.xai_key_set;
+    default:
+      return view.api_key_set;
+  }
+}

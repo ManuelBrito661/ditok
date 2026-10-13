@@ -88,7 +88,20 @@ pub fn run() {
                     tracing::warn!(error = %e, "não foi possível marcar o guia como feito");
                 }
             }
-            let show_window = !config.onboarding_done || !key_set;
+            let xai_key_set = match secrets::get_xai() {
+                Ok(key) => key.is_some(),
+                Err(e) => {
+                    tracing::error!(error = %e, "não foi possível ler a chave da xAI do cofre");
+                    false
+                }
+            };
+            // Falta a chave do motor de transcrição escolhido?
+            let engine_ready = if config.stt_engine == config::SttEngine::Xai {
+                xai_key_set
+            } else {
+                key_set
+            };
+            let show_window = !config.onboarding_done || !engine_ready;
 
             let tray = tray::Tray::new(app.handle(), tx.clone(), &config)?;
             // `Invalid` = o texto do atalho no config não se lê (não é culpa de outra app).
@@ -168,6 +181,7 @@ pub fn run() {
             // O menu do tray nasce com a linha do atalho certa; isto só a marca
             // "ocupado" se for o caso (a barra pede o estado quando carregar).
             state.set_key_set(key_set);
+            state.set_xai_key_set(xai_key_set);
             state.set_command_ok(command_ok);
             state.set_quick_ok(quick_ok);
             state.set_shortcut_ok(shortcut_ok);
@@ -241,6 +255,9 @@ pub fn run() {
             commands::set_api_key,
             commands::delete_api_key,
             commands::test_api_key,
+            commands::set_xai_key,
+            commands::delete_xai_key,
+            commands::test_xai_key,
             commands::list_models,
             commands::get_stats,
             commands::get_history,

@@ -4,6 +4,8 @@
 //   chega logo antes do estado "failed"
 // - "overlay:busy": premiste o atalho a meio do processamento (a pílula abana)
 // - "overlay:level": nível do microfone entre 0 e 1, ~20 vezes por segundo
+// - "overlay:partial": o texto que o stream (motor xAI) já ouviu; aparece por cima da
+//   pílula enquanto se grava e se espera, e some quando o estado deixa de ser esse
 // - "overlay:latched": o ditado está em modo alternar (mostra ✕ e ■)
 // - "overlay:style": o estilo deste ditado ("Formal"…) ou null; chega logo antes
 //   do estado "recording" e aparece antes do tempo
@@ -83,8 +85,8 @@ const BAR_COUNT = 14;
 const NOTICE: Record<OpenTarget, { label: string; tip: string; spoken: string }> = {
   key: {
     label: "Falta a chave",
-    tip: "Falta a chave do OpenRouter · clica para a colar",
-    spoken: "Falta a chave do OpenRouter. Clica na barra para a colar.",
+    tip: "Falta a chave · clica para a colar",
+    spoken: "Falta a chave. Clica na barra para a colar.",
   },
   shortcut: {
     label: "Atalho ocupado",
@@ -200,8 +202,27 @@ function onStatus(s: Status) {
   renderNotice();
 }
 
+const caption = document.getElementById("caption")!;
+
+/** As últimas palavras do texto ao vivo, que cabem em duas linhas da dica. */
+function captionTail(text: string, max = 96): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(-max);
+  const space = cut.indexOf(" ");
+  return `…${space > 0 && space < 20 ? cut.slice(space + 1) : cut}`;
+}
+
+/** Mostra (ou esconde, com texto vazio) o que o stream já ouviu. */
+function setCaption(text: string) {
+  const t = text.trim();
+  caption.hidden = t === "";
+  caption.textContent = captionTail(t);
+}
+
 function setState(state: State) {
   pill.dataset.state = state;
+  // O texto ao vivo só vive enquanto se grava e se espera pelo fim; um ditado novo começa vazio.
+  if (state !== "processing") setCaption("");
   // O backend volta a avisar se for o caso.
   pill.classList.remove("latched", "slow", "retry", "busy", "wide");
   window.clearTimeout(slowTimer);
@@ -358,6 +379,11 @@ reportHitRect();
 void listen<State>("overlay:state", (e) => setState(e.payload));
 void listen<Failure>("overlay:failure", (e) => onFailure(e.payload));
 void listen("overlay:busy", () => onBusy());
+void listen<string>("overlay:partial", (e) => {
+  // Um parcial atrasado, depois de o ditado ter acabado, não pode reaparecer.
+  const state = pill.dataset.state;
+  if (state === "recording" || state === "processing") setCaption(e.payload);
+});
 void listen<number>("overlay:level", (e) => onLevel(e.payload));
 void listen("overlay:latched", () => pill.classList.add("latched"));
 void listen<string | null>("overlay:style", (e) => (styleTag = e.payload));

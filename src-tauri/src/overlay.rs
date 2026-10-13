@@ -365,6 +365,13 @@ pub fn emit_level(app: &AppHandle, level: f32) {
     let _ = app.emit_to(LABEL, "overlay:level", level);
 }
 
+/// O texto que a transcrição em streaming já ouviu (frases acabadas + a frase em
+/// curso), para mostrar por cima da pílula enquanto se fala. A barra limpa-o sozinha
+/// quando o estado deixa de ser "a gravar"/"a processar".
+pub fn emit_partial(app: &AppHandle, text: &str) {
+    let _ = app.emit_to(LABEL, "overlay:partial", text);
+}
+
 /// Motivo curto de uma falha ("Sem rede"…) e se há "Tentar de novo". Enviado
 /// antes do estado `failed`.
 #[derive(Clone, serde::Serialize)]

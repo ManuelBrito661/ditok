@@ -21,7 +21,7 @@ import {
 import { addDictionaryEntry, countWordIn, suggestFrom } from "./dictionary-add";
 import { openSettings } from "./settings-dialog";
 import { describeResult, summaryModel, wordCount } from "./summary";
-import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
+import { $, app, confirmDanger, engineKeyOk, onViewChange, save, toast } from "./store";
 
 /** Quantos ditados se desenham de cada vez (com "Mostrar mais" para o resto). */
 const PAGE = 200;
@@ -473,7 +473,8 @@ function renderHistory() {
 function renderView() {
   renderKeys($("promo-keys"), app.view.config.shortcut);
   // Com o motor local ditar não precisa de chave (só a limpeza e os comandos).
-  $("key-banner").hidden = app.view.api_key_set || app.view.config.stt_engine === "local";
+  $("key-banner").hidden = engineKeyOk(app.view);
+  $("key-banner-text").textContent = `Falta a chave ${app.view.config.stt_engine === "xai" ? "da xAI" : "do OpenRouter"}. Sem ela não consigo transcrever.`;
   renderHistory();
   renderStats();
 }

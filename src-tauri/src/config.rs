@@ -126,6 +126,8 @@ pub enum SttEngine {
     Cloud,
     /// O motor neste computador, com `local_model`.
     Local,
+    /// A API da xAI, com a chave própria dela e transcrição em streaming (ver `stt/xai.rs`).
+    Xai,
 }
 
 /// Quanto a limpeza com IA mexe no texto. `rename_all = "lowercase"`: no JSON
@@ -433,6 +435,7 @@ impl Config {
         match self.stt_engine {
             SttEngine::Cloud => self.stt_model.clone(),
             SttEngine::Local => crate::stt::local::slug(self.local_model),
+            SttEngine::Xai => crate::stt::xai::MODEL_SLUG.to_owned(),
         }
     }
 
@@ -739,6 +742,12 @@ mod tests {
         let json = serde_json::to_value(&c).unwrap();
         assert_eq!(json["stt_engine"], "local");
         assert_eq!(json["local_model"], "whisper-small");
+        // A xAI: o motor lê-se de "xai" e dá nome ao modelo.
+        c.local_idle_minutes = 5;
+        c.stt_engine = serde_json::from_str(r#""xai""#).unwrap();
+        assert_eq!(c.stt_engine, SttEngine::Xai);
+        assert_eq!(c.active_stt_model(), "xai/grok-voice-transcribe-2.0");
+        assert!(c.validate().is_ok());
     }
 
     #[test]

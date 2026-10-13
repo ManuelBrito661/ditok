@@ -29,6 +29,7 @@ use crate::{
         SttError,
         models::{self, ModelKind, ModelList},
         openrouter::{self, KeyInfo},
+        xai,
     },
     sysmem::{self, MemoryReport},
     updater::{self, UpdateInfo},
@@ -73,6 +74,8 @@ pub struct SettingsView {
     config: Config,
     defaults: Config,
     api_key_set: bool,
+    /// Há chave da xAI no cofre?
+    xai_key_set: bool,
     /// O atalho de ditado está registado (`false`: outra app ocupou-o).
     shortcut_ok: bool,
     /// O atalho de comando está registado (ou o modo está desligado).
@@ -85,10 +88,12 @@ pub struct SettingsView {
 
 async fn settings_view(app: &AppHandle, state: &Arc<AppState>) -> CmdResult<SettingsView> {
     let api_key_set = blocking(|| secrets::get().map(|k| k.is_some())).await??;
+    let xai_key_set = blocking(|| secrets::get_xai().map(|k| k.is_some())).await??;
     Ok(SettingsView {
         config: (*state.config()).clone(),
         defaults: Config::default(),
         api_key_set,
+        xai_key_set,
         shortcut_ok: state.shortcut_ok(),
         command_ok: state.command_ok(),
         quick_ok: state.quick_ok(),
@@ -151,6 +156,7 @@ pub async fn save_settings(
         || config.local_model != current.local_model
         || config.local_idle_minutes != current.local_idle_minutes
         || (config.stt_engine == SttEngine::Local && config.language != current.language);
+    // `local_changed` já cobre a troca de motor (inclui "para/da xAI").
     let transport_changed = config.transport != current.transport || local_changed;
     // Um modelo que já não vai ser usado liberta a memória já, não aos 5 minutos.
     let drop_local_model = current.stt_engine == SttEngine::Local
@@ -371,6 +377,47 @@ pub async fn test_api_key(state: AppStateRef<'_>) -> CmdResult<KeyInfo> {
     Ok(openrouter::check_key(&state.http, &key).await?)
 }
 
+/// Valida a chave da xAI e só depois a guarda no cofre (a xAI não devolve estado
+/// da chave, por isso não há nada para mostrar além de "válida").
+#[tauri::command]
+pub async fn set_xai_key(state: AppStateRef<'_>, key: String) -> CmdResult<()> {
+    let key = key.trim().to_owned();
+    if key.is_empty() {
+        return Err("cola a chave antes de guardar".into());
+    }
+    match xai::check_key(&state.http, &key).await {
+        Ok(()) => {}
+        // Chave rejeitada: não guardamos.
+        Err(e @ (SttError::Unauthorized(_) | SttError::Forbidden(_))) => return Err(e.into()),
+        // Sem rede (ou outro erro do servidor): guardamos na mesma e avisamos no log.
+        Err(e) => {
+            tracing::warn!(error = %e, "não foi possível validar a chave da xAI; guardada sem validação");
+        }
+    }
+    blocking(move || secrets::set_xai(&key)).await??;
+    let _ = state.events.send(DictationEvent::ProviderChanged);
+    state.set_xai_key_set(true);
+    tracing::info!("chave da xAI guardada");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_xai_key(state: AppStateRef<'_>) -> CmdResult<()> {
+    blocking(secrets::delete_xai).await??;
+    let _ = state.events.send(DictationEvent::ProviderChanged);
+    state.set_xai_key_set(false);
+    tracing::info!("chave da xAI apagada");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_xai_key(state: AppStateRef<'_>) -> CmdResult<()> {
+    let key = blocking(secrets::get_xai)
+        .await??
+        .ok_or("não há nenhuma chave da xAI guardada")?;
+    Ok(xai::check_key(&state.http, &key).await?)
+}
+
 /// Lista de modelos: da cache se tiver menos de 24 h (e `refresh` for falso), senão
 /// da API; se a API falhar, a cache antiga marcada como `stale`.
 #[tauri::command]
@@ -510,7 +557,7 @@ pub async fn reprocess_history_entry(
     let state_ = Arc::clone(&state);
     let providers = blocking(move || state_.load_providers())
         .await??
-        .ok_or(MISSING_KEY)?;
+        .ok_or(state.missing_key_message())?;
     let new = pipeline::reprocess(Arc::clone(&state), providers, wav.into(), &entry).await?;
     let state_ = Arc::clone(&state);
     let updated = blocking(move || {
@@ -755,7 +802,7 @@ pub async fn file_start(state: AppStateRef<'_>, path: String) -> CmdResult<JobVi
     let state_ = Arc::clone(&state);
     let providers = blocking(move || state_.load_providers())
         .await??
-        .ok_or(MISSING_KEY)?;
+        .ok_or(state.missing_key_message())?;
     let probe_path = path.clone();
     let info = blocking(move || decode::probe(&probe_path)).await??;
     Ok(files::start(state.inner(), providers.stt, path, info)?)

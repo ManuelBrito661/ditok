@@ -33,7 +33,7 @@ export interface Config {
   typing_wpm: number;
   /** Modelo de texto dos resumos; vazio = o da limpeza. */
   summary_model: string;
-  /** Quem transcreve: a nuvem (OpenRouter) ou o motor local. */
+  /** Quem transcreve: a nuvem (OpenRouter), a xAI (streaming) ou o motor local. */
   stt_engine: SttEngine;
   /** O modelo do motor local. */
   local_model: LocalModelId;
@@ -143,6 +143,8 @@ export interface SettingsView {
   config: Config;
   defaults: Config;
   api_key_set: boolean;
+  /** Há chave da xAI no cofre? */
+  xai_key_set: boolean;
   /** `false`: outra app ocupou o atalho de ditado e ele não funciona. */
   shortcut_ok: boolean;
   /** `false`: o modo comando está ligado mas outra app ocupou o atalho. */
@@ -280,6 +282,10 @@ export const api = {
   deleteApiKey: () => invoke<void>("delete_api_key"),
   /** Valida a chave e devolve o gasto e o limite dela (GET /key, gratuito). */
   testApiKey: () => invoke<KeyInfo>("test_api_key"),
+  /** Valida a chave da xAI e guarda-a no cofre. */
+  setXaiKey: (key: string) => invoke<void>("set_xai_key", { key }),
+  deleteXaiKey: () => invoke<void>("delete_xai_key"),
+  testXaiKey: () => invoke<void>("test_xai_key"),
   listModels: (kind: ModelKind, refresh = false) => invoke<ModelList>("list_models", { kind, refresh }),
   getStats: () => invoke<Stats>("get_stats"),
   getHistory: () => invoke<HistoryItem[]>("get_history"),
@@ -405,7 +411,7 @@ export const summaries = {
 
 // ---------------------------------------------------------------- motor local
 
-export type SttEngine = "cloud" | "local";
+export type SttEngine = "cloud" | "local" | "xai";
 export type LocalModelId =
   | "parakeet-v3"
   | "whisper-small"

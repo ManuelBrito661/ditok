@@ -30,7 +30,7 @@ use cpal::{
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 use super::{
-    resample::{self, TARGET_RATE, To16k},
+    resample::{self, StreamResampler, TARGET_RATE, To16k},
     vad::{self, Voice},
     wav,
 };
@@ -123,6 +123,11 @@ pub struct Recording {
 /// desligar, o microfone fecha sozinho ao fim disto.
 const MONITOR_KEEPALIVE: Duration = Duration::from_secs(6);
 
+/// Para onde vai o áudio de um ditado em streaming: blocos PCM s16le a 16 kHz mono,
+/// ~20 por segundo. Largar todos os `Sender` (ao parar ou cancelar) fecha o canal,
+/// que é o sinal de "fim do áudio" para quem o lê.
+pub type AudioTap = UnboundedSender<Bytes>;
+
 enum Command {
     Start {
         pressed_at: Instant,
@@ -130,6 +135,8 @@ enum Command {
         start_cue: bool,
         /// O microfone escolhido nas definições (`None` = o predefinido).
         device: Option<String>,
+        /// Se houver, o áudio vai também para aqui enquanto se grava.
+        tap: Option<AudioTap>,
     },
     Stop {
         reply: oneshot::Sender<Result<Recording, AudioError>>,
@@ -185,11 +192,18 @@ impl Recorder {
 
     /// Não espera que o microfone abra: o orquestrador continua livre. Se falhar, a
     /// thread envia `DictationEvent::AudioFailed`.
-    pub fn start(&self, pressed_at: Instant, start_cue: bool, device: Option<String>) {
+    pub fn start(
+        &self,
+        pressed_at: Instant,
+        start_cue: bool,
+        device: Option<String>,
+        tap: Option<AudioTap>,
+    ) {
         let cmd = Command::Start {
             pressed_at,
             start_cue,
             device,
+            tap,
         };
         if self.tx.send(cmd).is_err() {
             tracing::error!("thread de áudio indisponível");
@@ -229,6 +243,54 @@ struct Monitor {
     until: Instant,
 }
 
+/// O lado do áudio de um ditado em streaming: converte cada bloco que sai do ring
+/// buffer para 16 kHz PCM16 e entrega-o ao canal.
+struct Tap {
+    tx: AudioTap,
+    resampler: StreamResampler,
+}
+
+impl Tap {
+    fn new(tx: AudioTap, rate: u32) -> Option<Self> {
+        match StreamResampler::new(rate) {
+            Ok(resampler) => Some(Self { tx, resampler }),
+            Err(e) => {
+                tracing::warn!(error = %e, "stream de áudio indisponível; só o lote");
+                None
+            }
+        }
+    }
+
+    /// `false` se ninguém está a ouvir (o stream acabou): quem chama larga o tap.
+    fn feed(&mut self, mono: &[f32]) -> bool {
+        match self.resampler.push(mono) {
+            Ok(pcm) => self.send(&pcm),
+            Err(e) => {
+                tracing::warn!(error = %e, "resampling do stream falhou; só o lote");
+                false
+            }
+        }
+    }
+
+    /// Esvazia o que o resampler guardou. O canal fecha quando o `Tap` é largado.
+    fn finish(mut self) {
+        match self.resampler.finish() {
+            Ok(pcm) => {
+                self.send(&pcm);
+            }
+            Err(e) => tracing::warn!(error = %e, "fim do resampling do stream falhou"),
+        }
+    }
+
+    fn send(&self, pcm: &[i16]) -> bool {
+        if pcm.is_empty() {
+            return true;
+        }
+        let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+        self.tx.send(Bytes::from(bytes)).is_ok()
+    }
+}
+
 fn audio_thread(
     rx: mpsc::Receiver<Command>,
     events: UnboundedSender<DictationEvent>,
@@ -236,6 +298,7 @@ fn audio_thread(
     mic: MicSink,
 ) {
     let mut session: Option<Session> = None;
+    let mut tap: Option<Tap> = None;
     let mut monitor: Option<Monitor> = None;
     let mut to16k = To16k::default();
 
@@ -256,6 +319,11 @@ fn audio_thread(
                         let new_from = s.drain();
                         // Só as amostras que acabaram de chegar: o nível "de agora".
                         level(resample::level(&s.samples[new_from..]));
+                        if let Some(t) = tap.as_mut()
+                            && !t.feed(&s.samples[new_from..])
+                        {
+                            tap = None;
+                        }
                     } else if let Some(m) = monitor.as_mut() {
                         if m.session.failed.load(Ordering::Relaxed) {
                             // O stream do medidor morreu (microfone desligado): a janela é avisada.
@@ -283,6 +351,7 @@ fn audio_thread(
                 pressed_at,
                 start_cue,
                 device,
+                tap: new_tap,
             } => {
                 if session.is_some() {
                     tracing::warn!("início pedido com uma gravação em curso; ignorado");
@@ -299,7 +368,10 @@ fn audio_thread(
                     Some(events.clone()),
                     device.as_deref(),
                 ) {
-                    Ok(s) => session = Some(s),
+                    Ok(s) => {
+                        tap = new_tap.and_then(|tx| Tap::new(tx, s.rate()));
+                        session = Some(s);
+                    }
                     Err(e) => {
                         tracing::error!(error = %e, "não foi possível abrir o microfone");
                         let _ = events.send(DictationEvent::AudioFailed(e.to_string()));
@@ -308,6 +380,14 @@ fn audio_thread(
             }
             Command::Stop { reply } => {
                 let stop_at = Instant::now();
+                // Primeiro o que falta ao stream (o fim do último bloco), depois o canal
+                // fecha-se ao largar o tap: é o "fim do áudio".
+                if let (Some(s), Some(mut t)) = (session.as_mut(), tap.take()) {
+                    s.pause();
+                    let new_from = s.drain();
+                    t.feed(&s.samples[new_from..]);
+                    t.finish();
+                }
                 let result = match session.take() {
                     Some(s) => s.finish(&mut to16k, stop_at),
                     None => Err(AudioError::NotRecording),
@@ -316,6 +396,7 @@ fn audio_thread(
             }
             Command::Cancel => {
                 // Largar a sessão fecha o stream (o Drop do cpal::Stream trata disso).
+                tap = None;
                 if session.take().is_some() {
                     tracing::debug!("gravação descartada");
                 }
@@ -481,6 +562,13 @@ impl Session {
             dropped,
             failed,
         })
+    }
+
+    /// Pára os callbacks; o que já está no ring buffer não se perde.
+    fn pause(&self) {
+        if let Err(e) = self.stream.pause() {
+            tracing::warn!(error = %e, "não foi possível pausar o stream");
+        }
     }
 
     /// Move o que estiver no ring buffer para `samples`. O ring buffer é circular,

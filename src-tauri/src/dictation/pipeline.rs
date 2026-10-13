@@ -25,7 +25,10 @@ use crate::{
     metrics::{self, DictationMetrics},
     paste,
     state::AppState,
-    stt::{Providers, SttError, SttProvider, SttRequest, openrouter::OpenRouter},
+    stt::{
+        LiveSession, Providers, SttError, SttProvider, SttRequest, Transcription,
+        openrouter::OpenRouter,
+    },
     text::{Applied, Processed, TextRules},
 };
 
@@ -174,7 +177,10 @@ pub async fn process(
     released_at: Instant,
     target: focus::Target,
     commit: Commit,
+    live: Option<LiveSession>,
 ) -> Outcome {
+    // Sem voz (ou um toque) o `live` larga-se aqui e a ligação fecha-se: o texto do
+    // stream nem é pedido.
     let (rec, release_to_wav) = match ready_recording(&state, recording, released_at).await {
         Ok(ready) => ready,
         Err(outcome) => return outcome,
@@ -187,8 +193,32 @@ pub async fn process(
         release_to_wav,
         target,
         commit,
+        live,
     )
     .await
+}
+
+/// Quanto se espera pelo texto final do stream depois de largar o atalho. Passado
+/// isto (ou se o stream falhou), envia-se o WAV em lote.
+const STREAM_FINISH_WAIT: Duration = Duration::from_secs(5);
+
+/// O texto do ditado: do stream, se o houve e correu bem; senão o WAV completo em
+/// lote (o caminho de sempre). Um stream sem texto, depois de a gravação ter fala,
+/// também cai no lote: mais vale pagar duas vezes do que perder o ditado.
+async fn transcribe_recording(
+    stt: &dyn SttProvider,
+    live: Option<LiveSession>,
+    rec: &Recording,
+    req: &SttRequest<'_>,
+) -> Result<Transcription, SttError> {
+    if let Some(live) = live {
+        match live.finish(STREAM_FINISH_WAIT).await {
+            Ok(t) if !t.text.trim().is_empty() => return Ok(t),
+            Ok(_) => tracing::warn!("o stream não devolveu texto; a usar o lote"),
+            Err(e) => tracing::warn!(error = %e, "o stream falhou; a usar o lote"),
+        }
+    }
+    stt.transcribe(rec.wav.clone(), req).await
 }
 
 /// Espera pela gravação e decide se vale a pena enviá-la. `Err` traz o fim do
@@ -261,11 +291,13 @@ pub async fn retry(
         Duration::ZERO,
         target,
         commit,
+        None,
     )
     .await
 }
 
 /// Do pedido STT à colagem, para uma gravação que já sabemos ter voz.
+#[allow(clippy::too_many_arguments)] // cada um é uma parte distinta do ditado
 async fn transcribe_and_paste(
     state: Arc<AppState>,
     providers: Providers,
@@ -274,6 +306,7 @@ async fn transcribe_and_paste(
     release_to_wav: Duration,
     target: focus::Target,
     commit: Commit,
+    live: Option<LiveSession>,
 ) -> Outcome {
     // Uma "fotografia" da configuração: o ditado usa-a do princípio ao fim.
     let config = state.config();
@@ -297,7 +330,7 @@ async fn transcribe_and_paste(
     let mut applied = Applied::default();
     let mut stt_guard: Option<SttMetricsGuard> = None;
 
-    let outcome = match stt.transcribe(rec.wav.clone(), &req).await {
+    let outcome = match transcribe_recording(stt, live, &rec, &req).await {
         Err(e) => {
             tracing::error!(error = %e, model = %stt_model, "transcrição falhou");
             state.notify(&format!("Transcrição falhou: {e}"));

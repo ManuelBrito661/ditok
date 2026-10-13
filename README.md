@@ -2,7 +2,7 @@
 
 App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, notas de reuniões, métricas e definições.
 
-Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é feita através do [OpenRouter](https://openrouter.ai) ou, se preferires, no próprio computador com um motor local.
+Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é feita através do [OpenRouter](https://openrouter.ai), da [xAI](https://x.ai) em tempo real ou, se preferires, no próprio computador com um motor local.
 
 ## Usar
 
@@ -136,6 +136,17 @@ Uma aula de 1 h com o `elevenlabs/scribe-v2` custa ~$2; com o `openai/whisper-la
 ### Resumos
 
 Uma aula, uma reunião ou um ditado comprido podem ser resumidos com o modelo de texto, numa única chamada. O resumo usa um modelo próprio (em **Definições → Limpeza com IA**) ou, se não tiver, o da limpeza. O texto é tratado como dados, não como instruções: uma aula com "ignora o que disseram antes" não muda o resumo. Uma hora de aula cabe num pedido; acima de um certo tamanho a app recusa, com a razão, em vez de cortar o texto em silêncio.
+
+### Motor xAI (streaming)
+
+Em **Definições → Transcrição → Onde se transcreve** há uma terceira opção, **xAI, em tempo real**, com a tua própria chave da xAI (criada em [console.x.ai](https://console.x.ai)). A chave fica no cofre do sistema, numa entrada separada da do OpenRouter (`xai-api-key`), e é validada ao guardar (`GET /v1/models`, gratuito).
+
+Com este motor o áudio segue para a xAI **enquanto falas** (WebSocket em `wss://api.x.ai/v1/stt`, PCM 16 kHz) e o texto que ela vai ouvindo aparece numa dica por cima da pílula. Ao largar o atalho só falta o fim da frase, por isso o texto aparece quase de imediato; a colagem, o dicionário, os comandos de voz e a limpeza com IA funcionam como antes. O português é pedido como `pt-PT` e o texto vem formatado (números, moedas e unidades). O preço é de 0,20 US$ por hora de fala em streaming e 0,10 US$ em lote.
+
+Duas coisas a saber:
+
+- O WAV continua a ser gravado sempre. Se o stream falhar (sem rede, tempo esgotado, texto vazio), o ditado cai no lote (`POST /v1/stt`) com o WAV completo, e o "Tentar de novo", o reprocessar, os ficheiros e as notas usam sempre o lote.
+- A xAI só transcreve. A limpeza com IA, o modo comando e os resumos continuam a precisar da chave do OpenRouter, como com o motor local.
 
 ### Motor local
 
@@ -282,7 +293,7 @@ src-tauri/src/
   dict_io.rs          importar e exportar o dicionário (JSON, CSV, TXT)
   audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV,
                       leitura de ficheiros (symphonia) e cortes nas pausas
-  stt/                trait SttProvider; OpenRouter; motor local (sherpa-onnx, feature `local`);
+  stt/                trait SttProvider; OpenRouter; xAI (lote REST + streaming WebSocket); motor local (sherpa-onnx, feature `local`);
                       repetição de pedidos; descarregar o modelo local por inatividade; cache da lista de modelos
   local_models.rs     catálogo e descarga dos modelos locais, com verificação SHA-256
   notes/              notetaker: as duas faixas (microfone e sistema), segmentação, sessões,

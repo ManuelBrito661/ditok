@@ -328,3 +328,26 @@ kbd {
   #pill, #mascot, #bars span, #tip { transition: none; }
   #dots span, #pill[data-state="failed"], #pill.busy { animation: none; }
 }
+
+/* Texto ao vivo da transcrição em streaming (motor xAI): por cima da pílula (ou
+   por baixo, se ela estiver no topo do ecrã), enquanto se fala e se espera pelo fim.
+   Ocupa o lugar da dica, que fica escondida. */
+#caption {
+  max-width: 320px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: rgb(13 13 12 / 0.92);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  color: #f7f5f0;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: center;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  pointer-events: none;
+}
+#caption[hidden] { display: none; }
+body:has(#caption:not([hidden])) #tip { display: none; }

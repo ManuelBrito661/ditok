@@ -11,7 +11,7 @@ import { renderMemory, renderStats, renderUsage, scrollHeatToEnd, setupMetrics }
 import { renderNotesHint, setupNotes } from "./notes-page";
 import { isOnboardingOpen, openOnboarding, setupOnboarding } from "./onboarding";
 import { openKeySettings, openSettings, openShortcutSettings, setupSettings } from "./settings-dialog";
-import { $, app, notifyViewChange, onViewChange, refreshKey, toast } from "./store";
+import { $, app, engineKeyOk, notifyViewChange, onViewChange, refreshKey, toast } from "./store";
 
 type Page = "inicio" | "dicionario" | "ficheiros" | "notas" | "metricas";
 
@@ -41,8 +41,8 @@ function setupNav() {
 /** Ponto verde/âmbar na barra lateral: o ditado está pronto a usar? */
 function renderStatus() {
   const { shortcut_ok: shortcut } = app.view;
-  // Com o motor local ditar não precisa de chave.
-  const key = app.view.api_key_set || app.view.config.stt_engine === "local";
+  // Cada motor tem a sua chave (o local não precisa).
+  const key = engineKeyOk(app.view);
   $("status-dot").className = `dot ${key && shortcut ? "ok" : "warn"}`;
   $("status-text").textContent = !key ? "Falta a chave" : !shortcut ? "Atalho ocupado" : "Pronto a ditar";
 }
