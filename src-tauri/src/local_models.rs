@@ -276,7 +276,9 @@ pub const CATALOG: &[ModelSpec] = &[
         id: LocalModelId::Qwen3Asr,
         label: "Qwen3-ASR 0.6B",
         description: "Multilíngue (52 línguas e dialetos) com deteção automática de idioma. Escreve com pontuação e maiúsculas.",
-        warning: Some("Novo e ainda pouco testado: a velocidade e o uso de memória são estimativas."),
+        warning: Some(
+            "Novo e ainda pouco testado: a velocidade e o uso de memória são estimativas.",
+        ),
         family: Family::Qwen3Asr,
         repo: "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
         commit: "68818b2313fe77bd06f6a7c5068ff3ef59d02b8a",

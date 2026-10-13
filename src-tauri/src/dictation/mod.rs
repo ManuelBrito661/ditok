@@ -378,7 +378,9 @@ impl Orchestrator {
         let Some(provider) = &self.providers else {
             // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
             self.machine.handle(Input::Cancel, at);
-            self.deps.state.notify(self.deps.state.missing_key_message());
+            self.deps
+                .state
+                .notify(self.deps.state.missing_key_message());
             self.show_failure(FailReason::NoKey, false);
             return;
         };
@@ -492,7 +494,16 @@ impl Orchestrator {
         }
         let live = self.live.take();
         self.spawn_job(commit.clone(), false, async move {
-            pipeline::process(state, provider, recording, released_at, target, commit, live).await
+            pipeline::process(
+                state,
+                provider,
+                recording,
+                released_at,
+                target,
+                commit,
+                live,
+            )
+            .await
         });
     }
 
@@ -508,7 +519,9 @@ impl Orchestrator {
         let (Some(provider), Some(rec)) = (self.providers.clone(), self.failed.clone()) else {
             self.machine.handle(Input::Cancel, Instant::now());
             if self.providers.is_none() {
-                self.deps.state.notify(self.deps.state.missing_key_message());
+                self.deps
+                    .state
+                    .notify(self.deps.state.missing_key_message());
                 self.show_failure(FailReason::NoKey, false);
             }
             return;
@@ -717,7 +730,10 @@ fn sync_key_set(state: &AppState) {
     if let Ok(key) = crate::secrets::get_xai() {
         let set = key.is_some();
         if state.xai_key_set() != set {
-            tracing::info!(set, "a chave da xAI mudou fora da app; a atualizar o estado");
+            tracing::info!(
+                set,
+                "a chave da xAI mudou fora da app; a atualizar o estado"
+            );
             state.set_xai_key_set(set);
         }
     }

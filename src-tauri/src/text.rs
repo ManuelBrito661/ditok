@@ -1242,7 +1242,8 @@ mod tests {
         );
         // Preserva maiúsculas no início de frase e palavras em maiúsculas.
         assert_eq!(
-            r.apply("Equipe unida. USUÁRIO registado. Fenômeno acadêmico.").text,
+            r.apply("Equipe unida. USUÁRIO registado. Fenômeno acadêmico.")
+                .text,
             "Equipa unida. UTILIZADOR registado. Fenómeno académico."
         );
         // Noutro idioma explícito (ex.: "en" ou "es"), não aplica a normalização pt-PT.

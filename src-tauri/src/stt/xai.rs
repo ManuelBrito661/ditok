@@ -501,7 +501,11 @@ mod tests {
         a.partial("eu quero", false, false);
         assert_eq!(a.text(), "eu quero");
         a.partial("eu quero dois", false, false);
-        assert_eq!(a.text(), "eu quero dois", "o parcial é substituído, não somado");
+        assert_eq!(
+            a.text(),
+            "eu quero dois",
+            "o parcial é substituído, não somado"
+        );
         // Um pedaço fixo, depois mais um parcial.
         a.partial("eu quero dois desses", true, false);
         a.partial("por favor", false, false);
@@ -623,9 +627,14 @@ mod tests {
         // Porta fechada: ligar falha logo (e o pipeline passa ao lote).
         let (_tx, rx) = mpsc::unbounded_channel::<Bytes>();
         let (partials_tx, _) = watch::channel(String::new());
-        let err = run("ws://127.0.0.1:1/v1/stt".into(), "k".into(), rx, partials_tx)
-            .await
-            .unwrap_err();
+        let err = run(
+            "ws://127.0.0.1:1/v1/stt".into(),
+            "k".into(),
+            rx,
+            partials_tx,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, SttError::Network(_)), "{err:?}");
     }
 }

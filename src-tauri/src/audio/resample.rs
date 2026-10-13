@@ -286,7 +286,11 @@ mod tests {
         assert!((985..=1015).contains(&zc), "zero crossings = {zc}");
         // 44,1 kHz tem um rácio fracionário.
         let out = stream_in_blocks(44_100, &sine(440.0, 44_100, 2.0), 2205);
-        assert!((out.len() as i64 - 32_000).abs() <= 1100, "len = {}", out.len());
+        assert!(
+            (out.len() as i64 - 32_000).abs() <= 1100,
+            "len = {}",
+            out.len()
+        );
         // Só o miolo (440 Hz × 1,75 s = 770): as pontas têm o arranque do filtro e o silêncio de fecho.
         let zc = crossings_i16(&out[2_000..30_000]);
         assert!((760..=780).contains(&zc), "zero crossings = {zc}");
@@ -312,7 +316,11 @@ mod tests {
         let out = stream_in_blocks(16_000, &vec![0.5f32; 16_000], 800);
         assert_eq!(out.len(), 16_000);
         // O desvio DC (0,5 constante) é cortado pelo passa-alto.
-        assert!(out[15_000..].iter().all(|s| s.abs() < 800), "{:?}", &out[15_000..15_005]);
+        assert!(
+            out[15_000..].iter().all(|s| s.abs() < 800),
+            "{:?}",
+            &out[15_000..15_005]
+        );
     }
 
     fn sine(freq: f32, rate: u32, secs: f32) -> Vec<f32> {
