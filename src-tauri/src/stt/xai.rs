@@ -73,17 +73,27 @@ impl Xai {
         }
     }
 
-    /// O URL do WebSocket com a configuração do ditado.
-    fn stream_url(&self, language: Option<&str>) -> String {
-        let mut url = format!(
-            "{}?model={MODEL}&sample_rate=16000&encoding=pcm&interim_results=true",
-            self.ws_url
-        );
+    /// O URL do WebSocket com a configuração do ditado. Os `keyterm` repetem-se, um por
+    /// termo, e vão codificados (espaços, acentos).
+    fn stream_url(&self, language: Option<&str>, keyterms: &[String]) -> String {
+        let mut params = vec![
+            ("model", MODEL),
+            ("sample_rate", "16000"),
+            ("encoding", "pcm"),
+            ("interim_results", "true"),
+        ];
         if let Some(lang) = language {
             // `format` (números, moedas, unidades por extenso) exige o idioma.
-            url.push_str(&format!("&language={}&format=true", api_language(lang)));
+            params.push(("language", api_language(lang)));
+            params.push(("format", "true"));
         }
-        url
+        params.extend(keyterms.iter().map(|t| ("keyterm", t.as_str())));
+        match reqwest::Url::parse_with_params(&self.ws_url, params) {
+            Ok(url) => url.into(),
+            // `ws_url` é uma constante (ou um URL de teste): não falha. Se falhasse,
+            // sem termos o stream ainda abre.
+            Err(_) => self.ws_url.clone(),
+        }
     }
 }
 
@@ -141,6 +151,9 @@ impl SttProvider for Xai {
                 .text("language", api_language(lang).to_owned())
                 .text("format", "true");
         }
+        for term in req.keyterms {
+            form = form.text("keyterm", term.clone());
+        }
         // O ficheiro vai em último: a xAI lê os campos pela ordem.
         let form = form.part("file", file);
         let response = self
@@ -188,9 +201,9 @@ pub async fn check_key(client: &Client, api_key: &str) -> Result<(), SttError> {
 }
 
 impl StreamingStt for Xai {
-    fn open(&self, language: Option<String>, audio: AudioRx) -> LiveSession {
+    fn open(&self, language: Option<String>, keyterms: Vec<String>, audio: AudioRx) -> LiveSession {
         let (tx, rx) = watch::channel(String::new());
-        let url = self.stream_url(language.as_deref());
+        let url = self.stream_url(language.as_deref(), &keyterms);
         let key = self.api_key.clone();
         let handle = tauri::async_runtime::spawn(async move { run(url, key, audio, tx).await });
         LiveSession::new(rx, handle)
@@ -453,15 +466,24 @@ mod tests {
     #[test]
     fn stream_url_carries_the_configuration() {
         let x = Xai::new(crate::stt::http_client().unwrap(), "k".into());
-        let url = x.stream_url(Some("pt"));
+        let url = x.stream_url(Some("pt"), &[]);
         assert!(url.starts_with("wss://api.x.ai/v1/stt?model=grok-voice-transcribe-2.0"));
         assert!(url.contains("sample_rate=16000"));
         assert!(url.contains("encoding=pcm"));
         assert!(url.contains("interim_results=true"));
         assert!(url.ends_with("&language=pt-PT&format=true"));
         // Sem idioma, deteção automática e sem formatação (exige idioma).
-        assert!(!x.stream_url(None).contains("language"));
-        assert!(!x.stream_url(None).contains("format"));
+        assert!(!x.stream_url(None, &[]).contains("language"));
+        assert!(!x.stream_url(None, &[]).contains("format"));
+    }
+
+    #[test]
+    fn stream_url_repeats_and_encodes_the_key_terms() {
+        let x = Xai::new(crate::stt::http_client().unwrap(), "k".into());
+        let terms = ["Ditok".to_owned(), "Açores & Madeira".to_owned()];
+        let url = x.stream_url(None, &terms);
+        assert!(url.contains("&keyterm=Ditok"));
+        assert!(url.contains("&keyterm=A%C3%A7ores+%26+Madeira"));
     }
 
     #[test]

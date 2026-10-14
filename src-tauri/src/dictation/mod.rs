@@ -403,7 +403,8 @@ impl Orchestrator {
         let tap = match (&provider.stream, mode) {
             (Some(stream), Mode::Dictation) => {
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                let session = stream.open(config.language.clone(), rx);
+                let keyterms = crate::stt::keyterms(&config.dictionary);
+                let session = stream.open(config.language.clone(), keyterms, rx);
                 forward_partials(&app, session.partials.clone());
                 self.live = Some(session);
                 Some(tx)

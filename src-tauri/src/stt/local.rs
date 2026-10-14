@@ -533,6 +533,7 @@ mod tests {
         let req = SttRequest {
             model: "local/parakeet-v3",
             language: Some("pt"),
+            keyterms: &[],
         };
         assert!(!local.is_loaded());
         for run in 1..=2 {
@@ -554,6 +555,7 @@ mod tests {
         let req = SttRequest {
             model: "local/parakeet-v3",
             language: Some("pt"),
+            keyterms: &[],
         };
         let err = local
             .transcribe(Bytes::from_static(b"RIFF"), &req)
