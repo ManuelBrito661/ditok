@@ -73,7 +73,11 @@ async fn transcribe_with_backoff(
     language: Option<&str>,
     backoff: Duration,
 ) -> Result<Transcription, SttError> {
-    let req = SttRequest { model, language };
+    let req = SttRequest {
+        model,
+        language,
+        keyterms: &[],
+    };
     let mut attempt = 0;
     loop {
         // `wav.clone()` só copia o ponteiro (é um `Bytes`), não o áudio.

@@ -27,6 +27,26 @@ pub struct SttRequest<'a> {
     pub model: &'a str,
     /// Código ISO-639-1 (ex.: `pt`). `None` = deteção automática.
     pub language: Option<&'a str>,
+    /// Nomes e termos a favorecer na transcrição (do dicionário). Só a xAI os usa.
+    pub keyterms: &'a [String],
+}
+
+/// Os termos do dicionário a dar ao motor de transcrição (`keyterm` da xAI: no máximo
+/// 100, de 50 caracteres cada). Conta a forma escrita certa, a de `to`; as variantes
+/// mal ouvidas (`from`) continuam a ser corrigidas depois, por `text.rs`.
+pub fn keyterms(dictionary: &[crate::text::Replacement]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in dictionary {
+        let term = r.to.trim();
+        if term.is_empty() || term.chars().count() > 50 || out.iter().any(|t| t == term) {
+            continue;
+        }
+        out.push(term.to_owned());
+        if out.len() == 100 {
+            break;
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone)]
@@ -142,8 +162,9 @@ pub type AudioRx = tokio::sync::mpsc::UnboundedReceiver<Bytes>;
 /// o WAV continua a ser gravado sempre e serve de alternativa se o stream falhar.
 pub trait StreamingStt: Send + Sync {
     /// Devolve logo, sem esperar pela ligação: a tarefa liga-se em fundo e o áudio
-    /// que chegar entretanto fica no canal. `language`: código ISO-639-1 do utilizador.
-    fn open(&self, language: Option<String>, audio: AudioRx) -> LiveSession;
+    /// que chegar entretanto fica no canal. `language`: código ISO-639-1 do utilizador;
+    /// `keyterms`: os termos do dicionário (ver `keyterms`).
+    fn open(&self, language: Option<String>, keyterms: Vec<String>, audio: AudioRx) -> LiveSession;
 }
 
 /// Um stream em curso. Largá-lo (ex.: Esc) aborta a tarefa e fecha a ligação.
@@ -379,5 +400,37 @@ mod tests {
             error_from_response(400, body, "m"),
             SttError::BadRequest(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod keyterm_tests {
+    use super::keyterms;
+    use crate::text::Replacement;
+
+    fn r(from: &str, to: &str) -> Replacement {
+        Replacement {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    #[test]
+    fn key_terms_come_from_the_written_form_without_repeats_or_oversize() {
+        let long = "x".repeat(51);
+        let dictionary = [
+            r("tori, tauri", "Tauri"),
+            r("", "Ditok"),
+            r("outra", "Tauri"),
+            r("vazio", "  "),
+            r("longo", &long),
+        ];
+        assert_eq!(keyterms(&dictionary), ["Tauri", "Ditok"]);
+    }
+
+    #[test]
+    fn key_terms_stop_at_one_hundred() {
+        let dictionary: Vec<Replacement> = (0..150).map(|i| r("", &format!("termo{i}"))).collect();
+        assert_eq!(keyterms(&dictionary).len(), 100);
     }
 }

@@ -320,9 +320,11 @@ async fn transcribe_and_paste(
     // para a limpeza, que é uma funcionalidade específica do OpenRouter.
     let stt: &dyn SttProvider = &*providers.stt;
     let stt_model = config.active_stt_model();
+    let keyterms = crate::stt::keyterms(&config.dictionary);
     let req = SttRequest {
         model: &stt_model,
         language: config.language.as_deref(),
+        keyterms: &keyterms,
     };
     let mut m = new_metrics(stt, &config, &rec, release_to_wav, false);
     m.app = target.app.as_deref().map(crate::usage::app_key);
@@ -569,9 +571,11 @@ pub async fn command(
 
     let stt: &dyn SttProvider = &*providers.stt;
     let stt_model = config.active_stt_model();
+    let keyterms = crate::stt::keyterms(&config.dictionary);
     let req = SttRequest {
         model: &stt_model,
         language: config.language.as_deref(),
+        keyterms: &keyterms,
     };
     let mut m = new_metrics(stt, &config, &rec, release_to_wav, true);
     m.app = target.app.as_deref().map(crate::usage::app_key);
@@ -752,9 +756,11 @@ pub async fn reprocess(
 
     let stt: &dyn SttProvider = &*providers.stt;
     let stt_model = config.active_stt_model();
+    let keyterms = crate::stt::keyterms(&config.dictionary);
     let req = SttRequest {
         model: &stt_model,
         language: config.language.as_deref(),
+        keyterms: &keyterms,
     };
     let mut m = DictationMetrics {
         at: metrics::now(),
