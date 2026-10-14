@@ -79,18 +79,33 @@ function renderJob(j: FileJob) {
   $("fj-status").textContent = label;
   $("fj-status").className = `pill ${kind}`;
 
-  // Barra: proporção do ficheiro já transcrita. Sem duração conhecida, ou antes
-  // do primeiro pedaço voltar, fica "indeterminada" (a deslizar).
-  const fraction = j.total_s ? Math.min(1, j.done_s / j.total_s) : null;
+  // Barra: o que se vê depende da fase. Com o ficheiro inteiro, os bytes enviados; depois de
+  // enviado, a xAI não diz quanto falta e a barra desliza. Por pedaços, a proporção do
+  // áudio já transcrita (sem duração conhecida, ou antes do primeiro pedaço, desliza).
+  const fraction =
+    j.stage === "upload"
+      ? j.total_bytes
+        ? Math.min(1, j.sent_bytes / j.total_bytes)
+        : null
+      : j.stage === "server"
+        ? null
+        : j.total_s
+          ? Math.min(1, j.done_s / j.total_s)
+          : null;
   const meter = $("fj-meter");
-  const indeterminate = running && (fraction == null || j.done_s === 0);
+  const indeterminate = running && (fraction == null || (j.stage === "chunks" && j.done_s === 0));
   meter.className = `meter big ${indeterminate ? "indeterminate" : ""} ${j.status === "failed" ? "over" : ""}`;
   $("fj-bar").style.width = indeterminate ? "" : `${Math.round((fraction ?? 1) * 100)}%`;
   if (fraction != null) meter.setAttribute("aria-valuenow", String(Math.round(fraction * 100)));
   else meter.removeAttribute("aria-valuenow");
 
   const parts: string[] = [];
-  if (running && j.done_s === 0) {
+  if (running && j.stage === "upload") {
+    parts.push(`A enviar o ficheiro: ${megabytes(j.sent_bytes)} de ${megabytes(j.total_bytes)}`);
+  } else if (running && j.stage === "server") {
+    // A xAI processa uma hora de áudio em menos de um minuto: não se promete um tempo.
+    parts.push(`A xAI está a transcrever (${duration(j.elapsed_s)})`);
+  } else if (running && j.done_s === 0) {
     parts.push("A preparar e a enviar os primeiros trechos…");
   } else if (running) {
     parts.push(j.total_s ? `${duration(j.done_s)} de ${duration(j.total_s)}` : `${duration(j.done_s)} transcritos`);

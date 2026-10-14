@@ -1,10 +1,11 @@
 //! Ler ficheiros de áudio e vídeo (mp3, m4a, wav, flac, ogg, mp4…) e parti-los em
 //! pedaços para transcrever, cortando nas pausas.
 //!
-//! Porquê pedaços: o OpenRouter desiste de um pedido ao fim de 60 s de
-//! processamento e aceita até 25 MB, e uma aula de 1 h são 115 MB em WAV de
-//! 16 kHz. Em pedaços de ~2,5 min (~5 MB) cada pedido demora segundos e podem ir
-//! vários ao mesmo tempo.
+//! Porquê pedaços: é o caminho dos ficheiros que não convém enviar inteiros (um vídeo de
+//! 300 MB por hora, um WAV de estúdio, qualquer coisa acima dos 500 MB que a xAI aceita) e a
+//! reserva quando o envio inteiro falha (`files.rs`). Só se envia o áudio: uma aula de 1 h
+//! são 115 MB em WAV de 16 kHz, em pedaços de ~2,5 min (~5 MB) que podem ir vários ao mesmo
+//! tempo, com progresso a sério e só se perde o pedaço que falhar.
 //!
 //! Porquê nas pausas: um corte a meio de uma palavra estraga-a dos dois lados.
 //! Perto do sítio onde queríamos cortar, procura-se o trecho mais silencioso.
@@ -30,12 +31,6 @@ use super::{
     vad, wav,
 };
 
-/// Extensões propostas no diálogo de escolher ficheiro. O formato é detetado pelo
-/// conteúdo, por isso um ficheiro com outra extensão também pode funcionar.
-pub const EXTENSIONS: &[&str] = &[
-    "mp3", "m4a", "aac", "wav", "flac", "ogg", "oga", "mp4", "m4v", "mov", "mkv", "mka",
-];
-
 /// Duração que se procura para cada pedaço…
 const CHUNK: Duration = Duration::from_secs(150);
 /// …com esta folga para cada lado, para encontrar uma pausa.
@@ -55,7 +50,7 @@ pub enum DecodeError {
     #[error("não foi possível ler o ficheiro: {0}")]
     Io(#[from] std::io::Error),
     #[error(
-        "formato não suportado. Funciona com mp3, m4a, aac, wav, flac, ogg (vorbis), mp4 e mov"
+        "formato não suportado. Funciona com mp3, m4a, aac, wav, flac, ogg, opus, mp4, mov e mkv"
     )]
     Unsupported,
     #[error("o ficheiro não tem áudio")]

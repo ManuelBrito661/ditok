@@ -95,7 +95,7 @@ pub fn condition_speech(samples: &mut [f32], rate: u32) {
         peak = peak.max(y.abs());
     }
 
-    if peak >= MIN_PEAK && (peak < 0.5 || peak > 0.99) {
+    if peak >= MIN_PEAK && !(0.5..=0.99).contains(&peak) {
         let gain = (TARGET_PEAK / peak).min(MAX_GAIN);
         for s in samples.iter_mut() {
             *s = (*s * gain).clamp(-1.0, 1.0);

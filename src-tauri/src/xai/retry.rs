@@ -3,17 +3,23 @@
 //! classificação dos erros; a repetição em si recebe o pedido como um closure, por isso
 //! testa-se sem rede.
 
-use std::time::Duration;
+use std::{
+    path::Path,
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
+};
 
 use bytes::Bytes;
 
 use super::{
     ApiError, Xai,
-    stt::{SttRequest, Transcription},
+    stt::{FileTranscription, SttRequest, Transcription},
 };
 
 /// Repetições de um pedaço quando o erro é passageiro (rede, servidor ocupado).
 pub const RETRIES: u32 = 2;
+/// Repetições de um ficheiro inteiro.
+const FILE_RETRIES: u32 = 1;
 /// Espera antes da repetição `n`: `n` × isto (2 s, 4 s).
 const BACKOFF: Duration = Duration::from_secs(2);
 
@@ -58,14 +64,27 @@ pub fn is_transient(e: &ApiError) -> bool {
 }
 
 /// Corre `op`, repetindo até `RETRIES` vezes os erros passageiros, com `backoff` × n de espera.
-async fn retrying<T, Fut>(mut op: impl FnMut() -> Fut, backoff: Duration) -> Result<T, ApiError>
+async fn retrying<T, Fut>(op: impl FnMut() -> Fut, backoff: Duration) -> Result<T, ApiError>
+where
+    Fut: Future<Output = Result<T, ApiError>>,
+{
+    retrying_if(op, backoff, RETRIES, is_transient).await
+}
+
+/// O mesmo com o número de repetições e o critério à escolha.
+async fn retrying_if<T, Fut>(
+    mut op: impl FnMut() -> Fut,
+    backoff: Duration,
+    retries: u32,
+    worth_retrying: impl Fn(&ApiError) -> bool,
+) -> Result<T, ApiError>
 where
     Fut: Future<Output = Result<T, ApiError>>,
 {
     let mut attempt = 0;
     loop {
         match op().await {
-            Err(e) if attempt < RETRIES && is_transient(&e) => {
+            Err(e) if attempt < retries && worth_retrying(&e) => {
                 attempt += 1;
                 tracing::debug!(error = %e, attempt, "a repetir o pedido");
                 tokio::time::sleep(backoff * attempt).await;
@@ -84,6 +103,25 @@ impl Xai {
     ) -> Result<Transcription, ApiError> {
         // `wav.clone()` só copia o ponteiro (é um `Bytes`), não o áudio.
         retrying(|| self.transcribe(wav.clone(), req), BACKOFF).await
+    }
+
+    /// Envia um ficheiro inteiro, repetindo uma vez os erros passageiros. Repetir
+    /// é caro (o envio recomeça) e um pedido que esgotou o tempo já demorou
+    /// minutos: esse não se repete, deixa-se a quem chama o outro caminho.
+    pub async fn transcribe_path_retrying(
+        &self,
+        path: &Path,
+        audio: Option<Duration>,
+        req: &SttRequest<'_>,
+        uploaded: &Arc<AtomicU64>,
+    ) -> Result<FileTranscription, ApiError> {
+        retrying_if(
+            || self.transcribe_path(path, audio, req, Arc::clone(uploaded)),
+            BACKOFF,
+            FILE_RETRIES,
+            |e| is_transient(e) && !matches!(e, ApiError::ClientTimeout),
+        )
+        .await
     }
 }
 
@@ -158,6 +196,40 @@ mod tests {
         ]);
         assert!(matches!(run(&s).await, Err(ApiError::Network(_))));
         assert_eq!(s.calls(), 3);
+    }
+
+    /// A regra dos ficheiros inteiros: uma repetição, e nunca depois de esgotar o tempo.
+    async fn run_file_policy(script: &Script) -> Result<String, ApiError> {
+        retrying_if(
+            || script.call(),
+            Duration::ZERO,
+            FILE_RETRIES,
+            |e| is_transient(e) && !matches!(e, ApiError::ClientTimeout),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_whole_file_is_retried_once_and_not_after_a_timeout() {
+        let s = Script::new(vec![Err(network()), Ok("ok".into())]);
+        assert_eq!(run_file_policy(&s).await.unwrap(), "ok");
+        assert_eq!(s.calls(), 2);
+
+        // Duas falhas passageiras: desiste à segunda (ao contrário dos pedaços, que são 3).
+        let s = Script::new(vec![Err(network()), Err(network()), Ok("ok".into())]);
+        assert!(matches!(
+            run_file_policy(&s).await,
+            Err(ApiError::Network(_))
+        ));
+        assert_eq!(s.calls(), 2);
+
+        // Já esperou minutos: repetir era esperar outros tantos.
+        let s = Script::new(vec![Err(ApiError::ClientTimeout), Ok("ok".into())]);
+        assert!(matches!(
+            run_file_policy(&s).await,
+            Err(ApiError::ClientTimeout)
+        ));
+        assert_eq!(s.calls(), 1);
     }
 
     #[tokio::test]

@@ -11,7 +11,14 @@
 //!
 //! Preços (docs.x.ai/developers/models): 0,10 USD/hora em lote, 0,20 USD/hora em streaming.
 
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -134,6 +141,80 @@ struct DiarizedBody {
     words: Vec<Word>,
 }
 
+/// O que a xAI aceita num ficheiro só: 500 MB (a doc diz "500 MB"; ficamos pelo decimal,
+/// que é o menor dos dois valores possíveis).
+pub const MAX_FILE_BYTES: u64 = 500_000_000;
+/// Leitura do disco para o corpo do pedido.
+const UPLOAD_CHUNK: usize = 256 * 1024;
+
+/// A resposta a um ficheiro enviado inteiro.
+#[derive(Debug, Clone)]
+pub struct FileTranscription {
+    pub text: String,
+    /// A duração do áudio que a xAI processou. Se for menor do que a do ficheiro, a
+    /// xAI não o processou todo.
+    pub seconds: Option<f64>,
+    /// Do envio do pedido ao fim da resposta.
+    pub elapsed: Duration,
+}
+
+/// O nome com que o ficheiro segue: só ASCII (o nome verdadeiro pode ter acentos), com a
+/// extensão verdadeira. A xAI reconhece o formato pelo conteúdo, não pelo nome.
+fn upload_name(path: &Path) -> String {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext)
+            if (1..=5).contains(&ext.len()) && ext.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+        {
+            format!("audio.{}", ext.to_ascii_lowercase())
+        }
+        _ => "audio".to_owned(),
+    }
+}
+
+fn upload_mime(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    match ext.to_ascii_lowercase().as_str() {
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" | "mp4" | "m4v" | "mov" => "audio/mp4",
+        "aac" => "audio/aac",
+        "flac" => "audio/flac",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "mkv" | "mka" | "webm" => "audio/x-matroska",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Quanto esperar por um ficheiro inteiro: subir a pelo menos 0,5 MB/s, mais um décimo da
+/// duração do áudio (a xAI processa 70× mais depressa do que o tempo real ou melhor), mais
+/// 2 minutos de folga. Sem duração, supõe-se um áudio de 128 kbps.
+fn file_timeout(bytes: u64, audio: Option<Duration>) -> Duration {
+    let upload = bytes as f64 / 500_000.0;
+    let audio_s = audio.map_or(bytes as f64 / 16_000.0, |d| d.as_secs_f64());
+    Duration::from_secs_f64(120.0 + upload + audio_s / 10.0)
+}
+
+/// O ficheiro lido do disco aos poucos (um áudio de 400 MB não vai todo para a memória),
+/// a contar os bytes lidos em `uploaded`. Vai a corpo do pedido com `Body::wrap_stream`.
+fn file_chunks(
+    file: tokio::fs::File,
+    uploaded: Arc<AtomicU64>,
+) -> impl futures_util::Stream<Item = std::io::Result<Bytes>> + Send + 'static {
+    use tokio::io::AsyncReadExt;
+    futures_util::stream::try_unfold((file, uploaded), |(mut file, uploaded)| async {
+        let mut buf = bytes::BytesMut::with_capacity(UPLOAD_CHUNK);
+        let n = file.read_buf(&mut buf).await?;
+        if n == 0 {
+            return Ok::<_, std::io::Error>(None);
+        }
+        uploaded.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(Some((buf.freeze(), (file, uploaded))))
+    })
+}
+
 impl Xai {
     /// Transcreve um WAV (ou outro contentor) em lote.
     pub async fn transcribe(
@@ -171,6 +252,58 @@ impl Xai {
             },
             elapsed,
             transport: "multipart",
+        })
+    }
+
+    /// Transcreve um ficheiro de áudio ou vídeo tal como está, num só pedido (a xAI aceita
+    /// mp3, wav, ogg, opus, flac, aac, mp4, m4a e mkv até 500 MB). O ficheiro vai do disco
+    /// para a rede aos poucos e `uploaded` conta os bytes enviados, para a janela mostrar
+    /// o progresso do envio. `audio` é a duração que o cabeçalho diz, se disser: só serve
+    /// para dar tempo ao pedido.
+    pub async fn transcribe_path(
+        &self,
+        path: &Path,
+        audio: Option<Duration>,
+        req: &SttRequest<'_>,
+        uploaded: Arc<AtomicU64>,
+    ) -> Result<FileTranscription, ApiError> {
+        let started = Instant::now();
+        // Uma repetição recomeça o envio do princípio.
+        uploaded.store(0, Ordering::Relaxed);
+        let unreadable = |e: std::io::Error| {
+            ApiError::BadRequest(format!("não foi possível ler o ficheiro: {e}"))
+        };
+        let file = tokio::fs::File::open(path).await.map_err(unreadable)?;
+        let len = file.metadata().await.map_err(unreadable)?.len();
+        if len > MAX_FILE_BYTES {
+            return Err(ApiError::PayloadTooLarge);
+        }
+        let part = Part::stream_with_length(Body::wrap_stream(file_chunks(file, uploaded)), len)
+            .file_name(upload_name(path))
+            .mime_str(upload_mime(path))?;
+        let mut form = Form::new().text("model", MODEL);
+        if let Some(lang) = req.language {
+            form = form
+                .text("language", api_language(lang).to_owned())
+                .text("format", "true");
+        }
+        for term in req.keyterms {
+            form = form.text("keyterm", term.clone());
+        }
+        let response = self
+            .post("/stt")
+            .timeout(file_timeout(len, audio))
+            .multipart(form.part("file", part))
+            .send()
+            .await?;
+        let body = read_body(response, MODEL).await?;
+        // A resposta traz também cada palavra com o seu instante, o que numa aula de
+        // 3 horas são 1,3 MB de JSON: lê-se só o que se usa.
+        let parsed: BatchBody = parse_json(&body)?;
+        Ok(FileTranscription {
+            text: parsed.text,
+            seconds: parsed.duration,
+            elapsed: started.elapsed(),
         })
     }
 
@@ -659,6 +792,78 @@ mod tests {
         assert_eq!(keyterms(&dictionary), ["Tauri", "Ditok"]);
         let many: Vec<Replacement> = (0..150).map(|i| r("", &format!("termo{i}"))).collect();
         assert_eq!(keyterms(&many).len(), 100);
+    }
+
+    #[test]
+    fn the_uploaded_name_is_plain_ascii_with_the_real_extension() {
+        let name = |p: &str| upload_name(Path::new(p));
+        assert_eq!(name("C:/aulas/Álgebra – aula 3.MP3"), "audio.mp3");
+        assert_eq!(name("gravação.opus"), "audio.opus");
+        // Sem extensão, ou uma que não é uma extensão: sem nada.
+        assert_eq!(name("aula"), "audio");
+        assert_eq!(name("aula.áudio"), "audio");
+        assert_eq!(name("aula.demasiado"), "audio");
+        assert_eq!(upload_mime(Path::new("a.M4A")), "audio/mp4");
+        assert_eq!(upload_mime(Path::new("a.opus")), "audio/ogg");
+        assert_eq!(upload_mime(Path::new("a.xyz")), "application/octet-stream");
+    }
+
+    #[test]
+    fn the_file_timeout_grows_with_size_and_duration() {
+        let hour = Some(Duration::from_secs(3600));
+        // 131 MB e 68 minutos: 2 min + 262 s a subir + 411 s a processar.
+        let long = file_timeout(131_000_000, Some(Duration::from_secs(4110)));
+        assert!((long.as_secs_f64() - 793.0).abs() < 1.0, "{long:?}");
+        assert!(file_timeout(10_000_000, hour) < file_timeout(100_000_000, hour));
+        assert!(
+            file_timeout(50_000_000, hour)
+                < file_timeout(50_000_000, Some(Duration::from_secs(36_000)))
+        );
+        // Sem duração, supõe-se áudio de 128 kbps: nunca menos do que a folga.
+        assert!(file_timeout(0, None) >= Duration::from_secs(120));
+        // E o maior ficheiro possível não fica pendurado mais de duas horas.
+        assert!(file_timeout(MAX_FILE_BYTES, None) < Duration::from_secs(7_200));
+    }
+
+    #[tokio::test]
+    async fn a_file_streams_from_disk_in_order_and_counts_what_it_read() {
+        let dir = std::env::temp_dir().join(format!("ditok-upload-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("aula.bin");
+        let data: Vec<u8> = (0..700_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &data).unwrap();
+
+        let uploaded = Arc::new(AtomicU64::new(0));
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        let chunks: Vec<Bytes> = file_chunks(file, Arc::clone(&uploaded))
+            .map(|c| c.unwrap())
+            .collect()
+            .await;
+        assert!(chunks.len() >= 3, "lido aos poucos, não de uma vez");
+        assert!(chunks.iter().all(|c| c.len() <= UPLOAD_CHUNK));
+        assert_eq!(chunks.concat(), data);
+        assert_eq!(uploaded.load(Ordering::Relaxed), data.len() as u64);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_is_a_bad_request_not_a_network_error() {
+        // Para o recurso aos pedaços dar a mensagem certa, e para não se repetir.
+        let xai = Xai::new(super::super::http_client().unwrap(), "k".into());
+        let req = SttRequest {
+            language: None,
+            keyterms: &[],
+        };
+        let err = xai
+            .transcribe_path(
+                Path::new("não-existe/aula.mp3"),
+                None,
+                &req,
+                Arc::new(AtomicU64::new(7)),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)), "{err:?}");
     }
 
     #[test]

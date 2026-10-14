@@ -16,7 +16,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    audio::{self, InputDevice, Recorder, decode},
+    audio::{self, InputDevice, Recorder},
     config::Config,
     dict_io,
     dictation::{DictationEvent, pipeline},
@@ -694,13 +694,13 @@ pub struct FileProbe {
 pub async fn file_probe(path: String) -> CmdResult<FileProbe> {
     let path = PathBuf::from(path);
     blocking(move || {
-        let info = decode::probe(&path)?;
+        let found = files::inspect(&path)?;
         Ok(FileProbe {
             name: path
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-            size_bytes: std::fs::metadata(&path)?.len(),
-            duration_s: info.duration.map(|d| d.as_secs_f64()),
+            size_bytes: found.size,
+            duration_s: found.duration.map(|d| d.as_secs_f64()),
             path: path.display().to_string(),
         })
     })
@@ -714,7 +714,7 @@ pub async fn file_pick(app: AppHandle) -> CmdResult<Option<String>> {
         .dialog()
         .file()
         .set_title("Escolher um ficheiro para transcrever")
-        .add_filter("Áudio e vídeo", decode::EXTENSIONS);
+        .add_filter("Áudio e vídeo", files::EXTENSIONS);
     if let Some(window) = app.get_webview_window(settings_window::LABEL) {
         dialog = dialog.set_parent(&window);
     }
@@ -734,9 +734,9 @@ pub async fn file_pick(app: AppHandle) -> CmdResult<Option<String>> {
 pub async fn file_start(state: AppStateRef<'_>, path: String) -> CmdResult<JobView> {
     let path = PathBuf::from(path);
     let xai = state.xai().ok_or(MISSING_KEY)?;
-    let probe_path = path.clone();
-    let info = blocking(move || decode::probe(&probe_path)).await??;
-    Ok(files::start(state.inner(), xai, path, info)?)
+    let inspected = path.clone();
+    let found = blocking(move || files::inspect(&inspected)).await??;
+    Ok(files::start(state.inner(), xai, path, found)?)
 }
 
 #[tauri::command]

@@ -166,6 +166,44 @@ async fn live_diarize() {
     }
 }
 
+/// O ficheiro `DITOK_FILE` inteiro, pelo caminho de produção (`transcribe_path_retrying`):
+/// tempo, bytes enviados e a duração que a xAI diz ter processado.
+#[tokio::test]
+#[ignore]
+async fn live_transcribe_path() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    let path = std::path::PathBuf::from(std::env::var("DITOK_FILE").expect("define DITOK_FILE"));
+    let xai = client();
+    let words = keyterms(&[]);
+    let language = lang();
+    let req = SttRequest {
+        language: Some(language.as_str()),
+        keyterms: &words,
+    };
+    let uploaded = Arc::new(AtomicU64::new(0));
+    let started = Instant::now();
+    let t = xai
+        .transcribe_path_retrying(&path, None, &req, &uploaded)
+        .await
+        .expect("transcrição");
+    println!(
+        "{} → {:?} no pedido ({:?} no total); enviados {} MB; a xAI processou {:?} s; {} caracteres",
+        path.display(),
+        t.elapsed,
+        started.elapsed(),
+        uploaded.load(Ordering::Relaxed) / 1_000_000,
+        t.seconds,
+        t.text.chars().count()
+    );
+    if let Ok(out) = std::env::var("DITOK_OUT") {
+        std::fs::write(out, &t.text).unwrap();
+    }
+    assert!(!t.text.trim().is_empty());
+}
+
 /// O que a chave deixa fazer (a mesma verificação do botão "Testar" das definições).
 #[tokio::test]
 #[ignore]

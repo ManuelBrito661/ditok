@@ -1,18 +1,34 @@
 //! Transcrever um ficheiro (a gravação de uma aula, um vídeo) arrastado para a
 //! janela. Um trabalho de cada vez, que continua mesmo que a janela feche.
 //!
-//! Três partes trabalham ao mesmo tempo:
-//! 1. uma thread de bloqueio lê o ficheiro e corta-o em pedaços (`audio::decode`);
-//! 2. um canal com espaço para 2 pedaços liga-a à tarefa principal: se os pedidos
-//!    atrasarem, a leitura espera ("backpressure") e a memória não cresce;
-//! 3. até 3 pedidos à xAI em paralelo, cada um numa tarefa de um `JoinSet`.
+//! Há dois caminhos (`Route`):
+//!
+//! - **O ficheiro inteiro** (`transcribe_whole`): um só pedido à xAI, que aceita mp3, wav,
+//!   ogg, opus, flac, aac, mp4, m4a e mkv até 500 MB. Não se descodifica nada aqui. É o
+//!   caminho de um ficheiro que pesa menos do que o áudio que o outro enviaria (um mp3,
+//!   um m4a) e o único de um formato que o descodificador local não lê (opus). Se falhar,
+//!   ou se a xAI não processar o ficheiro todo, cai-se no outro.
+//! - **Por pedaços** (`transcribe_chunks`), para o resto (vídeos, WAV de estúdio). Três partes
+//!   trabalham ao mesmo tempo:
+//!   1. uma thread de bloqueio lê o ficheiro e corta-o em pedaços (`audio::decode`);
+//!   2. um canal com espaço para 2 pedaços liga-a à tarefa principal: se os pedidos
+//!      atrasarem, a leitura espera ("backpressure") e a memória não cresce;
+//!   3. até 3 pedidos à xAI em paralelo, cada um numa tarefa de um `JoinSet`.
+//!
+//! Medido com 68 minutos de fala (0,10 US$/h nos dois): o mesmo tempo (30–40 s), o mesmo
+//! custo e o mesmo WER (0,5 %) nos dois caminhos. O ficheiro inteiro poupa bytes (49 MB de
+//! mp3 em vez de 131 MB de áudio descodificado) e CPU; o outro dá progresso a sério e só
+//! perde o pedaço que falhar.
 //!
 //! A janela acompanha pelo evento `file:job` e pelo comando `file_status`.
 
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -24,7 +40,7 @@ use tokio::{
 };
 
 use crate::{
-    audio::decode::{self, Chunk, FileInfo},
+    audio::decode::{self, Chunk, DecodeError},
     dictation::pipeline::EVENT_DICTATION_RECORDED,
     metrics::{self, DictationMetrics},
     settings_window,
@@ -32,7 +48,7 @@ use crate::{
     xai::{
         ApiError, Xai,
         retry::is_fatal,
-        stt::{self, SttRequest, Transcription},
+        stt::{self, BYTES_PER_SEC, MAX_FILE_BYTES, SttRequest, Transcription, batch_cost},
     },
 };
 
@@ -41,6 +57,20 @@ pub const EVENT: &str = "file:job";
 /// pedidos da xAI.
 const PARALLEL: usize = 3;
 
+/// Extensões propostas no diálogo de escolher ficheiro: as que o descodificador local
+/// ou a xAI aceitam. O formato é detetado pelo conteúdo, por isso um ficheiro com outra
+/// extensão também pode funcionar (por pedaços).
+pub const EXTENSIONS: &[&str] = &[
+    "mp3", "m4a", "aac", "wav", "flac", "ogg", "oga", "opus", "mp4", "m4v", "mov", "mkv", "mka",
+];
+
+/// O ficheiro inteiro só se envia se pesar quase tanto ou menos do que o áudio que o
+/// outro caminho enviaria (16 kHz, 16 bits: `BYTES_PER_SEC`). Os 10 % são os cabeçalhos
+/// de um WAV que já está nesse formato.
+const WHOLE_MAX_RATIO: f64 = 1.1;
+/// Um parágrafo tem pelo menos tantas palavras (e acaba numa frase): ~35 s de fala.
+const PARAGRAPH_WORDS: usize = 90;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
@@ -48,6 +78,19 @@ pub enum Status {
     Done,
     Failed,
     Cancelled,
+}
+
+/// Em que ponto vai o trabalho; decide o que a janela mostra.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stage {
+    /// O ficheiro inteiro a subir (a barra mostra os bytes).
+    Upload,
+    /// Enviado: a xAI está a transcrever. Não diz quanto falta.
+    Server,
+    /// Por pedaços (a barra mostra o áudio já transcrito).
+    #[default]
+    Chunks,
 }
 
 /// O que a janela mostra. O mesmo struct vai no evento e no `file_status`.
@@ -69,6 +112,23 @@ pub struct JobView {
     pub saved_to: Option<String>,
     /// Pedaços que falharam mesmo depois de repetir (ficam assinalados no texto).
     pub failed_chunks: usize,
+    pub stage: Stage,
+    /// Bytes já enviados e tamanho do ficheiro (só contam em `Stage::Upload`).
+    pub sent_bytes: u64,
+    pub total_bytes: u64,
+}
+
+impl JobView {
+    fn apply(&mut self, p: Progress) {
+        self.stage = p.stage;
+        self.done_s = p.done.as_secs_f64();
+        self.cost_usd = p.cost;
+        self.failed_chunks = p.failed;
+        self.sent_bytes = p.sent_bytes;
+        if p.note.is_some() {
+            self.message = p.note;
+        }
+    }
 }
 
 struct Job {
@@ -164,19 +224,96 @@ impl FileJobs {
     }
 }
 
+/// O que se sabe de um ficheiro antes de o transcrever.
+#[derive(Debug, Clone, Copy)]
+pub struct Inspection {
+    pub size: u64,
+    /// `None` quando o cabeçalho não a diz (alguns mp3) ou o ficheiro não se lê aqui.
+    pub duration: Option<Duration>,
+    pub route: Route,
+}
+
+/// Como se vai transcrever um ficheiro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// O ficheiro inteiro, num só pedido. Com `can_fall_back`, se falhar tenta-se por pedaços.
+    Whole { can_fall_back: bool },
+    /// Descodificado aqui e enviado aos pedaços.
+    Chunks,
+}
+
+/// Lê o cabeçalho e decide o caminho. Bloqueante (abre o ficheiro).
+pub fn inspect(path: &Path) -> Result<Inspection, DecodeError> {
+    let size = std::fs::metadata(path)?.len();
+    match decode::probe(path) {
+        Ok(info) => Ok(Inspection {
+            size,
+            duration: info.duration,
+            route: choose_route(size, info.duration),
+        }),
+        // O descodificador local não o lê (opus, AAC-HE, …), mas a xAI talvez leia: tenta-se
+        // se a extensão for de áudio ou vídeo e couber num pedido. Sem reserva. (Um fim de
+        // ficheiro a meio do cabeçalho conta como ilegível; um ficheiro que não abre, não.)
+        Err(e)
+            if is_unreadable_here(&e)
+                && has_known_extension(path)
+                && (1..=MAX_FILE_BYTES).contains(&size) =>
+        {
+            Ok(Inspection {
+                size,
+                duration: None,
+                route: Route::Whole {
+                    can_fall_back: false,
+                },
+            })
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// O descodificador local não conseguiu ler o ficheiro, mas o ficheiro abriu: o formato ou o
+/// codec não são os que ele sabe, ou o cabeçalho está cortado. Um erro de disco não conta.
+fn is_unreadable_here(e: &DecodeError) -> bool {
+    match e {
+        DecodeError::Unsupported | DecodeError::NoAudio | DecodeError::Corrupt(_) => true,
+        DecodeError::Io(io) => io.kind() == std::io::ErrorKind::UnexpectedEof,
+        DecodeError::Resample(_) => false,
+    }
+}
+
+fn has_known_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Inteiro quando o ficheiro cabe num pedido e pesa menos do que o áudio que se enviaria
+/// por pedaços; senão por pedaços. Sem duração não se sabe: o caminho de sempre.
+fn choose_route(size: u64, duration: Option<Duration>) -> Route {
+    let lighter =
+        duration.is_some_and(|d| size as f64 <= d.as_secs_f64() * BYTES_PER_SEC * WHOLE_MAX_RATIO);
+    if lighter && size <= MAX_FILE_BYTES {
+        Route::Whole {
+            can_fall_back: true,
+        }
+    } else {
+        Route::Chunks
+    }
+}
+
 /// Começa a transcrever `path`, se não houver outro ficheiro a meio.
 pub fn start(
     state: &Arc<AppState>,
     xai: Xai,
     path: PathBuf,
-    info: FileInfo,
+    found: Inspection,
 ) -> Result<JobView, JobError> {
     let (cancel, cancel_rx) = watch::channel(false);
     let view = JobView {
         name: file_name(&path),
         status: Status::Running,
         model: stt::MODEL.to_owned(),
-        total_s: info.duration.map(|d| d.as_secs_f64()),
+        total_s: found.duration.map(|d| d.as_secs_f64()),
         done_s: 0.0,
         cost_usd: 0.0,
         elapsed_s: 0.0,
@@ -184,6 +321,12 @@ pub fn start(
         message: None,
         saved_to: None,
         failed_chunks: 0,
+        stage: match found.route {
+            Route::Whole { .. } => Stage::Upload,
+            Route::Chunks => Stage::Chunks,
+        },
+        sent_bytes: 0,
+        total_bytes: found.size,
     };
     {
         let mut current = state.files.lock();
@@ -200,28 +343,42 @@ pub fn start(
             cancel,
         });
     }
-    tracing::info!(file = %view.name, total_s = view.total_s, model = %view.model, "a transcrever um ficheiro");
-    tauri::async_runtime::spawn(run(Arc::clone(state), xai, path, cancel_rx));
+    tracing::info!(
+        file = %view.name,
+        total_s = view.total_s,
+        bytes = found.size,
+        route = ?found.route,
+        model = %view.model,
+        "a transcrever um ficheiro"
+    );
+    tauri::async_runtime::spawn(run(Arc::clone(state), xai, path, found, cancel_rx));
     Ok(view)
 }
 
 /// O trabalho do princípio ao fim: transcreve, monta o texto, guarda uma cópia,
 /// regista o custo e avisa.
-async fn run(state: Arc<AppState>, xai: Xai, path: PathBuf, cancel: watch::Receiver<bool>) {
+async fn run(
+    state: Arc<AppState>,
+    xai: Xai,
+    path: PathBuf,
+    found: Inspection,
+    cancel: watch::Receiver<bool>,
+) {
     let config = state.config();
     let progress_state = Arc::clone(&state);
     let outcome = transcribe_file(
         xai,
-        path.clone(),
-        config.language.clone(),
-        stt::keyterms(&config.dictionary).into(),
+        Input {
+            path: path.clone(),
+            found,
+            language: config.language.clone(),
+            keyterms: stt::keyterms(&config.dictionary).into(),
+        },
         cancel,
         move |p| {
-            progress_state.files.update(&progress_state.app, |v| {
-                v.done_s = p.done.as_secs_f64();
-                v.cost_usd = p.cost;
-                v.failed_chunks = p.failed;
-            });
+            progress_state
+                .files
+                .update(&progress_state.app, |v| v.apply(p));
         },
     )
     .await;
@@ -368,11 +525,47 @@ struct Outcome {
     end: End,
 }
 
-#[derive(Debug, Clone, Copy)]
+impl Outcome {
+    fn new(end: End) -> Self {
+        Self {
+            parts: BTreeMap::new(),
+            cost: 0.0,
+            sent: Duration::ZERO,
+            failed: 0,
+            end,
+        }
+    }
+}
+
+/// O que a janela fica a saber a cada passo.
+#[derive(Debug, Clone, Default)]
 struct Progress {
+    stage: Stage,
+    /// Áudio já transcrito (ou saltado por ser silêncio).
     done: Duration,
     cost: f64,
     failed: usize,
+    sent_bytes: u64,
+    /// Um aviso para mostrar enquanto trabalha (a mudança de caminho).
+    note: Option<String>,
+}
+
+/// O que `transcribe_file` precisa de um ficheiro.
+struct Input {
+    path: PathBuf,
+    found: Inspection,
+    language: Option<String>,
+    keyterms: Arc<[String]>,
+}
+
+fn chunk_progress(done: Duration, out: &Outcome) -> Progress {
+    Progress {
+        stage: Stage::Chunks,
+        done,
+        cost: out.cost,
+        failed: out.failed,
+        ..Progress::default()
+    }
 }
 
 /// O que um pedido devolve à tarefa principal.
@@ -383,16 +576,168 @@ struct ChunkResult {
     result: Result<Transcription, ApiError>,
 }
 
-/// Lê, corta e transcreve o ficheiro. Não sabe nada da janela nem do `AppState`:
-/// recebe o que precisa e conta o progresso a `progress`.
+/// Transcreve o ficheiro pelo caminho que `found.route` diz e, se o ficheiro inteiro não
+/// resultar e houver reserva, pelo outro. Não sabe nada da janela nem do `AppState`: recebe
+/// o que precisa e conta o progresso a `progress`.
 async fn transcribe_file(
     xai: Xai,
-    path: PathBuf,
-    language: Option<String>,
-    keyterms: Arc<[String]>,
+    input: Input,
     mut cancel: watch::Receiver<bool>,
     mut progress: impl FnMut(Progress),
 ) -> Outcome {
+    let mut wasted = 0.0;
+    if let Route::Whole { can_fall_back } = input.found.route {
+        match transcribe_whole(&xai, &input, can_fall_back, &mut cancel, &mut progress).await {
+            Whole::Done(outcome) => return outcome,
+            Whole::Retry { wasted: cost, why } => {
+                tracing::warn!(%why, "o ficheiro inteiro não resultou; a tentar por pedaços");
+                wasted = cost;
+                progress(Progress {
+                    cost,
+                    note: Some(format!(
+                        "O envio do ficheiro inteiro não resultou ({why}); a transcrever por pedaços."
+                    )),
+                    ..Progress::default()
+                });
+            }
+        }
+    }
+    transcribe_chunks(xai, input, cancel, progress, wasted).await
+}
+
+/// O que o ficheiro inteiro deu.
+enum Whole {
+    Done(Outcome),
+    /// Não resultou e há o outro caminho. `wasted` é o que a xAI já cobrou.
+    Retry {
+        wasted: f64,
+        why: String,
+    },
+}
+
+/// A xAI diz a duração do áudio que processou. Um ficheiro cujo cabeçalho diz mais
+/// do que isso (com folga para arredondamentos) ficou a meio.
+fn is_truncated(processed: f64, expected: Duration) -> bool {
+    let expected = expected.as_secs_f64();
+    processed < expected - (expected * 0.015).max(3.0)
+}
+
+/// Divide o texto em parágrafos: acaba-se um quando já tem `PARAGRAPH_WORDS` palavras e a
+/// frase termina. (A xAI devolve o texto de seguida; sem isto, uma aula seria uma parede.)
+fn paragraphs(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for word in text.split_whitespace() {
+        current.push(word);
+        if current.len() >= PARAGRAPH_WORDS && word.ends_with(['.', '!', '?', '…']) {
+            out.push(current.join(" "));
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        out.push(current.join(" "));
+    }
+    out
+}
+
+/// O ficheiro inteiro num só pedido. Conta os bytes enviados enquanto sobe e deixa-se
+/// parar a qualquer momento (largar o pedido fecha a ligação).
+async fn transcribe_whole(
+    xai: &Xai,
+    input: &Input,
+    can_fall_back: bool,
+    cancel: &mut watch::Receiver<bool>,
+    progress: &mut impl FnMut(Progress),
+) -> Whole {
+    let req = SttRequest {
+        language: input.language.as_deref(),
+        keyterms: &input.keyterms,
+    };
+    let uploaded = Arc::new(AtomicU64::new(0));
+    let request = xai.transcribe_path_retrying(&input.path, input.found.duration, &req, &uploaded);
+    tokio::pin!(request);
+    let mut tick = tokio::time::interval(Duration::from_millis(500));
+    let size = input.found.size;
+    let result = loop {
+        tokio::select! {
+            biased;
+            _ = cancel.changed() => return Whole::Done(Outcome::new(End::Cancelled)),
+            result = &mut request => break result,
+            _ = tick.tick() => {
+                let sent_bytes = uploaded.load(Ordering::Relaxed).min(size);
+                progress(Progress {
+                    stage: if sent_bytes >= size { Stage::Server } else { Stage::Upload },
+                    sent_bytes,
+                    ..Progress::default()
+                });
+            }
+        }
+    };
+
+    match result {
+        Ok(t) => {
+            let expected = input.found.duration;
+            if can_fall_back
+                && let (Some(got), Some(want)) = (t.seconds, expected)
+                && is_truncated(got, want)
+            {
+                return Whole::Retry {
+                    wasted: batch_cost(got),
+                    why: format!(
+                        "a xAI só processou {} de {}",
+                        clock(Duration::from_secs_f64(got)),
+                        clock(want)
+                    ),
+                };
+            }
+            let audio = t
+                .seconds
+                .map(Duration::from_secs_f64)
+                .or(expected)
+                .unwrap_or_default();
+            let cost = batch_cost(audio.as_secs_f64());
+            let mut out = Outcome::new(End::Finished);
+            out.cost = cost;
+            out.sent = audio;
+            out.parts = paragraphs(&t.text)
+                .into_iter()
+                .enumerate()
+                .map(|(i, p)| (i, Part::Text(p)))
+                .collect();
+            progress(Progress {
+                stage: Stage::Server,
+                done: audio,
+                cost,
+                sent_bytes: size,
+                ..Progress::default()
+            });
+            Whole::Done(out)
+        }
+        Err(e) if is_fatal(&e) || !can_fall_back => {
+            Whole::Done(Outcome::new(End::Failed(e.to_string())))
+        }
+        Err(e) => Whole::Retry {
+            wasted: 0.0,
+            why: e.to_string(),
+        },
+    }
+}
+
+/// Lê, corta e transcreve o ficheiro aos pedaços. `base_cost` é o que já se gastou antes
+/// (um ficheiro inteiro que a xAI processou a meio).
+async fn transcribe_chunks(
+    xai: Xai,
+    input: Input,
+    mut cancel: watch::Receiver<bool>,
+    mut progress: impl FnMut(Progress),
+    base_cost: f64,
+) -> Outcome {
+    let Input {
+        path,
+        language,
+        keyterms,
+        ..
+    } = input;
     let (tx, mut rx) = mpsc::channel::<Chunk>(2);
     // A leitura pára quando o ficheiro acaba ou quando o envio falha, o que
     // acontece quando o `rx` é largado (parado ou erro).
@@ -401,13 +746,8 @@ async fn transcribe_file(
     });
 
     let mut tasks = JoinSet::new();
-    let mut out = Outcome {
-        parts: BTreeMap::new(),
-        cost: 0.0,
-        sent: Duration::ZERO,
-        failed: 0,
-        end: End::Finished,
-    };
+    let mut out = Outcome::new(End::Finished);
+    out.cost = base_cost;
     let mut done = Duration::ZERO;
     let mut reading = true;
 
@@ -441,7 +781,7 @@ async fn transcribe_file(
                     }
                 }
                 done += r.length;
-                progress(Progress { done, cost: out.cost, failed: out.failed });
+                progress(chunk_progress(done, &out));
             }
             // Só lê mais um pedaço quando há lugar para outro pedido.
             next = rx.recv(), if reading && tasks.len() < PARALLEL => match next {
@@ -450,7 +790,7 @@ async fn transcribe_file(
                     None => {
                         out.parts.insert(chunk.index, Part::Silent);
                         done += chunk.length;
-                        progress(Progress { done, cost: out.cost, failed: out.failed });
+                        progress(chunk_progress(done, &out));
                     }
                     Some(wav) => {
                         out.sent += chunk.length;
@@ -647,21 +987,178 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    fn minutes(m: u64) -> Option<Duration> {
+        Some(Duration::from_secs(m * 60))
+    }
+
+    #[test]
+    fn a_light_file_goes_whole_and_a_heavy_one_in_chunks() {
+        let whole = Route::Whole {
+            can_fall_back: true,
+        };
+        // Um mp3 de 1 h a 128 kbps (58 MB) pesa menos do que 1 h a 16 kHz (115 MB).
+        assert_eq!(choose_route(58_000_000, minutes(60)), whole);
+        // Um WAV de 16 kHz mono já está nesse formato: segue inteiro.
+        assert_eq!(choose_route(115_200_046, minutes(60)), whole);
+        // Um WAV de 44,1 kHz estéreo (635 MB/h) e um vídeo de 300 MB/h pesam mais.
+        assert_eq!(choose_route(320_000_000, minutes(60)), Route::Chunks);
+        // Cabe no pedido, mas o outro caminho envia menos: um vídeo curto e pesado.
+        assert_eq!(choose_route(150_000_000, minutes(30)), Route::Chunks);
+        // Mais de 500 MB nunca vai inteiro, mesmo que seja leve para a duração dele.
+        assert_eq!(choose_route(600_000_000, minutes(600)), Route::Chunks);
+        // Sem duração não se sabe quanto pesa o outro caminho: o de sempre.
+        assert_eq!(choose_route(10_000_000, None), Route::Chunks);
+    }
+
+    #[test]
+    fn a_cut_short_answer_is_told_from_rounding() {
+        let hour = Duration::from_secs(3600);
+        assert!(!is_truncated(3600.0, hour));
+        // O cabeçalho de um mp3 pode errar uns segundos.
+        assert!(!is_truncated(3590.0, hour));
+        assert!(!is_truncated(3550.0, hour), "1,5 % de folga");
+        assert!(is_truncated(3500.0, hour));
+        assert!(is_truncated(2000.0, hour));
+        // Num áudio curto a folga mínima são 3 s.
+        let short = Duration::from_secs(60);
+        assert!(!is_truncated(57.5, short));
+        assert!(is_truncated(50.0, short));
+    }
+
+    #[test]
+    fn text_is_split_into_paragraphs_at_sentence_ends() {
+        let sentence = |n: usize| format!("{} fim.", vec!["palavra"; n - 1].join(" "));
+        // 40 + 40 + 40 palavras: o parágrafo fecha à 3.ª frase (120 ≥ 90), não antes.
+        let text = [sentence(40), sentence(40), sentence(40), sentence(10)].join(" ");
+        let found = paragraphs(&text);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].split_whitespace().count(), 120);
+        assert_eq!(found[1].split_whitespace().count(), 10);
+
+        // Atingir o número de palavras a meio de uma frase não corta a frase.
+        let long_sentence = format!("{} fim", vec!["a"; 200].join(" "));
+        assert_eq!(
+            paragraphs(&long_sentence),
+            std::slice::from_ref(&long_sentence)
+        );
+
+        assert!(paragraphs("").is_empty());
+        assert_eq!(paragraphs("  Olá,   mundo.  "), ["Olá, mundo."]);
+    }
+
+    #[test]
+    fn paragraphs_survive_assembly() {
+        let sentence = |n: usize| format!("{} fim.", vec!["palavra"; n - 1].join(" "));
+        let text = [sentence(95), sentence(95)].join(" ");
+        let parts: BTreeMap<usize, Part> = paragraphs(&text)
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| (i, Part::Text(p)))
+            .collect();
+        let assembled = assemble(&parts);
+        assert_eq!(assembled.matches("\n\n").count(), 1);
+        assert_eq!(assembled.split_whitespace().count(), 190);
+    }
+
+    #[test]
+    fn inspecting_sends_what_only_the_xai_can_read_and_refuses_the_rest() {
+        let dir = std::env::temp_dir().join(format!("ditok-inspect-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+
+        // Uma extensão de áudio que o descodificador local não lê: inteiro, sem reserva.
+        let opus = inspect(&write("nota de voz.OPUS", b"OggS fingido")).unwrap();
+        assert_eq!(opus.size, 12);
+        assert_eq!(opus.duration, None);
+        assert_eq!(
+            opus.route,
+            Route::Whole {
+                can_fall_back: false
+            }
+        );
+
+        // Nem uma extensão de áudio nem legível: erro, como sempre.
+        let text = inspect(&write("notas.txt", b"isto nao e audio"));
+        assert!(matches!(text, Err(DecodeError::Unsupported)), "{text:?}");
+        // Vazio não se manda.
+        let empty = inspect(&write("vazio.mp3", b""));
+        assert!(empty.is_err());
+        // Um ficheiro que não existe é um erro de leitura, não um formato.
+        assert!(matches!(
+            inspect(&dir.join("não-existe.mp3")),
+            Err(DecodeError::Io(_))
+        ));
+
+        // Um WAV legível (6 s de silêncio a 16 kHz): inteiro, com reserva, duração conhecida.
+        let wav = crate::audio::wav::encode_pcm16_mono(&vec![0.0; 96_000], 16_000);
+        let found = inspect(&write("aula.wav", &wav)).unwrap();
+        assert_eq!(found.size, wav.len() as u64);
+        assert!((found.duration.unwrap().as_secs_f64() - 6.0).abs() < 0.01);
+        assert_eq!(
+            found.route,
+            Route::Whole {
+                can_fall_back: true
+            }
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Transcreve um ficheiro de verdade com a chave do cofre (custa uns cêntimos
     /// de cêntimo). Gera-se uma "aula" com a voz do Windows:
     /// `DITOK_FILE=aula.wav cargo test live_file -- --ignored --nocapture`
+    /// `DITOK_ROUTE=chunks` obriga ao caminho por pedaços; `DITOK_LANG` muda o idioma
+    /// (por omissão `en`); `DITOK_OUT=<ficheiro>` guarda o texto; `DITOK_CANCEL_MS=<n>`
+    /// para o trabalho passados `n` ms (e espera-se `Cancelled`).
     #[tokio::test]
     #[ignore]
     async fn live_file() {
         let path = PathBuf::from(std::env::var("DITOK_FILE").expect("define DITOK_FILE"));
         let key = crate::secrets::get().unwrap().expect("sem chave no cofre");
         let xai = Xai::new(crate::xai::http_client().unwrap(), key);
-        let info = decode::probe(&path).unwrap();
-        println!("{} → {:?}", path.display(), info.duration);
-        let (_cancel, rx) = watch::channel(false);
+        let mut found = inspect(&path).unwrap();
+        if std::env::var("DITOK_ROUTE").is_ok_and(|r| r == "chunks") {
+            found.route = Route::Chunks;
+        }
+        println!(
+            "{} → {:?}, {} MB, {:?}",
+            path.display(),
+            found.duration,
+            found.size / 1_000_000,
+            found.route
+        );
+        let (cancel, rx) = watch::channel(false);
+        let cancel = Arc::new(cancel);
+        let cancel_after = std::env::var("DITOK_CANCEL_MS")
+            .ok()
+            .and_then(|ms| ms.parse::<u64>().ok());
+        if let Some(ms) = cancel_after {
+            let cancel = Arc::clone(&cancel);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                let _ = cancel.send(true);
+            });
+        }
         let started = Instant::now();
-        let out = transcribe_file(xai, path, Some("en".into()), Arc::from([]), rx, |p| {
-            println!("  {:?} transcritos, ${:.5}", p.done, p.cost)
+        let language = std::env::var("DITOK_LANG").unwrap_or_else(|_| "en".into());
+        let input = Input {
+            path,
+            found,
+            language: Some(language),
+            keyterms: Arc::from([]),
+        };
+        let out = transcribe_file(xai, input, rx, |p| {
+            println!(
+                "  {:?}: {} MB enviados, {:?} transcritos, ${:.5}{}",
+                p.stage,
+                p.sent_bytes / 1_000_000,
+                p.done,
+                p.cost,
+                p.note.map(|n| format!(" ({n})")).unwrap_or_default()
+            )
         })
         .await;
         println!(
@@ -672,6 +1169,15 @@ mod tests {
             out.failed,
             assemble(&out.parts)
         );
-        assert_eq!(out.end, End::Finished);
+        if let Ok(out_path) = std::env::var("DITOK_OUT") {
+            std::fs::write(out_path, assemble(&out.parts)).unwrap();
+        }
+        let expected = if cancel_after.is_some() {
+            End::Cancelled
+        } else {
+            End::Finished
+        };
+        assert_eq!(out.end, expected);
+        drop(cancel);
     }
 }

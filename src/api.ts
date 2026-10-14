@@ -346,6 +346,9 @@ export interface FileProbe {
 
 export type FileStatus = "running" | "done" | "failed" | "cancelled";
 
+/** O ficheiro inteiro a subir, a xAI a transcrevê-lo, ou o caminho por pedaços. */
+export type FileStage = "upload" | "server" | "chunks";
+
 export interface FileJob {
   name: string;
   status: FileStatus;
@@ -358,6 +361,10 @@ export interface FileJob {
   message: string | null;
   saved_to: string | null;
   failed_chunks: number;
+  stage: FileStage;
+  /** Bytes enviados e tamanho do ficheiro (só contam em "upload"). */
+  sent_bytes: number;
+  total_bytes: number;
 }
 
 export const files = {
