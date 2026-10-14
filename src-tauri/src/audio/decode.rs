@@ -307,14 +307,6 @@ impl Chunker {
         (samples.len() >= min).then(|| self.piece(samples))
     }
 
-    /// Tudo o que sobrou, por pequeno que seja. Num ditado não se deita fora o fim
-    /// (ao contrário de `finish`, que ignora um resto de poucos milissegundos).
-    #[cfg_attr(not(feature = "local"), allow(dead_code))] // só o motor local o usa
-    pub fn flush(mut self) -> Option<Piece> {
-        let samples = std::mem::take(&mut self.pending);
-        (!samples.is_empty()).then(|| self.piece(samples))
-    }
-
     fn piece(&mut self, samples: Vec<f32>) -> Piece {
         let piece = Piece {
             index: self.next_index,

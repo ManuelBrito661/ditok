@@ -6,15 +6,11 @@ import {
   errorText,
   type CleanupLevel,
   type Config,
-  type KeyInfo,
   type ModelInfo,
-  type ModelKind,
   type ModelList,
 } from "./api";
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
-import { ago, heldModifiers, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
-import { setupLocalEngine } from "./local-engine";
-import { setupSpeakersEngine } from "./speakers-engine";
+import { ago, describeAccess, heldModifiers, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
 import { renderOutputDevices } from "./notes-page";
 import { refreshRecentApps, setupStyles } from "./styles-panel";
@@ -177,16 +173,6 @@ function setupShortcut(
 
 // ---------------------------------------------------------------- chave
 
-function describeKey(info: KeyInfo | null): string {
-  if (!info) return "Guardada, mas não a consegui validar (sem rede?).";
-  const parts = [];
-  if (info.label) parts.push(info.label);
-  if (info.usage != null) parts.push(`gasto ${usd(info.usage, 2)}`);
-  if (info.limit_remaining != null) parts.push(`restam ${usd(info.limit_remaining, 2)}`);
-  else if (info.limit == null) parts.push("sem limite de gasto");
-  return parts.join(" · ");
-}
-
 function renderKey() {
   const set = app.view.api_key_set;
   const status = $("key-status");
@@ -200,16 +186,19 @@ function setupKey() {
   const input = $<HTMLInputElement>("key-input");
   const info = $("key-info");
 
+  $("key-console").addEventListener("click", () =>
+    void api.openXaiConsole().catch((e) => toast(`Não consegui abrir o browser: ${errorText(e)}`, "error")));
+
   $("key-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
-      const result = await api.setApiKey(input.value);
+      const access = await api.setApiKey(input.value);
       input.value = ""; // a chave não fica no DOM
       app.view.api_key_set = true;
-      app.key = result;
       notifyViewChange();
-      info.textContent = describeKey(result);
-      toast("Chave guardada");
+      const { text, ok } = describeAccess(access);
+      info.textContent = `Guardada. ${text}`;
+      toast(ok ? "Chave da xAI guardada" : "Chave guardada, mas com permissões em falta", ok ? "ok" : "error");
     } catch (err) {
       toast(errorText(err), "error");
     }
@@ -218,7 +207,7 @@ function setupKey() {
   $("key-test").addEventListener("click", async () => {
     info.textContent = "A testar…";
     try {
-      info.textContent = `Válida · ${describeKey(await api.testApiKey())}`;
+      info.textContent = `Válida. ${describeAccess(await api.testApiKey()).text}`;
     } catch (err) {
       info.textContent = "";
       toast(errorText(err), "error");
@@ -227,72 +216,14 @@ function setupKey() {
 
   $("key-delete").addEventListener("click", async () => {
     const ok = await confirmDanger(
-      "Apagar a chave do OpenRouter?",
-      "Tiro-a do cofre do sistema. Não consigo transcrever até guardares outra.",
+      "Apagar a chave da xAI?",
+      "Tiro-a do cofre do sistema. Não consigo transcrever nem tratar texto até guardares outra.",
       "Apagar chave",
     );
     if (!ok) return;
     try {
       await api.deleteApiKey();
       app.view.api_key_set = false;
-      app.key = null;
-      info.textContent = "";
-      notifyViewChange();
-      toast("Chave apagada");
-    } catch (err) {
-      toast(errorText(err), "error");
-    }
-  });
-}
-
-function renderXaiKey() {
-  const set = app.view.xai_key_set;
-  const status = $("xai-key-status");
-  status.textContent = set ? "Configurada" : "Não configurada";
-  status.className = `pill ${set ? "ok" : "warn"}`;
-  $<HTMLButtonElement>("xai-key-test").disabled = !set;
-  $<HTMLButtonElement>("xai-key-delete").disabled = !set;
-}
-
-function setupXaiKey() {
-  const input = $<HTMLInputElement>("xai-key-input");
-  const info = $("xai-key-info");
-
-  $("xai-key-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      await api.setXaiKey(input.value);
-      input.value = ""; // a chave não fica no DOM
-      app.view.xai_key_set = true;
-      notifyViewChange();
-      info.textContent = "Guardada e validada.";
-      toast("Chave da xAI guardada");
-    } catch (err) {
-      toast(errorText(err), "error");
-    }
-  });
-
-  $("xai-key-test").addEventListener("click", async () => {
-    info.textContent = "A testar…";
-    try {
-      await api.testXaiKey();
-      info.textContent = "Válida.";
-    } catch (err) {
-      info.textContent = "";
-      toast(errorText(err), "error");
-    }
-  });
-
-  $("xai-key-delete").addEventListener("click", async () => {
-    const ok = await confirmDanger(
-      "Apagar a chave da xAI?",
-      "Tiro-a do cofre do sistema. Não consigo transcrever com a xAI até guardares outra.",
-      "Apagar chave",
-    );
-    if (!ok) return;
-    try {
-      await api.deleteXaiKey();
-      app.view.xai_key_set = false;
       info.textContent = "";
       notifyViewChange();
       toast("Chave da xAI apagada");
@@ -302,28 +233,20 @@ function setupXaiKey() {
   });
 }
 
-
 // ---------------------------------------------------------------- modelos
 
-function price(m: ModelInfo, kind: ModelKind): string {
+function price(m: ModelInfo): string {
   if (m.prompt_price == null) return "preço variável";
-  // Transcrição cobrada à duração: "prompt" é USD por segundo de áudio.
-  if (kind === "transcription" && !m.completion_price) return `${usd(m.prompt_price * 60, 5)}/min`;
   const perM = (v: number | null) => (v == null ? "?" : usd(v * 1e6, 2));
   return `${perM(m.prompt_price)} / ${perM(m.completion_price)} por M tokens`;
 }
 
-/** Um seletor de modelos com pesquisa (transcrição ou limpeza). */
-function modelPicker(
-  kind: ModelKind,
-  prefix: "stt" | "cleanup" | "summary",
-  field: "stt_model" | "cleanup_model" | "summary_model",
-) {
+/** Um seletor de modelos de texto com pesquisa (limpeza ou resumos). */
+function modelPicker(prefix: "cleanup" | "summary", field: "cleanup_model" | "summary_model") {
   const list = $<HTMLUListElement>(`${prefix}-models`);
   const search = $<HTMLInputElement>(`${prefix}-search`);
   const meta = $(`${prefix}-meta`);
   let data: ModelList | null = null;
-  const MAX_SHOWN = 80;
 
   const render = () => {
     const current = app.view.config[field];
@@ -333,26 +256,25 @@ function modelPicker(
       : `Atual: o mesmo da limpeza (${app.view.config.cleanup_model})`;
     if (!data) return;
     const q = search.value.trim().toLowerCase();
-    const matches = data.models.filter((m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
-    // O modelo selecionado aparece sempre primeiro.
-    matches.sort((a, b) => Number(b.id === current) - Number(a.id === current));
+    const matches = data.models.filter((m) => !q || m.id.toLowerCase().includes(q));
+    // O modelo selecionado aparece sempre primeiro; depois os que não raciocinam (mais rápidos).
+    matches.sort((a, b) => Number(b.id === current) - Number(a.id === current) || Number(a.reasoning) - Number(b.reasoning));
     // Se o foco estava na lista, volta para a opção selecionada depois de a redesenhar.
     const hadFocus = list.contains(document.activeElement);
-    const shown = matches.slice(0, MAX_SHOWN);
     // Tabindex rotativo: só uma opção entra na ordem do Tab (a selecionada, ou a
     // primeira); as setas, Home e End andam entre as outras.
-    const tabStop = Math.max(0, shown.findIndex((m) => m.id === current));
+    const tabStop = Math.max(0, matches.findIndex((m) => m.id === current));
     list.replaceChildren(
-      ...shown.map((m, i) => {
+      ...matches.map((m, i) => {
         const li = document.createElement("li");
         const selected = m.id === current;
         li.setAttribute("role", "option");
         li.setAttribute("aria-selected", String(selected));
         li.tabIndex = i === tabStop ? 0 : -1;
         li.innerHTML = `<span class="model-name"></span><code class="model-id"></code><span class="model-price"></span>`;
-        (li.children[0] as HTMLElement).textContent = m.name;
-        (li.children[1] as HTMLElement).textContent = m.id;
-        (li.children[2] as HTMLElement).textContent = price(m, kind);
+        (li.children[0] as HTMLElement).textContent = m.id;
+        (li.children[1] as HTMLElement).textContent = m.reasoning ? "raciocina: mais lento" : "responde logo";
+        (li.children[2] as HTMLElement).textContent = price(m);
         const choose = () => !selected && save({ [field]: m.id } as Partial<Config>);
         li.addEventListener("click", choose);
         li.addEventListener("keydown", (e) => {
@@ -379,16 +301,15 @@ function modelPicker(
       }),
     );
     if (hadFocus) (list.children[tabStop] as HTMLElement | undefined)?.focus();
-    const more = matches.length > MAX_SHOWN ? ` (a mostrar ${MAX_SHOWN}; pesquisa para filtrar)` : "";
     meta.textContent =
       `${matches.length} de ${data.models.length} modelos · lista de ${ago(data.fetched_at)}` +
-      (data.stale ? " · sem ligação, a usar a cópia guardada" : "") + more;
+      (data.stale ? " · sem ligação, a usar a cópia guardada" : "");
   };
 
   const load = async (refresh: boolean) => {
     meta.textContent = "A carregar modelos…";
     try {
-      data = await api.listModels(kind, refresh);
+      data = await api.listModels(refresh);
       render();
     } catch (e) {
       meta.textContent = `Não consegui obter a lista: ${errorText(e)}`;
@@ -426,7 +347,6 @@ function renderControls() {
   // Não mexer no campo enquanto o estás a escrever (a vista muda depois de cada ditado).
   const budget = $<HTMLInputElement>("budget");
   if (document.activeElement !== budget) budget.value = c.monthly_budget_usd == null ? "" : String(c.monthly_budget_usd);
-  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) r.checked = r.value === c.transport;
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="cleanup-level"]')) r.checked = r.value === c.cleanup_level;
   $<HTMLInputElement>("history-enabled").checked = c.history_enabled;
   $<HTMLInputElement>("history-limit").value = String(c.history_limit);
@@ -434,7 +354,6 @@ function renderControls() {
   const p = app.view.paths;
   $("paths").textContent = `Configuração: ${p.config} · Dados: ${p.data} · Logs: ${p.logs}`;
   renderKey();
-  renderXaiKey();
 }
 
 function bindSimpleControls(onHistoryCleared: () => void) {
@@ -463,9 +382,6 @@ function bindSimpleControls(onHistoryCleared: () => void) {
     // Vazio = sem orçamento. O backend recusa 0 e negativos com uma mensagem.
     void save({ monthly_budget_usd: raw === "" ? null : Number(raw) });
   });
-  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="transport"]')) {
-    r.addEventListener("change", () => r.checked && save({ transport: r.value as Config["transport"] }));
-  }
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="cleanup-level"]')) {
     r.addEventListener("change", () => r.checked && save({ cleanup_level: r.value as CleanupLevel }));
   }
@@ -549,18 +465,14 @@ export function setupSettings(onHistoryCleared: () => void) {
   setupShortcut("command-shortcut", "command_shortcut");
   setupShortcut("quick-history", "quick_history_shortcut");
   setupKey();
-  setupXaiKey();
   bindSimpleControls(onHistoryCleared);
   setupStyles();
-  setupLocalEngine();
-  setupSpeakersEngine();
   onViewChange(renderControls);
   renderControls();
   // As listas de modelos só são pedidas quando o modal abre pela primeira vez.
   $("summary-reset").addEventListener("click", () => void save({ summary_model: "" }));
   models = [
-    modelPicker("transcription", "stt", "stt_model"),
-    modelPicker("text", "cleanup", "cleanup_model"),
-    modelPicker("text", "summary", "summary_model"),
+    modelPicker("cleanup", "cleanup_model"),
+    modelPicker("summary", "summary_model"),
   ];
 }

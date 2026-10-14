@@ -69,12 +69,11 @@
               <li><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg><b id="s-words">—</b> palavras</li>
               <li title="Tempo normal desde que largas o atalho até o texto aparecer"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg><b id="s-speed">—</b> até colar</li>
               <li id="s-cost-item"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.4-1-1.6-1.7-3-1.7-1.7 0-3 .9-3 2.1 0 2.9 6 1.4 6 4.3 0 1.2-1.3 2.1-3 2.1-1.4 0-2.6-.7-3-1.7M12 6.3v1.5m0 8.4v1.5"/></svg><b id="s-cost">—</b> <span id="s-cost-of"></span>este mês</li>
-              <li id="s-key-item" hidden><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M16 7l3 3M18.5 4.5l2 2"/></svg><b id="s-key">—</b> na chave</li>
             </ul>
           </header>
 
           <div id="key-banner" class="banner" role="alert" hidden>
-            <span id="key-banner-text">Falta a chave do OpenRouter. Sem ela não consigo transcrever.</span>
+            <span id="key-banner-text">Falta a chave da xAI. Sem ela não consigo transcrever.</span>
             <button id="key-banner-open" type="button" class="primary small">Configurar</button>
           </div>
 
@@ -243,7 +242,7 @@
           <header class="page-head">
             <h1 id="files-title" class="serif" tabindex="-1">Transcrever um ficheiro</h1>
             <p class="muted">
-              A gravação de uma aula, uma reunião ou um vídeo. É partida nas pausas e enviada aos bocados ao teu modelo
+              A gravação de uma aula, uma reunião ou um vídeo. É partida nas pausas e enviada aos bocados à xAI,
               de transcrição, vários ao mesmo tempo. Podes fechar a janela enquanto trabalha: aviso quando acabar.
             </p>
           </header>
@@ -307,7 +306,7 @@
             <h1 id="notes-title" class="serif" tabindex="-1">Notas de reuniões</h1>
             <p class="muted">
               Grava o teu microfone e o áudio do computador (a outra pessoa numa chamada, uma aula online) e
-              transcreve à medida que se fala. Distingue "Eu" de "Outros"; não distingue cada pessoa de "Outros".
+              transcreve à medida que se fala. Distingue "Eu" de "Outros"; se quiseres, no fim separa também cada pessoa de "Outros".
             </p>
           </header>
 
@@ -328,13 +327,6 @@
                 <span>Separar quem fala em "Outros" (Orador 1, 2…) no fim da reunião</span>
               </label>
               <p id="notes-speakers-hint" class="row-desc"></p>
-            </div>
-            <div id="notes-speech" class="notes-speakers">
-              <label class="notes-check">
-                <input id="notes-speech-on" type="checkbox" />
-                <span>Ignorar sons sem fala (teclado, tosse, música) <span class="beta-badge">BETA</span></span>
-              </label>
-              <p id="notes-speech-hint" class="row-desc"></p>
             </div>
             <p class="row-desc">Com colunas, o microfone apanha também o som da outra pessoa. Com auscultadores fica tudo limpo.</p>
           </div>
@@ -412,7 +404,7 @@
             <h1 id="metrics-title" class="serif" tabindex="-1">Métricas e custos</h1>
             <p class="muted">
               Tempos dos últimos 50 ditados que correram bem: o normal e o máximo que 9 em cada 10 não passam.
-              Custos em dólares (US$), tal como o OpenRouter os cobra.
+              Custos em dólares (US$), pelo que a xAI cobra a cada pedido.
             </p>
           </header>
 
@@ -425,7 +417,7 @@
               <span id="m-budget-sub" class="card-sub"></span>
             </div>
             <div class="card">
-              <span class="card-label">Restante na chave</span>
+              <span class="card-label">Chave da xAI</span>
               <span id="m-key" class="card-value">—</span>
               <span id="m-key-sub" class="card-sub"></span>
             </div>
@@ -575,7 +567,7 @@
           <h2 id="settings-title" class="dlg-heading">Definições</h2>
           <div role="tablist" aria-orientation="vertical" aria-label="Separadores das definições">
             <button type="button" role="tab" id="tab-geral" aria-controls="panel-geral" aria-selected="true">Geral</button>
-            <button type="button" role="tab" id="tab-transcricao" aria-controls="panel-transcricao" aria-selected="false" tabindex="-1">Transcrição</button>
+            <button type="button" role="tab" id="tab-transcricao" aria-controls="panel-transcricao" aria-selected="false" tabindex="-1">xAI e custos</button>
             <button type="button" role="tab" id="tab-limpeza" aria-controls="panel-limpeza" aria-selected="false" tabindex="-1">Limpeza com IA</button>
             <button type="button" role="tab" id="tab-estilos" aria-controls="panel-estilos" aria-selected="false" tabindex="-1">Estilos por app</button>
             <button type="button" role="tab" id="tab-dados" aria-controls="panel-dados" aria-selected="false" tabindex="-1">Dados e privacidade</button>
@@ -769,84 +761,22 @@
 
           <!-- Transcrição -->
           <section role="tabpanel" id="panel-transcricao" aria-labelledby="tab-transcricao" hidden>
-            <h3 class="panel-title">Transcrição</h3>
+            <h3 class="panel-title">Transcrição e chave</h3>
+            <p class="muted panel-intro">
+              Tudo o que o Ditok faz com IA passa pela <b>xAI</b>: a transcrição (em tempo real enquanto falas, a 0,20 US$
+              por hora de fala; em lote, a 0,10 US$ por hora), a limpeza, os comandos e os resumos. Uma só chave
+              chega para tudo.
+            </p>
             <div class="rows">
               <div class="row stacked">
                 <div class="row-text">
-                  <span id="engine-label" class="row-title">Onde se transcreve</span>
-                </div>
-                <div class="choices" role="radiogroup" aria-labelledby="engine-label">
-                  <div class="choice">
-                    <input type="radio" id="engine-cloud" name="stt-engine" value="cloud" aria-describedby="engine-cloud-desc" />
-                    <label for="engine-cloud" class="choice-title">Na nuvem</label>
-                    <p id="engine-cloud-desc" class="choice-desc">O OpenRouter, com a tua chave. Precisa de rede e custa uns cêntimos por hora de fala.</p>
-                  </div>
-                  <div class="choice">
-                    <input type="radio" id="engine-xai" name="stt-engine" value="xai" aria-describedby="engine-xai-desc" />
-                    <label for="engine-xai" class="choice-title">xAI, em tempo real</label>
-                    <p id="engine-xai-desc" class="choice-desc">A API da xAI, com a tua chave. O áudio segue enquanto falas e vês o texto a aparecer; custa 0,20 US$ por hora de fala. A limpeza com IA e os comandos continuam no OpenRouter.</p>
-                  </div>
-                  <div class="choice">
-                    <input type="radio" id="engine-local" name="stt-engine" value="local" aria-describedby="engine-local-desc" />
-                    <label for="engine-local" class="choice-title">Neste computador</label>
-                    <p id="engine-local-desc" class="choice-desc">O áudio não sai daqui e não custa nada. Descarrega-se um modelo (centenas de MB) e, enquanto ditas, usa 1 a 2 GB de memória.</p>
-                  </div>
-                </div>
-                <p id="engine-unavailable" class="error" hidden>Esta versão do Ditok foi compilada sem o motor local.</p>
-              </div>
-
-              <div id="local-engine" class="row stacked" hidden>
-                <div class="row-text">
-                  <span class="row-title">Modelos neste computador</span>
-                  <span class="row-desc">
-                    Só se carrega um modelo quando ditas e larga-se da memória quando estás parado, por isso o Ditok em
-                    repouso continua leve. A limpeza com IA, o modo comando e os resumos continuam a precisar de rede e
-                    de chave: para ficar mesmo offline, desliga a limpeza (ou usa o estilo Literal).
-                  </span>
-                </div>
-                <ul id="local-models" class="local-models"></ul>
-                <p id="local-error" class="error" role="alert" hidden></p>
-                <div class="row-control">
-                  <label for="local-idle" class="row-desc">Largar o modelo da memória ao fim de</label>
-                  <input id="local-idle" type="number" min="1" max="240" step="1" inputmode="numeric" />
-                  <span class="row-desc">minutos sem ditar</span>
-                </div>
-              </div>
-              <div id="speakers-engine" class="row stacked" hidden>
-                <div class="row-text">
-                  <span class="row-title">Separar oradores nas Notas</span>
-                  <span class="row-desc">
-                    No fim de uma reunião, quem fala dentro de "Outros" fica como Orador 1, 2… Corre neste computador, com um
-                    modelo que se descarrega uma vez. Os três modelos são de inglês: escolhe o que separa melhor as vozes da tua
-                    conversa.
-                  </span>
-                </div>
-                <ul id="speaker-models" class="local-models"></ul>
-                <p id="speaker-error" class="error" role="alert" hidden></p>
-              </div>
-              <div id="xai-key-row" class="row stacked" hidden>
-                <div class="row-text">
-                  <span class="row-title">Chave da xAI <span id="xai-key-status" class="pill"></span></span>
-                  <span class="row-desc">Cria-a em console.x.ai. Guardo-a no cofre do sistema; nunca a mostro nem a gravo em ficheiros.</span>
-                  <span id="xai-key-info" class="row-desc"></span>
-                </div>
-                <form id="xai-key-form" class="row-control">
-                  <input id="xai-key-input" type="password" autocomplete="off" spellcheck="false"
-                         placeholder="xai-…" aria-label="Nova chave da xAI" />
-                  <button type="submit" class="primary">Guardar</button>
-                  <button id="xai-key-test" type="button" class="secondary">Testar</button>
-                  <button id="xai-key-delete" type="button" class="ghost danger">Apagar</button>
-                </form>
-              </div>
-              <div class="row stacked">
-                <div class="row-text">
-                  <span class="row-title">Chave do OpenRouter <span id="key-status" class="pill"></span></span>
-                  <span class="row-desc">Guardo-a no cofre do sistema. Nunca a mostro nem a gravo em ficheiros.</span>
+                  <span class="row-title">Chave da xAI <span id="key-status" class="pill"></span></span>
+                  <span class="row-desc">Cria-a em <button type="button" id="key-console" class="link">console.x.ai</button>. Guardo-a no cofre do sistema; nunca a mostro nem a gravo em ficheiros.</span>
                   <span id="key-info" class="row-desc"></span>
                 </div>
                 <form id="key-form" class="row-control">
                   <input id="key-input" type="password" autocomplete="off" spellcheck="false"
-                         placeholder="sk-or-v1-…" aria-label="Nova chave do OpenRouter" />
+                         placeholder="xai-…" aria-label="Nova chave da xAI" />
                   <button type="submit" class="primary">Guardar</button>
                   <button id="key-test" type="button" class="secondary">Testar</button>
                   <button id="key-delete" type="button" class="ghost danger">Apagar</button>
@@ -856,40 +786,13 @@
               <div class="row">
                 <label class="row-text" for="budget">
                   <span class="row-title">Orçamento mensal</span>
-                  <span class="row-desc">Aviso quando chegares a 80 % e aos 100 %. Conta a transcrição e a limpeza deste mês, como o OpenRouter as cobra. Vazio = sem orçamento.</span>
+                  <span class="row-desc">Aviso quando chegares a 80 % e aos 100 %. Conta a transcrição e a limpeza deste mês, pelo que a xAI cobra. Vazio = sem orçamento.</span>
                 </label>
                 <div class="row-control">
                   <span class="input-unit">
                     <input id="budget" type="number" min="0" step="0.5" inputmode="decimal" placeholder="sem" aria-describedby="budget-unit" />
                     <span id="budget-unit">US$</span>
                   </span>
-                </div>
-              </div>
-
-              <div class="row stacked" id="stt-model-row">
-                <div class="row-text">
-                  <span class="row-title">Modelo de transcrição na nuvem</span>
-                  <span class="row-desc" id="stt-current"></span>
-                </div>
-                <div class="row-control">
-                  <input id="stt-search" type="search" placeholder="Pesquisar modelos…" aria-label="Pesquisar modelos de transcrição" />
-                  <button id="stt-refresh" type="button" class="secondary">Atualizar lista</button>
-                </div>
-                <ul id="stt-models" class="model-list" role="listbox" aria-label="Modelos de transcrição"></ul>
-                <p class="row-desc" id="stt-meta"></p>
-              </div>
-            </div>
-
-            <h4 class="section-title">Avançado</h4>
-            <div class="rows">
-              <div class="row">
-                <div class="row-text">
-                  <span id="transport-label" class="row-title">Formato de envio</span>
-                  <span class="row-desc">Multipart envia o áudio em bruto; JSON usa base64 (~33 % maior). Só vale a pena mudar se um modelo recusar o envio.</span>
-                </div>
-                <div class="segmented" role="radiogroup" aria-labelledby="transport-label">
-                  <label><input type="radio" name="transport" value="multipart" /><span>Multipart</span></label>
-                  <label><input type="radio" name="transport" value="json" /><span>JSON</span></label>
                 </div>
               </div>
             </div>
@@ -1072,18 +975,18 @@
 
         <div class="ob-body">
           <section id="ob-step-key" class="ob-step" aria-labelledby="ob-key-title">
-            <h2 id="ob-key-title" class="serif" tabindex="-1">Primeiro, a tua chave do OpenRouter</h2>
+            <h2 id="ob-key-title" class="serif" tabindex="-1">Primeiro, a tua chave da xAI</h2>
             <p class="muted">
-              Transcrevo através do OpenRouter, com a tua conta: pagas só o que usas, normalmente cêntimos por hora de
-              ditado. Guardo a chave no cofre do sistema; nunca a mostro nem a gravo em ficheiros.
+              Transcrevo e trato o texto com os modelos da xAI, através da tua conta: pagas só o que usas, normalmente
+              cêntimos por hora de ditado. Guardo a chave no cofre do sistema; nunca a mostro nem a gravo em ficheiros.
             </p>
             <ol class="ob-howto">
-              <li>Abre a <button id="ob-key-link" type="button" class="link">página das chaves do OpenRouter</button> (openrouter.ai/keys) e cria uma chave.</li>
+              <li>Abre a <button id="ob-key-link" type="button" class="link">consola da xAI</button> (console.x.ai), entra em API Keys e cria uma chave.</li>
               <li>Copia-a e cola-a aqui. Valido-a antes de a guardar.</li>
             </ol>
             <form id="ob-key-form" class="ob-key-form">
               <input id="ob-key-input" type="password" autocomplete="off" spellcheck="false"
-                     placeholder="sk-or-v1-…" aria-label="Chave do OpenRouter" aria-describedby="ob-key-msg" />
+                     placeholder="xai-…" aria-label="Chave da xAI" aria-describedby="ob-key-msg" />
               <button id="ob-key-save" type="submit" class="primary">Validar e guardar</button>
             </form>
             <p id="ob-key-msg" class="ob-msg" role="status"></p>
@@ -1133,7 +1036,7 @@
         <p id="nc-text">
           Gravar uma chamada ou uma reunião é gravar outras pessoas. Em muitos sítios (e em muitas empresas e escolas)
           é preciso avisá-las e ter o seu acordo. A responsabilidade é tua. O Ditok não guarda o áudio: só o texto,
-          neste computador. O áudio é enviado ao serviço de transcrição que escolheste, ou fica aqui com o motor local.
+          neste computador. O áudio é enviado à xAI para ser transcrito.
         </p>
         <div class="confirm-actions">
           <button type="submit" value="cancel" class="ghost" autofocus>Cancelar</button>

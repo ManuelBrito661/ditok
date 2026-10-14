@@ -2,7 +2,7 @@
 // orçamento, o que resta na chave e RAM.
 
 import { api, errorText, type Percentiles, type Stats, type UsageSummary } from "./api";
-import { budgetLevel, costPerMinute, dateTime, duration, monthLabel, ms, usd } from "./format";
+import { budgetLevel, dateTime, duration, monthLabel, ms, usd } from "./format";
 import { openSettings } from "./settings-dialog";
 import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 
@@ -94,8 +94,8 @@ function setupLink(text: string, onClick: () => void): HTMLButtonElement {
   return b;
 }
 
-/** Os cartões do orçamento e da chave: dependem das métricas, das definições e
- *  do pedido à chave, por isso são redesenhados quando qualquer um muda. */
+/** Os cartões do orçamento e da chave: dependem das métricas e das definições, por
+ *  isso são redesenhados quando qualquer uma muda. */
 function renderMoney() {
   const spent = stats?.months[stats.current_month]?.cost_usd ?? 0;
   const budget = app.view.config.monthly_budget_usd;
@@ -112,24 +112,14 @@ function renderMoney() {
     $("m-budget-sub").replaceChildren(setupLink("Definir um orçamento", () => openSettings("transcricao")));
   }
 
-  const key = app.key;
+  // A xAI não diz quanto resta numa chave normal (só a consola o mostra): aqui só se vê se há chave.
   const sub = $("m-key-sub");
-  if (!app.view.api_key_set) {
+  if (app.view.api_key_set) {
+    $("m-key").textContent = "Guardada";
+    sub.replaceChildren(setupLink("Ver o saldo na consola da xAI", () => void api.openXaiConsole()));
+  } else {
     $("m-key").textContent = "—";
     sub.replaceChildren(setupLink("Configurar a chave", () => openSettings("transcricao")));
-  } else if (!key) {
-    $("m-key").textContent = "—";
-    sub.textContent = "Não consegui perguntar ao OpenRouter.";
-  } else if (key.limit_remaining == null) {
-    $("m-key").textContent = "Sem limite";
-    sub.textContent = `A chave não tem limite de gasto · gastou ${usd(key.usage ?? 0, 2)}`;
-  } else {
-    $("m-key").textContent = usd(key.limit_remaining, 2);
-    // Só os ditados (com a limpeza, se estiver ligada), não os ficheiros.
-    const dictations = (stats?.recent ?? []).filter((r) => !r.file);
-    const perMin = costPerMinute(dictations, app.view.config.stt_model, true);
-    const minutes = perMin ? ` · ≈ ${Math.floor(key.limit_remaining / perMin).toLocaleString("pt-PT")} min de ditado ao custo atual` : "";
-    sub.textContent = `de ${usd(key.limit, 2)}${minutes}`;
   }
 }
 

@@ -309,16 +309,10 @@ function setupTest() {
 }
 
 export function renderNotesHint() {
-  void renderSpeakers();
-  void renderSpeechGate();
+  renderSpeakers();
   void renderOutputDevices();
-  const c = app.view.config;
   $("notes-cost").textContent =
-    c.stt_engine === "local"
-      ? "Transcrição neste computador, sem custo: o áudio não sai daqui."
-      : c.stt_engine === "xai"
-        ? "O áudio vai à xAI (grok-voice-transcribe) e custa como transcrever um ficheiro: 0,10 US$ por hora de fala."
-        : `O áudio vai ao OpenRouter (${c.stt_model}) e custa como transcrever um ficheiro: só se paga o que se fala.`;
+    "O áudio vai à xAI e custa como transcrever um ficheiro: 0,10 US$ por hora de fala (mais 0,10 US$ por hora dos outros, se separares os oradores).";
 }
 
 // ---------------------------------------------------------------- vista da transcrição
@@ -664,46 +658,13 @@ async function renameSpeaker(n: number, name: string) {
 }
 
 // ---------------------------------------------------------------- oradores
-// Os modelos (escolher, descarregar, apagar) estão nas Definições › Transcrição
-// (speakers-engine.ts). Aqui só se liga e desliga a separação.
+// A separação é da xAI: no fim da reunião a faixa dos outros vai inteira à API, que diz
+// quem fala em cada palavra. Aqui só se liga e desliga.
 
-async function renderSpeakers() {
-  const s = await speakers.list().catch(() => null);
-  const box = $("notes-speakers");
-  if (!s) {
-    box.hidden = true;
-    return;
-  }
-  const chosen = s.models.find((m) => m.id === s.selected);
-  const ready = s.available && !!chosen?.installed;
-  const on = $<HTMLInputElement>("notes-speakers-on");
-  on.disabled = !ready;
-  on.checked = ready && app.view.config.notes_speakers;
-  $("notes-speakers-hint").textContent = !s.available
-    ? "Esta versão do Ditok não inclui o motor local, que é o que separa as vozes."
-    : !chosen?.installed
-      ? `Falta o modelo ${chosen?.label ?? ""}: descarrega-o nas Definições, em Transcrição.`
-      : `Corre neste computador, no fim da reunião (uns segundos), com o modelo ${chosen.label}. Funciona melhor com poucas pessoas e sem vozes a sobrepor-se.`;
-}
-
-// BETA: o filtro usa o Silero VAD, que vem embebido no motor local. Só se liga com ele.
-async function renderSpeechGate() {
-  const s = await speakers.list().catch(() => null);
-  const on = $<HTMLInputElement>("notes-speech-on");
-  on.disabled = !s?.available;
-  on.checked = !!s?.available && app.view.config.notes_speech_gate;
-  $("notes-speech-hint").textContent = !s?.available
-    ? "Esta versão do Ditok não inclui o motor local, que traz o filtro."
-    : "Descarta os enunciados sem fala antes de os transcrever, com o Silero VAD. Pode falhar em canto e música com voz.";
-}
-
-function setupSpeechGate() {
-  $("notes-speech-on").addEventListener("change", async (e) => {
-    const checked = (e.target as HTMLInputElement).checked;
-    if (await save({ notes_speech_gate: checked })) return;
-    (e.target as HTMLInputElement).checked = !checked;
-  });
-  onViewChange(() => void renderSpeechGate());
+function renderSpeakers() {
+  $<HTMLInputElement>("notes-speakers-on").checked = app.view.config.notes_speakers;
+  $("notes-speakers-hint").textContent =
+    "No fim da reunião a faixa dos outros vai outra vez à xAI, que separa as vozes. Funciona melhor com poucas pessoas e sem vozes a sobrepor-se.";
 }
 
 function setupSpeakers() {
@@ -712,7 +673,7 @@ function setupSpeakers() {
     if (await save({ notes_speakers: checked })) return;
     (e.target as HTMLInputElement).checked = !checked;
   });
-  onViewChange(() => void renderSpeakers());
+  onViewChange(renderSpeakers);
 }
 
 // ---------------------------------------------------------------- arranque
@@ -742,10 +703,9 @@ export async function setupNotes(): Promise<void> {
   await onNotesLevel((e) => setLevel(e.track, e.level));
 
   setupSpeakers();
-  setupSpeechGate();
   setupOutputDevice();
   setupTest();
-  await renderSpeakers();
+  renderSpeakers();
   renderNotesHint();
   renderState(await notes.state());
   await refreshList();

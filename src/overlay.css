@@ -167,7 +167,7 @@ kbd {
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
-/* Perto do limite de 60 s do OpenRouter. */
+/* Uma gravação muito longa (ver LONG_RECORDING_S em overlay.ts). */
 #pill.long[data-state="recording"] #label { color: var(--amber); opacity: 1; }
 
 /* ---------- modo alternar: ✕ à esquerda, ■ à direita */

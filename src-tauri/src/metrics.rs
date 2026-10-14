@@ -18,7 +18,6 @@ use time::OffsetDateTime;
 pub struct DictationMetrics {
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
-    pub provider: &'static str,
     pub model: String,
     pub transport: Option<&'static str>,
     pub audio_ms: u64,
@@ -43,7 +42,6 @@ pub struct DictationMetrics {
     /// A app onde o ditado começou (nome normalizado, ver `usage::app_key`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
-    pub generation_id: Option<String>,
     pub error: Option<String>,
     /// Transcrição de um ficheiro (`files.rs`), não um ditado: não conta para os
     /// percentis nem para o número de ditados, só para o custo.
@@ -72,7 +70,6 @@ impl DictationMetrics {
     pub fn for_summary(model: &str, chars: usize, elapsed_ms: u64, cost: Option<f64>) -> Self {
         Self {
             at: now(),
-            provider: "openrouter",
             model: model.to_owned(),
             transport: None,
             audio_ms: 0,
@@ -88,7 +85,6 @@ impl DictationMetrics {
             chars,
             words: 0,
             app: None,
-            generation_id: None,
             error: None,
             file: false,
             command: false,
@@ -272,7 +268,7 @@ fn percentiles(mut values: Vec<u64>) -> Option<Percentiles> {
     })
 }
 
-/// "2026-10". Em UTC, como a faturação do OpenRouter.
+/// "2026-10". Em UTC.
 fn month_key(at: OffsetDateTime) -> String {
     format!("{:04}-{:02}", at.year(), u8::from(at.month()))
 }
@@ -354,9 +350,8 @@ mod tests {
     fn sample(cost: Option<f64>, error: Option<&str>) -> DictationMetrics {
         DictationMetrics {
             at: datetime!(2026-10-11 12:00 UTC),
-            provider: "openrouter",
-            model: "openai/whisper-large-v3-turbo".into(),
-            transport: Some("multipart"),
+            model: "grok-voice-transcribe-2.0".into(),
+            transport: Some("ws"),
             audio_ms: 5000,
             wav_bytes: 160_044,
             mic_start_ms: Some(46),
@@ -370,7 +365,6 @@ mod tests {
             chars: 80,
             words: 14,
             app: None,
-            generation_id: Some("gen-1".into()),
             file: false,
             command: false,
             summary: false,

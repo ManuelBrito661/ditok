@@ -25,8 +25,8 @@ use crate::{
     focus, hotkey,
     sound::{Cue, Sounds},
     state::{AppState, MISSING_KEY},
-    stt::{LiveSession, Providers},
     tray::{Tray, TrayState},
+    xai::{self, stt::LiveSession},
 };
 use failure::FailReason;
 use machine::{Action, Input, Machine, Mode, Phase};
@@ -67,9 +67,6 @@ pub enum DictationEvent {
     ResultElapsed {
         shown: u64,
     },
-    /// A chave ou o modo de envio mudaram nas definições: o cliente do OpenRouter
-    /// tem de ser recriado no próximo ditado.
-    ProviderChanged,
     /// O texto final de um ditado (colado ou só copiado), para o "Colar o último
     /// ditado". Enviado pelo processamento, antes de `ProcessingFinished`.
     LastText(String),
@@ -121,9 +118,6 @@ struct Orchestrator {
     deps: Deps,
     tx: UnboundedSender<DictationEvent>,
     machine: Machine,
-    /// Criado já se a chave existir; senão, volta a tentar-se a cada ditado (assim
-    /// podes guardar a chave sem reiniciar a app).
-    providers: Option<Providers>,
     /// Janela em primeiro plano quando a gravação começou (é lá que se cola) e a
     /// app dona dela (decide o estilo).
     target: focus::Target,
@@ -131,7 +125,7 @@ struct Orchestrator {
     /// curso. Largá-la repõe o clipboard (ver `selection.rs`), por isso basta
     /// pôr `None` para "desistir" dela.
     selection: Option<Selection>,
-    /// O stream de transcrição do ditado em curso (motor xAI). Largá-lo fecha a
+    /// O stream de transcrição do ditado (ou comando) em curso. Largá-lo fecha a
     /// ligação; ao parar passa para o processamento, que espera pelo texto final.
     live: Option<LiveSession>,
     job: Option<Job>,
@@ -165,7 +159,6 @@ async fn run(
     tx: UnboundedSender<DictationEvent>,
     mut rx: UnboundedReceiver<DictationEvent>,
 ) {
-    let providers = load_providers(&deps.state);
     // O ditado mais recente do histórico (ler o ficheiro é disco: `spawn_blocking`).
     let state = Arc::clone(&deps.state);
     let last_text = tauri::async_runtime::spawn_blocking(move || {
@@ -183,7 +176,6 @@ async fn run(
         deps,
         tx,
         machine: Machine::default(),
-        providers,
         target: focus::Target::default(),
         selection: None,
         live: None,
@@ -245,12 +237,6 @@ impl Orchestrator {
             }
             DictationEvent::AudioFailed(reason) => {
                 self.audio_failed(&reason);
-                return;
-            }
-            DictationEvent::ProviderChanged => {
-                // Um ditado em curso já tem o seu `Arc` e termina com o cliente antigo;
-                // o próximo cria um novo.
-                self.providers = None;
                 return;
             }
             DictationEvent::LastText(text) => {
@@ -371,52 +357,37 @@ impl Orchestrator {
 
     fn start_recording(&mut self, at: Instant, mode: Mode) {
         let app = self.deps.state.app.clone();
-        if self.providers.is_none() {
-            self.providers = load_providers(&self.deps.state);
-        }
-        sync_key_set(&self.deps.state);
-        let Some(provider) = &self.providers else {
+        // A chave pode ter sido trocada fora da app (bin/set-key.rs): segue-se o cofre.
+        self.deps.state.refresh_key();
+        let Some(xai) = self.deps.state.xai() else {
             // Sem chave não vale a pena gravar: volta a "parado" e explica porquê.
-            self.machine.handle(Input::Cancel, at);
-            self.deps
-                .state
-                .notify(self.deps.state.missing_key_message());
-            self.show_failure(FailReason::NoKey, false);
-            return;
-        };
-        // Com o motor local pode não haver chave: ditar funciona, mas o modo comando
-        // precisa do LLM. Melhor dizê-lo antes de a pessoa falar.
-        if mode == Mode::Command && provider.llm.is_none() {
             self.machine.handle(Input::Cancel, at);
             self.deps.state.notify(MISSING_KEY);
             self.show_failure(FailReason::NoKey, false);
             return;
-        }
+        };
         // A janela onde estás a escrever, antes de o Ditok fazer o que quer que seja.
         let window = focus::foreground();
         // Primeiro o microfone (é o que tem latência), depois o som, a
         // ligação HTTP (corre enquanto falas) e o resto.
         let config = self.deps.state.config();
         // O stream abre-se antes do microfone: a ligação faz-se enquanto se fala e o
-        // áudio que chegar entretanto espera no canal. Só no ditado (o comando é curto
-        // e fica em lote).
-        let tap = match (&provider.stream, mode) {
-            (Some(stream), Mode::Dictation) => {
-                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                let keyterms = crate::stt::keyterms(&config.dictionary);
-                let session = stream.open(config.language.clone(), keyterms, rx);
+        // áudio que chegar entretanto espera no canal. Serve o ditado e o comando: o
+        // texto já está pronto quando largas o atalho.
+        let tap = {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let keyterms = xai::stt::keyterms(&config.dictionary);
+            let session = xai.stream(config.language.clone(), keyterms, rx);
+            // O texto ao vivo só aparece no ditado: no comando, a pílula diz "Comando".
+            if mode == Mode::Dictation {
                 forward_partials(&app, session.partials.clone());
-                self.live = Some(session);
-                Some(tx)
             }
-            _ => {
-                self.live = None;
-                None
-            }
+            self.live = Some(session);
+            tx
         };
         self.deps
             .recorder
-            .start(at, config.sounds, config.input_device.clone(), tap);
+            .start(at, config.sounds, config.input_device.clone(), Some(tap));
         self.deps.cue(Cue::Start);
         // O nome da app da janela já capturada (microssegundos; depois do
         // microfone para não o atrasar).
@@ -439,8 +410,11 @@ impl Orchestrator {
         // Sem um sítio guardado pelo utilizador, a barra segue o monitor onde está o
         // cursor (como no Wispr Flow); com um, fica onde a deixaste.
         crate::overlay::reposition_for(&app);
-        let stt = Arc::clone(&provider.stt);
-        tauri::async_runtime::spawn(async move { stt.prewarm().await });
+        // O stream liga-se sozinho. A ligação REST só faz falta à limpeza com IA, aos
+        // comandos e ao lote de recurso: sem eles, nem se aquece.
+        if mode == Mode::Command || config.cleanup_level != crate::config::CleanupLevel::Off {
+            tauri::async_runtime::spawn(async move { xai.prewarm().await });
+        }
         self.retry_offered = false;
         self.deps.tray.set(TrayState::Recording);
         hotkey::set_cancel_enabled(&app, true);
@@ -455,10 +429,11 @@ impl Orchestrator {
         // O Esc continua registado: também cancela durante o processamento.
         self.deps.tray.set(TrayState::Processing);
 
-        let Some(provider) = self.providers.clone() else {
-            // Só acontece se a chave mudou a meio da gravação; o compilador
+        let Some(xai) = self.deps.state.xai() else {
+            // Só acontece se a chave foi apagada a meio da gravação; o compilador
             // obriga-nos a decidir o que fazer.
             self.selection = None;
+            self.live = None;
             self.deps.recorder.cancel();
             self.spawn_job(Commit::default(), false, async {
                 Outcome::Failed {
@@ -471,6 +446,7 @@ impl Orchestrator {
         let target = self.target.clone();
         let state = Arc::clone(&self.deps.state);
         let commit = Commit::default();
+        let live = self.live.take();
         if self.machine.mode() == Mode::Command {
             // Em modo alternar a seleção já foi copiada ao largar a tecla; a
             // segurar, copia-se agora (a tecla acabou de ser largada). Corre
@@ -482,29 +458,20 @@ impl Orchestrator {
             self.spawn_job(commit.clone(), false, async move {
                 pipeline::command(
                     state,
-                    provider,
+                    xai,
                     recording,
                     released_at,
                     target,
                     selection,
                     commit,
+                    live,
                 )
                 .await
             });
             return;
         }
-        let live = self.live.take();
         self.spawn_job(commit.clone(), false, async move {
-            pipeline::process(
-                state,
-                provider,
-                recording,
-                released_at,
-                target,
-                commit,
-                live,
-            )
-            .await
+            pipeline::process(state, xai, recording, released_at, target, commit, live).await
         });
     }
 
@@ -513,16 +480,12 @@ impl Orchestrator {
     /// estilo é o da app dela, porque é lá que o texto vai parar.
     fn retry(&mut self) {
         let app = self.deps.state.app.clone();
-        if self.providers.is_none() {
-            self.providers = load_providers(&self.deps.state);
-        }
+        self.deps.state.refresh_key();
         // `clone` barato (o WAV é `Bytes`): se cancelares, a gravação continua guardada.
-        let (Some(provider), Some(rec)) = (self.providers.clone(), self.failed.clone()) else {
+        let (Some(xai), Some(rec)) = (self.deps.state.xai(), self.failed.clone()) else {
             self.machine.handle(Input::Cancel, Instant::now());
-            if self.providers.is_none() {
-                self.deps
-                    .state
-                    .notify(self.deps.state.missing_key_message());
+            if self.deps.state.xai().is_none() {
+                self.deps.state.notify(MISSING_KEY);
                 self.show_failure(FailReason::NoKey, false);
             }
             return;
@@ -536,7 +499,7 @@ impl Orchestrator {
         let state = Arc::clone(&self.deps.state);
         let commit = Commit::default();
         self.spawn_job(commit.clone(), true, async move {
-            pipeline::retry(state, provider, rec, target, commit).await
+            pipeline::retry(state, xai, rec, target, commit).await
         });
     }
 
@@ -716,43 +679,4 @@ fn forward_partials(app: &tauri::AppHandle, mut partials: tokio::sync::watch::Re
             tokio::time::sleep(PARTIAL_EVERY).await;
         }
     });
-}
-
-/// A chave pode ter sido trocada ou apagada fora da app (bin/set-key.rs): a barra
-/// e o tray seguem o cofre ao começar um ditado. Se não der para ler, fica como está.
-fn sync_key_set(state: &AppState) {
-    if let Ok(key) = crate::secrets::get() {
-        let set = key.is_some();
-        if state.key_set() != set {
-            tracing::info!(set, "a chave mudou fora da app; a atualizar o estado");
-            state.set_key_set(set); // publica a barra e o tray
-        }
-    }
-    if let Ok(key) = crate::secrets::get_xai() {
-        let set = key.is_some();
-        if state.xai_key_set() != set {
-            tracing::info!(
-                set,
-                "a chave da xAI mudou fora da app; a atualizar o estado"
-            );
-            state.set_xai_key_set(set);
-        }
-    }
-}
-
-fn load_providers(state: &AppState) -> Option<Providers> {
-    match state.load_providers() {
-        Ok(Some(p)) => {
-            tracing::info!(provider = p.stt.name(), "provider de STT pronto");
-            Some(p)
-        }
-        Ok(None) => {
-            tracing::warn!("{}", state.missing_key_message());
-            None
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "não foi possível ler a chave do cofre");
-            None
-        }
-    }
 }

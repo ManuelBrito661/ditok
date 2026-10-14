@@ -15,13 +15,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # O motor de transcrição local (sherpa-onnx, estático) entra nos dois instaladores.
-          # No macOS universal compila-se para arm64 e x86_64: o job "local" do ci.yml
-          # só prova o arm64, por isso a 1.ª release do Mac é que confirma o x86_64.
           - platform: windows-latest
-            args: "--features local"
+            args: ""
+          # No macOS compila-se um binário universal (arm64 e x86_64).
           - platform: macos-latest
-            args: "--target universal-apple-darwin --features local"
+            args: "--target universal-apple-darwin"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4

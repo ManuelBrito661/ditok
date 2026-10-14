@@ -32,7 +32,7 @@ export function describeText(text: string): { hint: string; ok: boolean } {
   // Cerca de 4 carateres por token (uma estimativa, serve para ter uma ideia).
   const tokens = Math.max(100, Math.round(chars / 4 / 100) * 100);
   return {
-    hint: `${pt(wordCount(text))} palavras (~${pt(tokens)} tokens) · modelo ${summaryModel()}. O texto vai ao OpenRouter.`,
+    hint: `${pt(wordCount(text))} palavras (~${pt(tokens)} tokens) · modelo ${summaryModel()}. O texto vai à xAI.`,
     ok: true,
   };
 }

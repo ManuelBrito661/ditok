@@ -5,18 +5,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type Transport = "multipart" | "json";
-export type ModelKind = "transcription" | "text";
-
 export interface Config {
   shortcut: string;
   /** Modo comando: um segundo atalho que aplica uma instrução falada ao texto selecionado. */
   command_enabled: boolean;
   command_shortcut: string;
-  stt_model: string;
-  transport: Transport;
   language: string | null;
   cleanup_level: CleanupLevel;
+  /** O modelo Grok da limpeza e dos comandos. */
   cleanup_model: string;
   keep_in_clipboard: boolean;
   history_enabled: boolean;
@@ -33,18 +29,9 @@ export interface Config {
   typing_wpm: number;
   /** Modelo de texto dos resumos; vazio = o da limpeza. */
   summary_model: string;
-  /** Quem transcreve: a nuvem (OpenRouter), a xAI (streaming) ou o motor local. */
-  stt_engine: SttEngine;
-  /** O modelo do motor local. */
-  local_model: LocalModelId;
-  /** Minutos sem ditar até o modelo local ser largado da memória. */
-  local_idle_minutes: number;
   notes_consent: boolean;
+  /** Separar quem fala em "Outros" no fim da reunião, com a xAI. */
   notes_speakers: boolean;
-  /** Que modelo separa as vozes nas Notas. */
-  notes_speaker_model: SpeakerModelId;
-  /** BETA: descartar os enunciados sem fala (Silero VAD) antes de os transcrever. */
-  notes_speech_gate: boolean;
   dictionary: Replacement[];
   snippets: Snippet[];
   sounds: boolean;
@@ -142,9 +129,8 @@ export interface UsageSummary {
 export interface SettingsView {
   config: Config;
   defaults: Config;
-  api_key_set: boolean;
   /** Há chave da xAI no cofre? */
-  xai_key_set: boolean;
+  api_key_set: boolean;
   /** `false`: outra app ocupou o atalho de ditado e ele não funciona. */
   shortcut_ok: boolean;
   /** `false`: o modo comando está ligado mas outra app ocupou o atalho. */
@@ -155,19 +141,20 @@ export interface SettingsView {
   paths: { config: string; data: string; logs: string };
 }
 
-export interface KeyInfo {
-  label: string | null;
-  usage: number | null;
-  limit: number | null;
-  limit_remaining: number | null;
-  is_free_tier: boolean | null;
+/** O que uma chave da xAI deixa fazer (xai/mod.rs, Access). `null` = funciona; texto = o motivo. */
+export interface Access {
+  transcribe: string | null;
+  text: string | null;
 }
 
 export interface ModelInfo {
   id: string;
-  name: string;
+  /** USD por token de entrada. */
   prompt_price: number | null;
+  /** USD por token de saída. */
   completion_price: number | null;
+  /** Raciocina antes de responder (mais lento e mais caro). */
+  reasoning: boolean;
 }
 
 export interface ModelList {
@@ -278,15 +265,13 @@ export type OpenTarget = "key" | "shortcut";
 export const api = {
   getSettings: () => invoke<SettingsView>("get_settings"),
   saveSettings: (config: Config) => invoke<SettingsView>("save_settings", { config }),
-  setApiKey: (key: string) => invoke<KeyInfo | null>("set_api_key", { key }),
+  /** Valida a chave da xAI, guarda-a no cofre e diz o que ela deixa fazer. */
+  setApiKey: (key: string) => invoke<Access>("set_api_key", { key }),
   deleteApiKey: () => invoke<void>("delete_api_key"),
-  /** Valida a chave e devolve o gasto e o limite dela (GET /key, gratuito). */
-  testApiKey: () => invoke<KeyInfo>("test_api_key"),
-  /** Valida a chave da xAI e guarda-a no cofre. */
-  setXaiKey: (key: string) => invoke<void>("set_xai_key", { key }),
-  deleteXaiKey: () => invoke<void>("delete_xai_key"),
-  testXaiKey: () => invoke<void>("test_xai_key"),
-  listModels: (kind: ModelKind, refresh = false) => invoke<ModelList>("list_models", { kind, refresh }),
+  /** Confirma que a chave guardada continua válida e o que deixa fazer (custa uma fração de cêntimo). */
+  testApiKey: () => invoke<Access>("test_api_key"),
+  /** Os modelos de texto da xAI (com cache de 24 h). */
+  listModels: (refresh = false) => invoke<ModelList>("list_models", { refresh }),
   getStats: () => invoke<Stats>("get_stats"),
   getHistory: () => invoke<HistoryItem[]>("get_history"),
   clearHistory: () => invoke<void>("clear_history"),
@@ -306,7 +291,8 @@ export const api = {
   listInputDevices: () => invoke<InputDevice[]>("list_input_devices"),
   /** Liga (ou renova) o medidor do microfone; desliga-se sozinho sem renovação. */
   micMonitor: (on: boolean) => invoke<void>("mic_monitor", { on }),
-  openOpenRouterKeys: () => invoke<void>("open_openrouter_keys"),
+  /** Abre a consola da xAI (onde se criam as chaves) no browser. */
+  openXaiConsole: () => invoke<void>("open_xai_console"),
   /** Para onde a janela foi chamada (ex.: clique na pílula); uma só vez. */
   takeOpen: () => invoke<OpenTarget | null>("main_take_open"),
   // Barra flutuante (overlay.ts)
@@ -403,66 +389,11 @@ export interface SummaryOut {
 }
 
 export const summaries = {
-  /** O texto vai ao OpenRouter; o custo entra nas métricas. */
+  /** O texto vai à xAI; o custo entra nas métricas. */
   run: (text: string, kind: SummaryKind) => invoke<SummaryOut>("summarize_text", { text, kind }),
   /** Guarda o resumo (Markdown) ao lado do ficheiro transcrito. */
   saveBesideFile: (text: string) => invoke<string>("file_save_summary", { text }),
 };
-
-// ---------------------------------------------------------------- motor local
-
-export type SttEngine = "cloud" | "local" | "xai";
-export type LocalModelId =
-  | "parakeet-v3"
-  | "whisper-small"
-  | "whisper-turbo"
-  | "whisper-medium"
-  | "whisper-large-v3"
-  | "qwen3-asr";
-
-/** Um modelo do catálogo (commands.rs, LocalModelView). */
-export interface LocalModel {
-  id: LocalModelId;
-  label: string;
-  description: string;
-  warning: string | null;
-  size_bytes: number;
-  /** Memória aproximada com o modelo carregado. */
-  ram_mb: number;
-  installed: boolean;
-  /** Já descarregado (uma descarga parada retoma daí). */
-  downloaded_bytes: number;
-}
-
-export interface LocalModelsView {
-  /** Esta versão da app inclui o motor local? */
-  available: boolean;
-  /** O modelo está carregado em memória agora. */
-  loaded: boolean;
-  downloading: LocalModelId | null;
-  models: LocalModel[];
-}
-
-/** O progresso de uma descarga (local_models.rs, Progress). */
-export interface LocalModelProgress {
-  id: LocalModelId;
-  file: string;
-  done: number;
-  total: number;
-  state: "downloading" | "verifying" | "done" | "cancelled" | "error";
-  message: string | null;
-}
-
-export const localModels = {
-  list: () => invoke<LocalModelsView>("local_models_list"),
-  download: (id: LocalModelId) => invoke<void>("local_model_download", { id }),
-  cancel: () => invoke<void>("local_model_cancel"),
-  remove: (id: LocalModelId) => invoke<void>("local_model_delete", { id }),
-};
-
-export function onLocalModelProgress(handler: (p: LocalModelProgress) => void): Promise<UnlistenFn> {
-  return listen<LocalModelProgress>("local-models:progress", (e) => handler(e.payload));
-}
 
 // ---------------------------------------------------------------- notas de reuniões (notes/)
 
@@ -573,40 +504,8 @@ export function onNotesTest(handler: (e: NotesTestEvent) => void): Promise<Unlis
 
 // ---------------------------------------------------------------- oradores (notes/speakers.rs)
 
-export type SpeakerModelId = "wespeaker" | "titanet-small" | "titanet-large";
-
-/** Um modelo de oradores (commands.rs, SpeakerModelView). */
-export interface SpeakerModel {
-  id: SpeakerModelId;
-  label: string;
-  description: string;
-  size_bytes: number;
-  installed: boolean;
-}
-
-export interface SpeakersView {
-  /** Esta versão inclui o motor local (que também separa oradores)? */
-  available: boolean;
-  /** O modelo escolhido nas definições: é o que as Notas usam. */
-  selected: SpeakerModelId;
-  models: SpeakerModel[];
-  downloading: SpeakerModelId | null;
-}
-
-/** O progresso de uma descarga de oradores: o de uma descarga local mais o modelo. */
-export interface SpeakersProgress extends Omit<LocalModelProgress, "id"> {
-  model: SpeakerModelId;
-}
-
 export const speakers = {
-  list: () => invoke<SpeakersView>("speakers_list"),
-  download: (id: SpeakerModelId) => invoke<void>("speakers_download", { id }),
-  cancel: () => invoke<void>("local_model_cancel"),
-  remove: (id: SpeakerModelId) => invoke<void>("speakers_delete", { id }),
+  /** Dá um nome a um orador separado; vazio volta a "Orador N". */
   rename: (id: string, speaker: number, name: string) =>
     invoke<NotesMeta>("notes_rename_speaker", { id, speaker, name }),
 };
-
-export function onSpeakersProgress(handler: (p: SpeakersProgress) => void): Promise<UnlistenFn> {
-  return listen<SpeakersProgress>("speakers:progress", (e) => handler(e.payload));
-}

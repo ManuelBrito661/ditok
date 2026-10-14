@@ -1016,28 +1016,6 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .file-summary-head select { min-width: 0; width: auto; }
 .file-summary .transcript { white-space: pre-wrap; }
 
-/* ---------------------------------------------------------------- motor local */
-.local-models { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-.local-model {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px 16px;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
-.local-model-text { display: grid; gap: 2px; min-width: 0; }
-.local-model-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 190px; }
-.local-model-actions .meter { flex: 1 1 140px; }
-.local-warning { color: var(--amber-text); }
-#local-idle { width: 76px; }
-.engine-choice-note { margin-top: 4px; }
-@media (max-width: 720px) {
-  .local-model { grid-template-columns: minmax(0, 1fr); }
-  .local-model-actions { justify-content: flex-start; }
-}
-
 /* ---------------------------------------------------------------- notas */
 .nav-badge.rec { color: var(--red-text, #c0392b); background: transparent; animation: rec-blink 1.4s ease-in-out infinite; }
 @keyframes rec-blink { 50% { opacity: 0.35; } }
@@ -1071,7 +1049,6 @@ dialog.onboarding { width: min(640px, calc(100vw - 48px)); height: fit-content; 
 .notes-test .row-desc { margin: 0; }
 .notes-speakers { display: grid; gap: 6px; padding-top: 4px; }
 .notes-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.beta-badge { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.04em; color: var(--muted); vertical-align: middle; }
 
 /* ---------------------------------------------------------------- notas: vista da transcrição */
 .nd-names { font-size: var(--fs-sm); }

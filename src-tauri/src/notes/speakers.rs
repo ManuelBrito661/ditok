@@ -1,199 +1,31 @@
-//! Quem fala dentro de "Outros": diarização de oradores, neste computador.
+//! Quem fala dentro de "Outros": a separação de oradores da xAI.
 //!
 //! Corre **depois** da reunião, sobre o áudio da faixa dos outros que se foi guardando
-//! num ficheiro temporário (`diar.pcm`, apagado no fim): um modelo de segmentação
-//! (pyannote) marca onde fala alguém, um de "impressão da voz" mede cada trecho, e um
-//! agrupamento junta os trechos parecidos em "Orador 1, 2…". A segmentação é a mesma
-//! para os três modelos de voz (WeSpeaker, TitaNet small e large), que o utilizador
-//! escolhe nas definições. É o motor `sherpa-onnx` do STT local, por isso só existe
-//! com a feature `local`.
+//! num ficheiro temporário (`diar.pcm`, apagado no fim, com a linha do tempo da sessão: os
+//! silêncios são zeros). Esse áudio vai inteiro, de uma vez, ao `POST /v1/stt` com
+//! `diarize=true`: a xAI devolve as palavras com o número de quem as disse. Tem de ser
+//! numa só chamada, e não enunciado a enunciado como a transcrição ao vivo, porque o
+//! número de um orador só quer dizer o mesmo dentro de um mesmo pedido.
 //!
-//! A atribuição às linhas já transcritas (`assign`) e a renumeração (`renumber`) são
-//! puras e testam-se sem modelos.
+//! Das palavras fazem-se trechos (`segments_from_words`), numeram-se os oradores pela ordem
+//! em que começam a falar (`renumber`) e dá-se a cada linha já transcrita o orador que mais
+//! se sobrepõe a ela (`assign`). Tudo isto é puro e testa-se sem rede.
 
-use std::path::{Path, PathBuf};
-
-use serde::{Deserialize, Serialize};
+use bytes::Bytes;
 
 use super::{capture::Track, store::Line};
-use crate::local_models::{self, DownloadError, Job};
-
-/// Esta compilação sabe separar oradores?
-pub const AVAILABLE: bool = cfg!(feature = "local");
-
-/// Mais do que isto (em amostras a 16 kHz) não se processa: o motor trabalha com o
-/// áudio todo em memória (~230 MB por hora).
-pub const MAX_SAMPLES: usize = 90 * 60 * 16_000;
-
-/// O limiar de clustering: quando dois trechos são o mesmo orador. Afinado com o
-/// WeSpeaker; os TitaNet usam o mesmo até serem calibrados com áudio em português.
-#[cfg_attr(not(feature = "local"), allow(dead_code))] // só o motor local o usa
-const THRESHOLD: f32 = 0.7;
-
-/// O modelo de "impressão da voz" escolhido nas definições (o que se usa nas Notas).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub enum Model {
-    /// WeSpeaker ResNet34 (VoxCeleb, inglês): o que a app usava desde o início.
-    #[default]
-    #[serde(rename = "wespeaker")]
-    WeSpeaker,
-    /// NVIDIA NeMo TitaNet small: mais leve.
-    #[serde(rename = "titanet-small")]
-    TitaNetSmall,
-    /// NVIDIA NeMo TitaNet large: o maior dos três.
-    #[serde(rename = "titanet-large")]
-    TitaNetLarge,
-}
-
-struct File {
-    name: &'static str,
-    url: &'static str,
-    size: u64,
-    sha256: &'static str,
-}
-
-const SEGMENTATION: File = File {
-    name: "segmentation.int8.onnx",
-    url: "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0/model.int8.onnx",
-    size: 1_540_506,
-    sha256: "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d",
+use crate::xai::{
+    ApiError, Xai,
+    stt::{BYTES_PER_SEC, Word},
 };
 
-// Os TitaNet vêm da release de modelos de reconhecimento de oradores do sherpa-onnx (o
-// nome da tag tem mesmo esse erro de escrita). Os nomes locais são distintos por modelo,
-// para os três poderem estar descarregados ao mesmo tempo; o WeSpeaker mantém o nome
-// antigo, para quem já o tem.
-const WESPEAKER: File = File {
-    name: "embedding.onnx",
-    url: "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/wespeaker_en_voxceleb_resnet34.onnx",
-    size: 26_534_365,
-    sha256: "5ef208a9da1453335308a6b6f4e6dfbd7e183a38b604de0a57664f45d257fe94",
-};
+/// Mais do que isto (em bytes de PCM s16le a 16 kHz, 90 minutos) não se envia: são
+/// ~170 MB e o pedido já demora.
+pub const MAX_PCM_BYTES: usize = 90 * 60 * BYTES_PER_SEC as usize;
 
-const TITANET_SMALL: File = File {
-    name: "embedding-titanet-small.onnx",
-    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx",
-    size: 40_257_283,
-    sha256: "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e",
-};
-
-const TITANET_LARGE: File = File {
-    name: "embedding-titanet-large.onnx",
-    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_large.onnx",
-    size: 101_405_493,
-    sha256: "d51abcf31717ef28162f26acb9d44dd4127c3d44c9b8624f699f3425daca8e77",
-};
-
-impl Model {
-    pub const ALL: [Model; 3] = [Model::WeSpeaker, Model::TitaNetSmall, Model::TitaNetLarge];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::WeSpeaker => "WeSpeaker ResNet34",
-            Self::TitaNetSmall => "TitaNet small",
-            Self::TitaNetLarge => "TitaNet large",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::WeSpeaker => "O que a app já usava. Treinado sobretudo com inglês.",
-            Self::TitaNetSmall => {
-                "Mais leve e rápido. Treinado com inglês. Ainda sem testes em português."
-            }
-            Self::TitaNetLarge => {
-                "O maior dos três: mais lento e pesado. Treinado com inglês. Ainda sem testes em português."
-            }
-        }
-    }
-
-    fn embedding(self) -> &'static File {
-        match self {
-            Self::WeSpeaker => &WESPEAKER,
-            Self::TitaNetSmall => &TITANET_SMALL,
-            Self::TitaNetLarge => &TITANET_LARGE,
-        }
-    }
-
-    /// Os ficheiros que este modelo precisa: a segmentação (partilhada) e a sua voz.
-    fn files(self) -> [&'static File; 2] {
-        [&SEGMENTATION, self.embedding()]
-    }
-
-    pub fn total_bytes(self) -> u64 {
-        self.files().iter().map(|f| f.size).sum()
-    }
-}
-
-pub fn dir(models_dir: &Path) -> PathBuf {
-    models_dir.join("speakers")
-}
-
-fn file_ok(path: &Path, size: u64) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.len() == size)
-}
-
-/// O modelo escolhido está todo no disco (segmentação e voz, com o tamanho certo).
-pub fn is_installed(models_dir: &Path, model: Model) -> bool {
-    let dir = dir(models_dir);
-    model
-        .files()
-        .iter()
-        .all(|f| file_ok(&dir.join(f.name), f.size))
-}
-
-/// Apaga a voz do modelo. A segmentação só sai quando nenhum outro modelo a usa.
-pub fn delete(models_dir: &Path, model: Model) -> std::io::Result<()> {
-    let dir = dir(models_dir);
-    let mut names = vec![model.embedding().name.to_owned()];
-    if !Model::ALL
-        .iter()
-        .any(|&m| m != model && is_installed(models_dir, m))
-    {
-        names.push(SEGMENTATION.name.to_owned());
-    }
-    for name in names {
-        for path in [dir.join(&name), dir.join(format!("{name}.part"))] {
-            match std::fs::remove_file(&path) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-                _ => {}
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Descarrega o modelo (com retoma e verificação do SHA-256, como os do STT). A
-/// segmentação só volta a descarregar se ainda não estiver no disco.
-pub async fn download(
-    client: &reqwest::Client,
-    models_dir: &Path,
-    model: Model,
-    cancel: &std::sync::atomic::AtomicBool,
-    on_progress: impl FnMut(local_models::Progress),
-) -> Result<(), DownloadError> {
-    let jobs: Vec<Job> = model
-        .files()
-        .iter()
-        .map(|f| Job {
-            url: f.url.to_owned(),
-            name: f.name,
-            size: f.size,
-            sha256: f.sha256,
-        })
-        .collect();
-    local_models::download_files(
-        client,
-        "speakers",
-        &dir(models_dir),
-        &jobs,
-        cancel,
-        on_progress,
-    )
-    .await
-}
-
-// ---------------------------------------------------------------- puro
+/// Palavras do mesmo orador separadas por menos do que isto (em segundos) fazem parte do
+/// mesmo trecho.
+const MERGE_GAP_S: f64 = 1.5;
 
 /// Um trecho em que fala um orador (1, 2, 3…), em milissegundos desde o início da sessão.
 #[derive(Debug, Clone, PartialEq)]
@@ -201,6 +33,57 @@ pub struct Segment {
     pub start_ms: u64,
     pub end_ms: u64,
     pub speaker: u32,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SpeakersError {
+    #[error("a reunião é demasiado longa para separar os oradores (o limite são 90 minutos)")]
+    TooLong,
+    #[error("a xAI não conseguiu separar os oradores: {0}")]
+    Api(#[from] ApiError),
+}
+
+/// Separa os oradores de `pcm` (s16le, 16 kHz, mono, com a linha do tempo da sessão).
+pub async fn diarize(
+    xai: &Xai,
+    pcm: Bytes,
+    language: Option<&str>,
+) -> Result<Vec<Segment>, SpeakersError> {
+    if pcm.len() > MAX_PCM_BYTES {
+        return Err(SpeakersError::TooLong);
+    }
+    let words = xai.diarize(pcm, language).await?;
+    let mut segments = segments_from_words(&words);
+    renumber(&mut segments);
+    Ok(segments)
+}
+
+// ---------------------------------------------------------------- puro
+
+/// Junta as palavras seguidas do mesmo orador em trechos. Uma palavra sem orador (a xAI
+/// nem sempre o atribui) não abre nem fecha nada: o trecho em curso aguenta-a se a pausa
+/// for curta.
+pub fn segments_from_words(words: &[Word]) -> Vec<Segment> {
+    let mut out: Vec<Segment> = Vec::new();
+    let ms = |s: f64| (s.max(0.0) * 1000.0).round() as u64;
+    for w in words {
+        let Some(speaker) = w.speaker else { continue };
+        let (start, end) = (ms(w.start), ms(w.end.max(w.start)));
+        match out.last_mut() {
+            Some(last)
+                if last.speaker == speaker
+                    && start.saturating_sub(last.end_ms) as f64 <= MERGE_GAP_S * 1000.0 =>
+            {
+                last.end_ms = last.end_ms.max(end);
+            }
+            _ => out.push(Segment {
+                start_ms: start,
+                end_ms: end,
+                speaker,
+            }),
+        }
+    }
+    out
 }
 
 /// Numera os oradores pela ordem em que começam a falar: "Orador 1" é quem abriu a
@@ -249,94 +132,6 @@ pub fn assign(lines: &mut [Line], track: Track, segments: &[Segment]) {
     }
 }
 
-// ---------------------------------------------------------------- motor
-
-#[derive(Debug, thiserror::Error)]
-pub enum SpeakersError {
-    #[error("esta versão do Ditok não inclui a separação de oradores")]
-    Unavailable,
-    #[error("falta o modelo de oradores escolhido: descarrega-o nas definições")]
-    ModelMissing,
-    #[error("a reunião é demasiado longa para separar os oradores (o limite são 90 minutos)")]
-    TooLong,
-    #[error("o motor não conseguiu processar o áudio")]
-    Failed,
-}
-
-/// Separa os oradores de `samples` (16 kHz mono) com o `model` escolhido. Bloqueante e
-/// pesado: `spawn_blocking`.
-#[cfg(feature = "local")]
-pub fn diarize(
-    models_dir: &Path,
-    model: Model,
-    samples: &[f32],
-) -> Result<Vec<Segment>, SpeakersError> {
-    use sherpa_onnx::{
-        FastClusteringConfig, OfflineSpeakerDiarization, OfflineSpeakerDiarizationConfig,
-        OfflineSpeakerSegmentationModelConfig, OfflineSpeakerSegmentationPyannoteModelConfig,
-        SpeakerEmbeddingExtractorConfig,
-    };
-    if !is_installed(models_dir, model) {
-        return Err(SpeakersError::ModelMissing);
-    }
-    if samples.len() > MAX_SAMPLES {
-        return Err(SpeakersError::TooLong);
-    }
-    let dir = dir(models_dir);
-    let threads = std::thread::available_parallelism()
-        .map_or(2, |n| n.get().min(8))
-        .try_into()
-        .unwrap_or(2);
-    let config = OfflineSpeakerDiarizationConfig {
-        segmentation: OfflineSpeakerSegmentationModelConfig {
-            pyannote: OfflineSpeakerSegmentationPyannoteModelConfig {
-                model: Some(dir.join(SEGMENTATION.name).display().to_string()),
-                ..Default::default()
-            },
-            num_threads: threads,
-            ..Default::default()
-        },
-        embedding: SpeakerEmbeddingExtractorConfig {
-            model: Some(dir.join(model.embedding().name).display().to_string()),
-            num_threads: threads,
-            ..Default::default()
-        },
-        // Número de oradores desconhecido: o limiar decide quando dois são o mesmo.
-        // Mais alto junta mais vozes (menos oradores). 0.5 deu 15 oradores em 5 min.
-        clustering: FastClusteringConfig {
-            num_clusters: -1,
-            threshold: THRESHOLD,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let engine = OfflineSpeakerDiarization::create(&config).ok_or(SpeakersError::Failed)?;
-    if engine.sample_rate() != 16_000 {
-        return Err(SpeakersError::Failed);
-    }
-    let result = engine.process(samples).ok_or(SpeakersError::Failed)?;
-    let mut segments: Vec<Segment> = result
-        .sort_by_start_time()
-        .into_iter()
-        .map(|s| Segment {
-            start_ms: (s.start.max(0.0) * 1000.0) as u64,
-            end_ms: (s.end.max(0.0) * 1000.0) as u64,
-            speaker: s.speaker.max(0) as u32,
-        })
-        .collect();
-    renumber(&mut segments);
-    Ok(segments)
-}
-
-#[cfg(not(feature = "local"))]
-pub fn diarize(
-    _models_dir: &Path,
-    _model: Model,
-    _samples: &[f32],
-) -> Result<Vec<Segment>, SpeakersError> {
-    Err(SpeakersError::Unavailable)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +151,14 @@ mod tests {
         Segment {
             start_ms: start,
             end_ms: end,
+            speaker,
+        }
+    }
+
+    fn word(start: f64, end: f64, speaker: Option<u32>) -> Word {
+        Word {
+            start,
+            end,
             speaker,
         }
     }
@@ -404,7 +207,7 @@ mod tests {
 
     #[test]
     fn speakers_are_numbered_by_first_appearance() {
-        // O motor chamou "7" a quem falou primeiro e "3" ao segundo.
+        // A xAI chamou "7" a quem falou primeiro e "3" ao segundo.
         let mut segs = [seg(5_000, 6_000, 3), seg(0, 2_000, 7), seg(8_000, 9_000, 7)];
         renumber(&mut segs);
         let by_start: Vec<(u64, u32)> = segs.iter().map(|s| (s.start_ms, s.speaker)).collect();
@@ -412,68 +215,46 @@ mod tests {
     }
 
     #[test]
-    fn catalog_hashes_are_64_hex() {
-        for model in Model::ALL {
-            for f in model.files() {
-                assert_eq!(f.sha256.len(), 64, "{}", f.name);
-                assert!(f.sha256.chars().all(|c| c.is_ascii_hexdigit()));
-                assert!(f.url.starts_with("https://"), "{}", f.name);
-            }
-        }
-    }
-
-    #[test]
-    fn each_model_has_its_own_voice_file() {
-        let names: Vec<&str> = Model::ALL.iter().map(|m| m.embedding().name).collect();
+    fn words_of_the_same_speaker_become_one_segment() {
+        let words = [
+            word(0.0, 0.4, Some(0)),
+            word(0.5, 0.9, Some(0)),
+            // Pausa de 3 s: o mesmo orador, mas outro trecho.
+            word(3.9, 4.2, Some(0)),
+            word(4.3, 4.8, Some(1)),
+        ];
         assert_eq!(
-            names.len(),
-            names.iter().collect::<std::collections::HashSet<_>>().len()
+            segments_from_words(&words),
+            [seg(0, 900, 0), seg(3_900, 4_200, 0), seg(4_300, 4_800, 1)]
         );
     }
 
     #[test]
-    fn not_installed_without_files() {
-        let dir = std::env::temp_dir().join(format!("ditok-speakers-{}", std::process::id()));
-        for model in Model::ALL {
-            assert!(!is_installed(&dir, model));
-            assert!(
-                delete(&dir, model).is_ok(),
-                "apagar o que não existe não falha"
-            );
-        }
+    fn words_without_a_speaker_are_skipped_and_do_not_split_a_segment() {
+        let words = [
+            word(0.0, 0.4, Some(2)),
+            word(0.5, 0.8, None),
+            word(0.9, 1.3, Some(2)),
+        ];
+        assert_eq!(segments_from_words(&words), [seg(0, 1_300, 2)]);
+        assert!(segments_from_words(&[]).is_empty());
+        assert!(segments_from_words(&[word(0.0, 1.0, None)]).is_empty());
     }
 
-    /// Com os modelos e um WAV reais:
-    /// `DITOK_SPEAKERS=<pasta dos modelos> DITOK_WAV=<wav> cargo test --features local live_ -- --ignored --nocapture`
-    /// (`DITOK_MODEL` escolhe o modelo: `wespeaker`, `titanet-small` ou `titanet-large`.)
-    #[cfg(feature = "local")]
     #[test]
-    #[ignore]
-    fn live_diarization() {
-        let models = PathBuf::from(std::env::var("DITOK_SPEAKERS").expect("DITOK_SPEAKERS"));
-        let model: Model = serde_json::from_value(serde_json::Value::String(
-            std::env::var("DITOK_MODEL").unwrap_or_else(|_| "wespeaker".into()),
-        ))
-        .expect("DITOK_MODEL");
-        let wav = std::fs::read(std::env::var("DITOK_WAV").expect("DITOK_WAV")).unwrap();
-        let (samples, rate) = crate::audio::wav::decode_pcm16_mono(&wav).unwrap();
-        assert_eq!(rate, 16_000);
-        let started = std::time::Instant::now();
-        let segs = diarize(&models, model, &samples).unwrap();
-        println!(
-            "{}: {} segmentos, {} oradores, em {:?} para {:.0} s de áudio",
-            model.label(),
-            segs.len(),
-            segs.iter().map(|s| s.speaker).max().unwrap_or(0),
-            started.elapsed(),
-            samples.len() as f32 / 16_000.0
-        );
-        for s in &segs {
-            println!(
-                "  {:>6} → {:>6} ms  orador {}",
-                s.start_ms, s.end_ms, s.speaker
-            );
-        }
-        assert!(!segs.is_empty());
+    fn a_word_that_ends_before_it_starts_does_not_shrink_the_segment() {
+        let words = [word(2.0, 1.0, Some(0)), word(2.1, 2.5, Some(0))];
+        let segs = segments_from_words(&words);
+        assert_eq!(segs, [seg(2_000, 2_500, 0)]);
+    }
+
+    #[tokio::test]
+    async fn too_long_a_meeting_is_refused_before_any_request() {
+        let xai = Xai::new(crate::xai::http_client().unwrap(), "k".into());
+        let pcm = Bytes::from(vec![0u8; MAX_PCM_BYTES + 2]);
+        assert!(matches!(
+            diarize(&xai, pcm, None).await,
+            Err(SpeakersError::TooLong)
+        ));
     }
 }

@@ -21,7 +21,7 @@ import {
 import { addDictionaryEntry, countWordIn, suggestFrom } from "./dictionary-add";
 import { openSettings } from "./settings-dialog";
 import { describeResult, summaryModel, wordCount } from "./summary";
-import { $, app, confirmDanger, engineKeyOk, onViewChange, save, toast } from "./store";
+import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 
 /** Quantos ditados se desenham de cada vez (com "Mostrar mais" para o resto). */
 const PAGE = 200;
@@ -65,10 +65,6 @@ function renderStats() {
   const budget = app.view.config.monthly_budget_usd;
   $("s-cost-of").textContent = budget ? `de ${usd(budget, 2)} ` : "";
   $("s-cost-item").className = budgetLevel(spent, budget);
-  // O que resta na chave só aparece se a chave tiver um limite de gasto.
-  const remaining = app.key?.limit_remaining;
-  $("s-key-item").hidden = remaining == null;
-  $("s-key").textContent = usd(remaining, 2);
   $("s-speed").textContent = stats?.total ? ms(stats.total.p50) : "—";
   $("s-words").textContent = usage ? usage.month_words.toLocaleString("pt-PT") : "—";
 }
@@ -374,7 +370,7 @@ function entryRow(h: HistoryItem): HTMLLIElement {
     again.addEventListener("click", () => void reprocess(h));
     links.append(again);
   }
-  // Um ditado comprido pode resumir-se em pontos-chave (o texto vai ao OpenRouter).
+  // Um ditado comprido pode resumir-se em pontos-chave (o texto vai à xAI).
   if (!h.instruction && editing?.id !== h.id && wordCount(h.text) >= MIN_WORDS_TO_SUMMARIZE) {
     const busy = summarizingIds.has(h.id);
     const done = entrySummaries.has(h.id);
@@ -472,9 +468,7 @@ function renderHistory() {
 
 function renderView() {
   renderKeys($("promo-keys"), app.view.config.shortcut);
-  // Com o motor local ditar não precisa de chave (só a limpeza e os comandos).
-  $("key-banner").hidden = engineKeyOk(app.view);
-  $("key-banner-text").textContent = `Falta a chave ${app.view.config.stt_engine === "xai" ? "da xAI" : "do OpenRouter"}. Sem ela não consigo transcrever.`;
+  $("key-banner").hidden = app.view.api_key_set;
   renderHistory();
   renderStats();
 }

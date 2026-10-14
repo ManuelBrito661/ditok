@@ -230,13 +230,11 @@ impl NotesStore {
         Ok(())
     }
 
-    /// O áudio temporário todo, como amostras f32. Vazio se não existir.
-    pub fn read_pcm(&self, id: &str) -> Result<Vec<f32>, StoreError> {
+    /// O áudio temporário todo, tal como está no disco (PCM s16le, 16 kHz, mono): é
+    /// assim que a xAI o recebe, sem converter nada. Vazio se não existir.
+    pub fn read_pcm(&self, id: &str) -> Result<Vec<u8>, StoreError> {
         match fs::read(self.session_dir(id)?.join(PCM_FILE)) {
-            Ok(bytes) => Ok(bytes
-                .chunks_exact(2)
-                .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
-                .collect()),
+            Ok(bytes) => Ok(bytes),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(e.into()),
         }
@@ -519,9 +517,11 @@ mod tests {
             .write_pcm_at(&m.id, 2_000, &vec![0.5; 16_000])
             .unwrap();
         let pcm = store.read_pcm(&m.id).unwrap();
-        assert_eq!(pcm.len(), 3 * 16_000);
-        assert!(pcm[..32_000].iter().all(|s| *s == 0.0));
-        assert!((pcm[32_000] - 0.5).abs() < 0.001);
+        // 3 s a 16 kHz, 2 bytes por amostra.
+        assert_eq!(pcm.len(), 3 * 16_000 * 2);
+        assert!(pcm[..64_000].iter().all(|b| *b == 0));
+        let sample = i16::from_le_bytes([pcm[64_000], pcm[64_001]]);
+        assert!((f32::from(sample) / 32768.0 - 0.5).abs() < 0.001);
         store.delete_pcm(&m.id);
         assert!(store.read_pcm(&m.id).unwrap().is_empty());
         let _ = fs::remove_dir_all(dir);

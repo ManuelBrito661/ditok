@@ -5,7 +5,7 @@
 //! 1. uma thread de bloqueio lê o ficheiro e corta-o em pedaços (`audio::decode`);
 //! 2. um canal com espaço para 2 pedaços liga-a à tarefa principal: se os pedidos
 //!    atrasarem, a leitura espera ("backpressure") e a memória não cresce;
-//! 3. até 3 pedidos ao OpenRouter em paralelo, cada um numa tarefa de um `JoinSet`.
+//! 3. até 3 pedidos à xAI em paralelo, cada um numa tarefa de um `JoinSet`.
 //!
 //! A janela acompanha pelo evento `file:job` e pelo comando `file_status`.
 
@@ -29,12 +29,16 @@ use crate::{
     metrics::{self, DictationMetrics},
     settings_window,
     state::AppState,
-    stt::{SttError, SttProvider, Transcription, job},
+    xai::{
+        ApiError, Xai,
+        retry::is_fatal,
+        stt::{self, SttRequest, Transcription},
+    },
 };
 
 pub const EVENT: &str = "file:job";
 /// Pedidos ao mesmo tempo. Mais do que isto pouco acelera e arrisca o limite de
-/// pedidos do OpenRouter.
+/// pedidos da xAI.
 const PARALLEL: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -163,16 +167,15 @@ impl FileJobs {
 /// Começa a transcrever `path`, se não houver outro ficheiro a meio.
 pub fn start(
     state: &Arc<AppState>,
-    stt: Arc<dyn SttProvider>,
+    xai: Xai,
     path: PathBuf,
     info: FileInfo,
 ) -> Result<JobView, JobError> {
-    let config = state.config();
     let (cancel, cancel_rx) = watch::channel(false);
     let view = JobView {
         name: file_name(&path),
         status: Status::Running,
-        model: config.active_stt_model(),
+        model: stt::MODEL.to_owned(),
         total_s: info.duration.map(|d| d.as_secs_f64()),
         done_s: 0.0,
         cost_usd: 0.0,
@@ -198,26 +201,20 @@ pub fn start(
         });
     }
     tracing::info!(file = %view.name, total_s = view.total_s, model = %view.model, "a transcrever um ficheiro");
-    tauri::async_runtime::spawn(run(Arc::clone(state), stt, path, cancel_rx));
+    tauri::async_runtime::spawn(run(Arc::clone(state), xai, path, cancel_rx));
     Ok(view)
 }
 
 /// O trabalho do princípio ao fim: transcreve, monta o texto, guarda uma cópia,
 /// regista o custo e avisa.
-async fn run(
-    state: Arc<AppState>,
-    stt: Arc<dyn SttProvider>,
-    path: PathBuf,
-    cancel: watch::Receiver<bool>,
-) {
+async fn run(state: Arc<AppState>, xai: Xai, path: PathBuf, cancel: watch::Receiver<bool>) {
     let config = state.config();
     let progress_state = Arc::clone(&state);
     let outcome = transcribe_file(
-        Arc::clone(&stt),
+        xai,
         path.clone(),
-        config.active_stt_model(),
         config.language.clone(),
-        crate::stt::keyterms(&config.dictionary).into(),
+        stt::keyterms(&config.dictionary).into(),
         cancel,
         move |p| {
             progress_state.files.update(&progress_state.app, |v| {
@@ -307,9 +304,8 @@ async fn run(
     // O custo conta para o mês (e para o orçamento), como o de um ditado.
     let m = DictationMetrics {
         at: metrics::now(),
-        provider: stt.name(),
-        model: config.active_stt_model(),
-        transport: None,
+        model: stt::MODEL.to_owned(),
+        transport: Some("multipart"),
         audio_ms: outcome.sent.as_millis() as u64,
         wav_bytes: 0,
         mic_start_ms: None,
@@ -323,7 +319,6 @@ async fn run(
         chars,
         words: 0,
         app: None,
-        generation_id: None,
         error: (status == Status::Failed)
             .then(|| message.clone())
             .flatten(),
@@ -385,15 +380,14 @@ struct ChunkResult {
     index: usize,
     start: Duration,
     length: Duration,
-    result: Result<Transcription, SttError>,
+    result: Result<Transcription, ApiError>,
 }
 
 /// Lê, corta e transcreve o ficheiro. Não sabe nada da janela nem do `AppState`:
 /// recebe o que precisa e conta o progresso a `progress`.
 async fn transcribe_file(
-    stt: Arc<dyn SttProvider>,
+    xai: Xai,
     path: PathBuf,
-    model: String,
     language: Option<String>,
     keyterms: Arc<[String]>,
     mut cancel: watch::Receiver<bool>,
@@ -436,7 +430,7 @@ async fn transcribe_file(
                         out.cost += t.usage.cost.unwrap_or(0.0);
                         out.parts.insert(r.index, Part::Text(t.text));
                     }
-                    Err(e) if job::is_fatal(&e) => {
+                    Err(e) if is_fatal(&e) => {
                         out.end = End::Failed(e.to_string());
                         break;
                     }
@@ -460,11 +454,12 @@ async fn transcribe_file(
                     }
                     Some(wav) => {
                         out.sent += chunk.length;
-                        let (stt, model, language, keyterms) =
-                            (Arc::clone(&stt), model.clone(), language.clone(), Arc::clone(&keyterms));
+                        let (xai, language, keyterms) =
+                            (xai.clone(), language.clone(), Arc::clone(&keyterms));
                         let (index, start, length) = (chunk.index, chunk.start, chunk.length);
                         tasks.spawn(async move {
-                            let result = job::transcribe(&*stt, wav, &model, language.as_deref(), &keyterms).await;
+                            let req = SttRequest { language: language.as_deref(), keyterms: &keyterms };
+                            let result = xai.transcribe_retrying(wav, &req).await;
                             ChunkResult { index, start, length, result }
                         });
                     }
@@ -588,7 +583,6 @@ fn save_copy(dir: &Path, source: &Path, text: &str) -> std::io::Result<PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stt::openrouter::OpenRouter;
 
     fn secs(s: u64) -> Duration {
         Duration::from_secs(s)
@@ -654,32 +648,21 @@ mod tests {
     }
 
     /// Transcreve um ficheiro de verdade com a chave do cofre (custa uns cêntimos
-    /// de cêntimo com o whisper). Gera-se uma "aula" com a voz do Windows:
+    /// de cêntimo). Gera-se uma "aula" com a voz do Windows:
     /// `DITOK_FILE=aula.wav cargo test live_file -- --ignored --nocapture`
     #[tokio::test]
     #[ignore]
     async fn live_file() {
         let path = PathBuf::from(std::env::var("DITOK_FILE").expect("define DITOK_FILE"));
-        let model = std::env::var("DITOK_MODEL").unwrap_or("openai/whisper-large-v3-turbo".into());
         let key = crate::secrets::get().unwrap().expect("sem chave no cofre");
-        let or = OpenRouter::new(
-            crate::stt::http_client().unwrap(),
-            key,
-            crate::stt::openrouter::Transport::Multipart,
-        );
+        let xai = Xai::new(crate::xai::http_client().unwrap(), key);
         let info = decode::probe(&path).unwrap();
         println!("{} → {:?}", path.display(), info.duration);
         let (_cancel, rx) = watch::channel(false);
         let started = Instant::now();
-        let out = transcribe_file(
-            Arc::new(or),
-            path,
-            model,
-            Some("en".into()),
-            Arc::from([]),
-            rx,
-            |p| println!("  {:?} transcritos, ${:.5}", p.done, p.cost),
-        )
+        let out = transcribe_file(xai, path, Some("en".into()), Arc::from([]), rx, |p| {
+            println!("  {:?} transcritos, ${:.5}", p.done, p.cost)
+        })
         .await;
         println!(
             "{:?} em {:?}, ${:.5}, {} falhados\n---\n{}",

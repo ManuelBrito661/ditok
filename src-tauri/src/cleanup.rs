@@ -1,17 +1,15 @@
-//! Limpeza opcional do texto com um LLM via `POST /chat/completions` do OpenRouter
-//! (mesma chave e mesma ligação já aquecida). Desligada por omissão: acrescenta
-//! uma ida à rede ao caminho crítico.
+//! Limpeza opcional do texto com um modelo Grok da xAI (`xai/chat.rs`, mesma chave e
+//! mesma ligação já aquecida). Desligada por omissão: acrescenta uma ida à rede ao
+//! caminho crítico.
 //!
 //! Quanto se mexe no texto depende do nível global (Ligeira, Média, Forte) e do
 //! estilo da app onde estás a escrever (Casual, Formal…): ver `plan`.
 
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
     config::{CleanupLevel, Style},
-    stt::{SttError, error_from_response, openrouter::OpenRouter},
+    xai::{ApiError, Xai, chat::Chat},
 };
 
 /// Se o LLM demorar mais do que isto, cola-se o texto original.
@@ -150,77 +148,20 @@ pub struct Cleaned {
     pub elapsed: Duration,
 }
 
-#[derive(Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    temperature: f32,
-    max_tokens: u32,
-    messages: [Message<'a>; 2],
-    /// Pede ao OpenRouter o custo na resposta.
-    usage: UsageOpt,
-    /// Escolhe o fornecedor com menor latência para este modelo.
-    provider: ProviderPrefs,
-    /// Desliga o "pensar" dos modelos com raciocínio (Qwen3, DeepSeek R1…): senão
-    /// gastam o `max_tokens` a raciocinar e a resposta chega vazia. Modelos sem
-    /// raciocínio ignoram o campo.
-    reasoning: ReasoningOpt,
-}
-#[derive(Serialize)]
-struct Message<'a> {
-    role: &'a str,
-    content: &'a str,
-}
-#[derive(Serialize)]
-struct UsageOpt {
-    include: bool,
-}
-#[derive(Serialize)]
-struct ReasoningOpt {
-    enabled: bool,
-}
-#[derive(Serialize)]
-struct ProviderPrefs {
-    sort: &'static str,
-}
-
-#[derive(Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-    #[serde(default)]
-    usage: Option<ChatUsage>,
-}
-#[derive(Deserialize)]
-struct Choice {
-    message: ChoiceMessage,
-    /// "length" quando o modelo esgotou o `max_tokens` antes de terminar.
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-#[derive(Deserialize)]
-struct ChoiceMessage {
-    #[serde(default)]
-    content: Option<String>,
-}
-#[derive(Deserialize)]
-struct ChatUsage {
-    cost: Option<f64>,
-}
-
 /// `plan`: o nível e o estilo deste ditado (ver `plan`). `vocabulary`: as
 /// palavras do dicionário, para o modelo não as "corrigir".
 pub async fn clean(
-    openrouter: &OpenRouter,
+    xai: &Xai,
     model: &str,
     plan: Plan,
     text: &str,
     vocabulary: &[String],
-) -> Result<Cleaned, SttError> {
+) -> Result<Cleaned, ApiError> {
     let started = Instant::now();
     let system = system_prompt(plan, vocabulary, text.contains("{{1}}"));
     let user = format!("<transcricao>{text}</transcricao>");
-    let answer = chat(
-        openrouter,
-        &Chat {
+    let answer = xai
+        .chat(&Chat {
             model,
             system: &system,
             user: &user,
@@ -228,9 +169,9 @@ pub async fn clean(
             // ~1 token por 3 caracteres em português, com folga.
             max_tokens: (text.len() / 2 + 64).min(4096) as u32,
             timeout: TIMEOUT,
-        },
-    )
-    .await?;
+            purpose: "ditok-cleanup",
+        })
+        .await?;
     let cleaned = sanitize(&answer.text, text)?;
     Ok(Cleaned {
         text: cleaned,
@@ -239,81 +180,9 @@ pub async fn clean(
     })
 }
 
-/// Um pedido ao `/chat/completions`: uma mensagem de sistema e uma do utilizador.
-/// Partilhado pela limpeza e pelo modo comando (`command.rs`).
-pub struct Chat<'a> {
-    pub model: &'a str,
-    pub system: &'a str,
-    pub user: &'a str,
-    pub temperature: f32,
-    pub max_tokens: u32,
-    pub timeout: Duration,
-}
-
-/// A resposta do modelo (já sem espaços nas pontas, nunca vazia) e o custo.
-pub struct Answer {
-    pub text: String,
-    pub cost: Option<f64>,
-}
-
-/// Envia o pedido e devolve o texto da primeira escolha. Uma resposta vazia é
-/// um erro (com o `finish_reason`, que diz porquê).
-pub async fn chat(openrouter: &OpenRouter, req: &Chat<'_>) -> Result<Answer, SttError> {
-    let model = req.model;
-    let body = ChatRequest {
-        model,
-        temperature: req.temperature,
-        max_tokens: req.max_tokens,
-        messages: [
-            Message {
-                role: "system",
-                content: req.system,
-            },
-            Message {
-                role: "user",
-                content: req.user,
-            },
-        ],
-        usage: UsageOpt { include: true },
-        provider: ProviderPrefs { sort: "latency" },
-        reasoning: ReasoningOpt { enabled: false },
-    };
-    let response = openrouter
-        .post("/chat/completions")
-        .timeout(req.timeout)
-        .json(&body)
-        .send()
-        .await?;
-    let status = response.status();
-    let bytes = response.bytes().await?;
-    if !status.is_success() {
-        return Err(error_from_response(status.as_u16(), &bytes, model));
-    }
-    let parsed: ChatResponse =
-        serde_json::from_slice(&bytes).map_err(|e| SttError::Decode(e.to_string()))?;
-    let choice = parsed
-        .choices
-        .into_iter()
-        .next()
-        .ok_or_else(|| SttError::Decode("resposta sem escolhas".into()))?;
-    let text = choice.message.content.unwrap_or_default();
-    if text.trim().is_empty() {
-        // Dizer porquê poupa uma tarde a adivinhar (foi assim que se descobriu o
-        // problema do raciocínio: finish_reason=length).
-        let reason = choice.finish_reason.as_deref().unwrap_or("?");
-        return Err(SttError::Decode(format!(
-            "resposta sem texto (finish_reason={reason})"
-        )));
-    }
-    Ok(Answer {
-        text: text.trim().to_owned(),
-        cost: parsed.usage.and_then(|u| u.cost),
-    })
-}
-
 /// Rede de segurança contra respostas que não são "o mesmo texto, limpo": vazias,
 /// muito mais compridas (o modelo pôs-se a responder) ou com as etiquetas.
-fn sanitize(cleaned: &str, original: &str) -> Result<String, SttError> {
+fn sanitize(cleaned: &str, original: &str) -> Result<String, ApiError> {
     let cleaned = cleaned
         .trim()
         .trim_start_matches("<transcricao>")
@@ -321,10 +190,10 @@ fn sanitize(cleaned: &str, original: &str) -> Result<String, SttError> {
         .trim();
     let (c, o) = (cleaned.chars().count(), original.chars().count());
     if c == 0 {
-        return Err(SttError::Decode("o LLM devolveu texto vazio".into()));
+        return Err(ApiError::Decode("o LLM devolveu texto vazio".into()));
     }
     if c > o * 3 / 2 + 40 {
-        return Err(SttError::Decode(format!(
+        return Err(ApiError::Decode(format!(
             "o LLM devolveu texto muito mais longo ({c} vs {o} caracteres); a usar o original"
         )));
     }
@@ -356,15 +225,15 @@ mod tests {
         assert!(sanitize("Qual é a capital de França?", original).is_ok());
     }
 
-    /// Pedido real ao OpenRouter com a chave do cofre (custa uma fração de cêntimo).
+    /// Pedido real à xAI com a chave do cofre (custa uma fração de cêntimo).
     /// `cargo test live_cleanup -- --ignored --nocapture`; modelo em DITOK_CLEANUP_MODEL.
     #[tokio::test]
     #[ignore]
     async fn live_cleanup() {
         let key = crate::secrets::get().unwrap().expect("sem chave no cofre");
-        let model = std::env::var("DITOK_CLEANUP_MODEL").unwrap_or("qwen/qwen3.6-flash".into());
-        let client = crate::stt::http_client().unwrap();
-        let or = OpenRouter::new(client, key, crate::stt::openrouter::Transport::Multipart);
+        let model = std::env::var("DITOK_CLEANUP_MODEL")
+            .unwrap_or_else(|_| crate::xai::DEFAULT_CHAT_MODEL.into());
+        let or = Xai::new(crate::xai::http_client().unwrap(), key);
         let vocabulary = ["Ditok".to_owned()];
         for raw in [
             "ééé olá tudo bem hmm hoje vou vou testar a limpeza do ditok",
@@ -473,32 +342,5 @@ sem as etiquetas.";
         assert!(formal.contains("email ou documento") && !formal.contains("registo cuidado"));
         assert!(prompt(CleanupLevel::High, Style::Formal).contains("registo cuidado"));
         assert!(!prompt(CleanupLevel::Medium, Style::Default).contains("O texto vai para"));
-    }
-
-    #[test]
-    fn request_has_expected_shape() {
-        let body = ChatRequest {
-            model: "openai/gpt-4.1-nano",
-            temperature: 0.0,
-            max_tokens: 100,
-            messages: [
-                Message {
-                    role: "system",
-                    content: "s",
-                },
-                Message {
-                    role: "user",
-                    content: "u",
-                },
-            ],
-            usage: UsageOpt { include: true },
-            provider: ProviderPrefs { sort: "latency" },
-            reasoning: ReasoningOpt { enabled: false },
-        };
-        let v = serde_json::to_value(&body).unwrap();
-        assert_eq!(v["reasoning"]["enabled"], false);
-        assert_eq!(v["usage"]["include"], true);
-        assert_eq!(v["provider"]["sort"], "latency");
-        assert_eq!(v["messages"][1]["role"], "user");
     }
 }

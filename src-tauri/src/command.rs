@@ -4,15 +4,12 @@
 //! LLM. Sem seleção, a instrução escreve texto novo no cursor ("escreve um email
 //! a recusar a reunião").
 //!
-//! Usa o mesmo modelo e o mesmo cliente da limpeza (`cleanup::chat`), mesmo com
+//! Usa o mesmo modelo e o mesmo cliente da limpeza (`Xai::chat`), mesmo com
 //! a limpeza desligada: sem LLM, o modo comando não faz sentido.
 
 use std::time::{Duration, Instant};
 
-use crate::{
-    cleanup::{self, Chat},
-    stt::{SttError, openrouter::OpenRouter},
-};
+use crate::xai::{ApiError, Xai, chat::Chat};
 
 /// Seleções maiores do que isto são recusadas antes de gastar dinheiro: custam
 /// muitos tokens, demoram e raramente são o que querias selecionar.
@@ -65,11 +62,11 @@ pub struct Answered {
 /// Pede ao LLM o resultado de `instruction` aplicada a `selection` (ou texto
 /// novo, sem seleção). Quem chama já verificou o tamanho da seleção.
 pub async fn run(
-    openrouter: &OpenRouter,
+    xai: &Xai,
     model: &str,
     instruction: &str,
     selection: Option<&str>,
-) -> Result<Answered, SttError> {
+) -> Result<Answered, ApiError> {
     let started = Instant::now();
     let system = system_prompt(selection.is_some());
     let user = user_message(instruction, selection);
@@ -77,20 +74,19 @@ pub async fn run(
     // a partir de uma frase): ~1 token por 3 caracteres, mais 1024.
     let chars = selection.map_or(0, |s| s.chars().count());
     let max_tokens = (chars / 2 + 1024).min(8192) as u32;
-    let answer = cleanup::chat(
-        openrouter,
-        &Chat {
+    let answer = xai
+        .chat(&Chat {
             model,
             system: &system,
             user: &user,
             temperature: 0.3,
             max_tokens,
             timeout: TIMEOUT,
-        },
-    )
-    .await?;
+            purpose: "ditok-command",
+        })
+        .await?;
     let text = sanitize(&answer.text)
-        .ok_or_else(|| SttError::Decode("o LLM devolveu uma resposta vazia".into()))?;
+        .ok_or_else(|| ApiError::Decode("o LLM devolveu uma resposta vazia".into()))?;
     Ok(Answered {
         text,
         cost: answer.cost,
@@ -179,16 +175,15 @@ mod tests {
         assert_eq!(sanitize("<texto></texto>"), None);
     }
 
-    /// Pedido real ao OpenRouter com a chave do cofre (custa uma fração de cêntimo).
+    /// Pedido real à xAI com a chave do cofre (custa uma fração de cêntimo).
     /// `cargo test live_command -- --ignored --nocapture`; modelo em DITOK_CLEANUP_MODEL.
     #[tokio::test]
     #[ignore]
     async fn live_command() {
         let key = crate::secrets::get().unwrap().expect("sem chave no cofre");
         let model = std::env::var("DITOK_CLEANUP_MODEL")
-            .unwrap_or(crate::config::DEFAULT_CLEANUP_MODEL.into());
-        let client = crate::stt::http_client().unwrap();
-        let or = OpenRouter::new(client, key, crate::stt::openrouter::Transport::Multipart);
+            .unwrap_or_else(|_| crate::xai::DEFAULT_CHAT_MODEL.into());
+        let or = Xai::new(crate::xai::http_client().unwrap(), key);
         for (instruction, selection) in [
             (
                 "torna isto mais formal",

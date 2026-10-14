@@ -1,5 +1,5 @@
-//! Resumos de transcrições com o modelo de texto: uma aula, uma reunião, um
-//! ditado comprido. Uma única chamada a `/chat/completions`, sem partir o texto.
+//! Resumos de transcrições com um modelo Grok: uma aula, uma reunião, um
+//! ditado comprido. Uma única chamada a `/chat/completions` da xAI, sem partir o texto.
 //!
 //! Três cuidados que o resto da app não precisa:
 //! - **A transcrição é dados, não instruções.** Uma aula pode ter "ignora o que
@@ -8,7 +8,7 @@
 //!   conter a etiqueta de fecho (senão saía do "recipiente").
 //! - **A resposta é mais curta, mas não se usa `cleanup::sanitize`**: aquela rede
 //!   de segurança rejeita respostas diferentes do texto original, que aqui é o
-//!   objetivo. Chama-se `cleanup::chat` diretamente.
+//!   objetivo. Chama-se `Xai::chat` diretamente.
 //! - **Não há "dividir e juntar".** Uma hora de aula tem ~55 mil carateres
 //!   (~15 mil tokens) e cabe num pedido. Acima de `MAX_CHARS` recusa-se, com a
 //!   razão, em vez de cortar o texto em silêncio.
@@ -17,10 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    cleanup::{self, Chat},
-    stt::{SttError, openrouter::OpenRouter},
-};
+use crate::xai::{ApiError, Xai, chat::Chat};
 
 /// O texto mais comprido que se resume (cerca de duas horas e meia de fala).
 pub const MAX_CHARS: usize = 120_000;
@@ -103,7 +100,7 @@ pub enum SummaryError {
     )]
     TooLong { chars: usize },
     #[error("o modelo falhou: {0}")]
-    Model(#[from] SttError),
+    Model(#[from] ApiError),
 }
 
 pub struct Summary {
@@ -114,7 +111,7 @@ pub struct Summary {
 
 /// Resume `text` com `model`.
 pub async fn summarize(
-    openrouter: &OpenRouter,
+    xai: &Xai,
     model: &str,
     kind: Kind,
     text: &str,
@@ -123,18 +120,17 @@ pub async fn summarize(
     let started = Instant::now();
     let system = system_prompt(kind);
     let user = user_message(text);
-    let answer = cleanup::chat(
-        openrouter,
-        &Chat {
+    let answer = xai
+        .chat(&Chat {
             model,
             system: &system,
             user: &user,
             temperature: TEMPERATURE,
             max_tokens: MAX_TOKENS,
             timeout: TIMEOUT,
-        },
-    )
-    .await?;
+            purpose: "ditok-summary",
+        })
+        .await?;
     Ok(Summary {
         text: strip_tags(&answer.text),
         cost: answer.cost,

@@ -19,18 +19,8 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::{Config, SttEngine},
-    dictation::DictationEvent,
-    files::FileJobs,
-    history::HistoryStore,
-    hotkey,
-    local_models::ActiveDownload,
-    metrics::MetricsStore,
-    overlay, secrets,
-    stt::{Providers, local::LocalStt, openrouter::OpenRouter, xai::Xai},
-    text::TextRules,
-    tray,
-    usage::UsageStore,
+    config::Config, dictation::DictationEvent, files::FileJobs, history::HistoryStore, hotkey,
+    metrics::MetricsStore, overlay, secrets, text::TextRules, tray, usage::UsageStore, xai::Xai,
 };
 
 /// Emitido para a janela principal quando as definições mudam por fora dela (ex.:
@@ -74,22 +64,17 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub metrics: MetricsStore,
     pub usage: UsageStore,
-    /// O motor de transcrição local (o modelo só se carrega quando é preciso).
-    pub local: LocalStt,
-    /// A descarga de um modelo em curso (só uma de cada vez), para a poder cancelar.
-    pub download: Mutex<Option<ActiveDownload>>,
     /// A gravação de reuniões em curso (ver `notes/`).
     pub notes: crate::notes::session::Notes,
     pub history: HistoryStore,
     /// O ficheiro a ser transcrito (ou o último), ver `files.rs`.
     pub files: FileJobs,
-    /// Para avisar o orquestrador (ex.: a chave mudou).
+    /// Para avisar o orquestrador (ex.: um atalho do tray).
     pub events: UnboundedSender<DictationEvent>,
-    /// Há chave no cofre? Guardado aqui para a barra não ter de ir ao cofre.
-    /// `AtomicBool`: escrito pelos comandos, lido por quem quiser, sem `Mutex`.
-    key_set: AtomicBool,
-    /// O mesmo para a chave da xAI (motor de transcrição "xAI").
-    xai_key_set: AtomicBool,
+    /// O cliente da xAI, pronto a usar, ou `None` sem chave. Guardá-lo aqui (em vez de
+    /// ir ao cofre a cada pedido) deixa a barra, o tray e os comandos saberem se há
+    /// chave sem tocar no disco; só muda quando a chave muda (`set_key`).
+    xai: RwLock<Option<Xai>>,
     shortcut_ok: AtomicBool,
     /// O atalho de comando não está em falta (desligado conta como "ok").
     command_ok: AtomicBool,
@@ -138,8 +123,6 @@ impl AppState {
             current: RwLock::new(Current::new(config)),
             metrics: MetricsStore::new(dirs.data.clone()),
             usage: UsageStore::new(dirs.data.clone()),
-            local: LocalStt::new(dirs.data.join("models")),
-            download: Mutex::new(None),
             notes: Default::default(),
             history: HistoryStore::new(dirs.data.clone()),
             files: FileJobs::default(),
@@ -149,8 +132,7 @@ impl AppState {
             log_dir: dirs.log,
             http,
             events,
-            key_set: AtomicBool::new(false),
-            xai_key_set: AtomicBool::new(false),
+            xai: RwLock::new(None),
             shortcut_ok: AtomicBool::new(true),
             command_ok: AtomicBool::new(true),
             quick_ok: AtomicBool::new(true),
@@ -162,13 +144,7 @@ impl AppState {
         let config = self.config();
         let shortcut = config.shortcut.clone();
         Status {
-            // Com o motor local ditar não precisa de chave (só a limpeza e os comandos);
-            // com a xAI é a chave dela que conta.
-            key_missing: match config.stt_engine {
-                SttEngine::Cloud => !self.key_set(),
-                SttEngine::Xai => !self.xai_key_set(),
-                SttEngine::Local => false,
-            },
+            key_missing: !self.key_set(),
             shortcut_ok: self.shortcut_ok(),
             shortcut_label: hotkey::pretty(&shortcut),
             shortcut,
@@ -207,29 +183,48 @@ impl AppState {
         self.quick_ok.store(ok, Ordering::Relaxed);
     }
 
-    pub fn set_key_set(&self, set: bool) {
-        self.key_set.store(set, Ordering::Relaxed);
-        self.publish();
+    /// O cliente da xAI, ou `None` sem chave. Barato: clonar copia dois ponteiros.
+    pub fn xai(&self) -> Option<Xai> {
+        self.xai
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn key_set(&self) -> bool {
-        self.key_set.load(Ordering::Relaxed)
+        self.xai
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
-    pub fn set_xai_key_set(&self, set: bool) {
-        self.xai_key_set.store(set, Ordering::Relaxed);
+    /// Passa a usar `key` (ou nenhuma, `None`) e conta à barra e ao tray.
+    pub fn set_key(&self, key: Option<String>) {
+        let client = key.map(|k| Xai::new(self.http.clone(), k));
+        *self.xai.write().unwrap_or_else(PoisonError::into_inner) = client;
         self.publish();
     }
 
-    pub fn xai_key_set(&self) -> bool {
-        self.xai_key_set.load(Ordering::Relaxed)
-    }
-
-    /// O aviso de "falta a chave" do motor de transcrição em uso.
-    pub fn missing_key_message(&self) -> &'static str {
-        match self.config().stt_engine {
-            SttEngine::Xai => MISSING_XAI_KEY,
-            SttEngine::Cloud | SttEngine::Local => MISSING_KEY,
+    /// Volta a ler a chave do cofre. A chave pode ter sido trocada ou apagada fora da app
+    /// (`bin/set-key.rs`): ao começar um ditado a app segue o cofre. Se não der para ler,
+    /// fica como está. Bloqueante (o cofre é uma chamada ao sistema), mas barato.
+    pub fn refresh_key(&self) {
+        match secrets::get() {
+            Ok(key) => {
+                let same = match (&key, self.xai()) {
+                    (None, None) => true,
+                    (Some(k), Some(x)) => x.api_key() == k,
+                    _ => false,
+                };
+                if !same {
+                    tracing::info!(
+                        set = key.is_some(),
+                        "a chave mudou fora da app; a atualizar"
+                    );
+                    self.set_key(key);
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "não foi possível ler a chave do cofre"),
         }
     }
 
@@ -274,53 +269,6 @@ impl AppState {
         Ok(Arc::clone(&guard.config))
     }
 
-    /// Os clientes de um ditado (transcrição e texto). Com a nuvem, sem chave, `None`;
-    /// com o motor local há sempre `stt`, e `llm` só com chave.
-    pub fn models_dir(&self) -> PathBuf {
-        self.data_dir.join("models")
-    }
-
-    pub fn load_providers(&self) -> Result<Option<Providers>, secrets::SecretError> {
-        let config = self.config();
-        let llm = self.load_openrouter()?;
-        Ok(match config.stt_engine {
-            SttEngine::Cloud => llm.map(|llm| Providers {
-                // O mesmo cliente a fazer de `dyn SttProvider` (coerção de `Arc`).
-                stt: llm.clone(),
-                llm: Some(llm),
-                stream: None,
-            }),
-            // A xAI transcreve (em lote e em streaming); a limpeza e os comandos
-            // continuam a precisar da chave do OpenRouter, como com o motor local.
-            SttEngine::Xai => secrets::get_xai()?.map(|key| {
-                let xai = Arc::new(Xai::new(self.http.clone(), key));
-                Providers {
-                    stt: xai.clone(),
-                    llm,
-                    stream: Some(xai),
-                }
-            }),
-            SttEngine::Local => {
-                self.local.configure(
-                    config.local_model,
-                    config.language.as_deref(),
-                    config.local_idle_minutes,
-                );
-                Some(Providers {
-                    stt: Arc::new(self.local.clone()),
-                    llm,
-                    stream: None,
-                })
-            }
-        })
-    }
-
-    /// Cria o cliente do OpenRouter se a chave existir no cofre. `Ok(None)` = sem chave.
-    pub fn load_openrouter(&self) -> Result<Option<Arc<OpenRouter>>, secrets::SecretError> {
-        let transport = self.config().transport;
-        Ok(secrets::get()?.map(|key| Arc::new(OpenRouter::new(self.http.clone(), key, transport))))
-    }
-
     /// Lembra a app onde começou um ditado (sem repetir; a mais recente à frente).
     pub fn note_app(&self, app: &str) {
         let mut recent = self
@@ -357,9 +305,6 @@ impl AppState {
 }
 
 pub const MISSING_KEY: &str =
-    "Falta a chave do OpenRouter: abre as definições no ícone do Ditok e cola a tua chave.";
-
-pub const MISSING_XAI_KEY: &str =
     "Falta a chave da xAI: abre as definições no ícone do Ditok e cola a tua chave.";
 
 /// Põe `app` à frente da lista, sem repetidos, e corta para `RECENT_APPS`.

@@ -1,9 +1,10 @@
 //! O notetaker: grava o microfone ("Eu") e o áudio do sistema ("Outros") de uma
-//! reunião, parte cada faixa em enunciados e (mais tarde) transcreve-os.
+//! reunião, parte cada faixa em enunciados e transcreve-os com a xAI.
 //!
 //! - `segmenter`: corta um fluxo de áudio em enunciados, nas pausas (puro, testável).
 //! - `capture`: abre as duas faixas (microfone e loopback) e alimenta os segmentadores.
-//! - `speech_gate` (BETA): descarta os enunciados sem fala, com o Silero VAD, antes do STT.
+//! - `session`: a sessão em curso (fila de transcrição, linhas, custo).
+//! - `speakers`: no fim, a separação de oradores da xAI sobre a faixa dos outros.
 
 pub mod capture;
 pub mod check;
@@ -12,5 +13,4 @@ pub mod probe;
 pub mod segmenter;
 pub mod session;
 pub mod speakers;
-pub mod speech_gate;
 pub mod store;

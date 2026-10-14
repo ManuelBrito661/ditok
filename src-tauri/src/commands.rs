@@ -2,8 +2,9 @@
 //!
 //! Regras:
 //! - A chave da API nunca sai daqui para a UI: só "configurada / não configurada".
-//! - Nada aqui está no caminho crítico do ditado; o orquestrador é avisado por
-//!   mensagem (`DictationEvent::ProviderChanged`) quando algo que o afeta muda.
+//! - Nada aqui está no caminho crítico do ditado. O cliente da xAI vive no `AppState`
+//!   (`state.xai()`): trocar ou apagar a chave (`state.set_key`) vale logo para o
+//!   ditado seguinte, sem avisar ninguém.
 //! - Trabalho bloqueante (disco, cofre, lista de processos) vai para
 //!   `spawn_blocking` para não ocupar as threads do runtime assíncrono.
 
@@ -16,7 +17,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     audio::{self, InputDevice, Recorder, decode},
-    config::{Config, SttEngine},
+    config::Config,
     dict_io,
     dictation::{DictationEvent, pipeline},
     files::{self, JobView},
@@ -25,14 +26,12 @@ use crate::{
     metrics::Stats,
     overlay, paste, secrets, settings_window,
     state::{AppState, MISSING_KEY, Status},
-    stt::{
-        SttError,
-        models::{self, ModelKind, ModelList},
-        openrouter::{self, KeyInfo},
-        xai,
-    },
     sysmem::{self, MemoryReport},
     updater::{self, UpdateInfo},
+    xai::{
+        self, Access, ApiError, Xai,
+        models::{self, ModelList},
+    },
 };
 
 /// Erro devolvido à UI. O `invoke` do lado do TypeScript rejeita a Promise com
@@ -73,9 +72,8 @@ pub struct Paths {
 pub struct SettingsView {
     config: Config,
     defaults: Config,
-    api_key_set: bool,
     /// Há chave da xAI no cofre?
-    xai_key_set: bool,
+    api_key_set: bool,
     /// O atalho de ditado está registado (`false`: outra app ocupou-o).
     shortcut_ok: bool,
     /// O atalho de comando está registado (ou o modo está desligado).
@@ -87,13 +85,10 @@ pub struct SettingsView {
 }
 
 async fn settings_view(app: &AppHandle, state: &Arc<AppState>) -> CmdResult<SettingsView> {
-    let api_key_set = blocking(|| secrets::get().map(|k| k.is_some())).await??;
-    let xai_key_set = blocking(|| secrets::get_xai().map(|k| k.is_some())).await??;
     Ok(SettingsView {
         config: (*state.config()).clone(),
         defaults: Config::default(),
-        api_key_set,
-        xai_key_set,
+        api_key_set: state.key_set(),
         shortcut_ok: state.shortcut_ok(),
         command_ok: state.command_ok(),
         quick_ok: state.quick_ok(),
@@ -150,17 +145,6 @@ pub async fn save_settings(
         // qualquer gravação para voltar a tentar, sem incomodar se falhar.
         now_ok = true;
     }
-    // Quem transcreve (ou como) mudou: o orquestrador recria os clientes no próximo
-    // ditado. O idioma só conta no motor local (o Whisper fixa-o ao carregar).
-    let local_changed = config.stt_engine != current.stt_engine
-        || config.local_model != current.local_model
-        || config.local_idle_minutes != current.local_idle_minutes
-        || (config.stt_engine == SttEngine::Local && config.language != current.language);
-    // `local_changed` já cobre a troca de motor (inclui "para/da xAI").
-    let transport_changed = config.transport != current.transport || local_changed;
-    // Um modelo que já não vai ser usado liberta a memória já, não aos 5 minutos.
-    let drop_local_model = current.stt_engine == SttEngine::Local
-        && (config.stt_engine != SttEngine::Local || config.local_model != current.local_model);
     let overlay_changed = config.show_overlay != current.show_overlay;
     let show_overlay = config.show_overlay;
     // Desligar "Guardar o áudio" apaga o que já estava guardado.
@@ -197,12 +181,6 @@ pub async fn save_settings(
         state.set_shortcut_ok(now_ok);
     } else {
         state.publish();
-    }
-    if drop_local_model {
-        state.local.unload();
-    }
-    if transport_changed {
-        let _ = state.events.send(DictationEvent::ProviderChanged);
     }
     if audio_turned_off {
         let state_ = Arc::clone(&state);
@@ -335,107 +313,69 @@ fn apply_quick_shortcut(
     })
 }
 
-/// Valida a chave no OpenRouter e só depois a guarda no cofre. Devolve o estado
-/// da chave (limite, gasto), nunca a chave.
+/// Valida a chave na xAI e só depois a guarda no cofre. Devolve o que a chave deixa fazer
+/// (transcrever, escrever texto): a xAI dá permissões por serviço às chaves.
 #[tauri::command]
-pub async fn set_api_key(state: AppStateRef<'_>, key: String) -> CmdResult<Option<KeyInfo>> {
+pub async fn set_api_key(state: AppStateRef<'_>, key: String) -> CmdResult<Access> {
     let key = key.trim().to_owned();
     if key.is_empty() {
         return Err("cola a chave antes de guardar".into());
     }
-    let info = match openrouter::check_key(&state.http, &key).await {
-        Ok(info) => Some(info),
-        // Chave rejeitada: não guardamos.
-        Err(e @ (SttError::Unauthorized(_) | SttError::Forbidden(_))) => return Err(e.into()),
-        // Sem rede (ou outro erro do servidor): guardamos na mesma e avisamos no log.
-        Err(e) => {
-            tracing::warn!(error = %e, "não foi possível validar a chave; guardada sem validação");
-            None
-        }
-    };
-    blocking(move || secrets::set(&key)).await??;
-    let _ = state.events.send(DictationEvent::ProviderChanged);
-    state.set_key_set(true); // a barra deixa de mostrar "Falta a chave"
-    tracing::info!("chave do OpenRouter guardada");
-    Ok(info)
-}
-
-#[tauri::command]
-pub async fn delete_api_key(state: AppStateRef<'_>) -> CmdResult<()> {
-    blocking(secrets::delete).await??;
-    let _ = state.events.send(DictationEvent::ProviderChanged);
-    state.set_key_set(false);
-    tracing::info!("chave do OpenRouter apagada");
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn test_api_key(state: AppStateRef<'_>) -> CmdResult<KeyInfo> {
-    let key = blocking(secrets::get)
-        .await??
-        .ok_or("não há nenhuma chave guardada")?;
-    Ok(openrouter::check_key(&state.http, &key).await?)
-}
-
-/// Valida a chave da xAI e só depois a guarda no cofre (a xAI não devolve estado
-/// da chave, por isso não há nada para mostrar além de "válida").
-#[tauri::command]
-pub async fn set_xai_key(state: AppStateRef<'_>, key: String) -> CmdResult<()> {
-    let key = key.trim().to_owned();
-    if key.is_empty() {
-        return Err("cola a chave antes de guardar".into());
-    }
-    match xai::check_key(&state.http, &key).await {
+    match Xai::new(state.http.clone(), key.clone()).check_key().await {
         Ok(()) => {}
         // Chave rejeitada: não guardamos.
-        Err(e @ (SttError::Unauthorized(_) | SttError::Forbidden(_))) => return Err(e.into()),
+        Err(e @ (ApiError::Unauthorized(_) | ApiError::Forbidden(_))) => return Err(e.into()),
         // Sem rede (ou outro erro do servidor): guardamos na mesma e avisamos no log.
         Err(e) => {
             tracing::warn!(error = %e, "não foi possível validar a chave da xAI; guardada sem validação");
         }
     }
-    blocking(move || secrets::set_xai(&key)).await??;
-    let _ = state.events.send(DictationEvent::ProviderChanged);
-    state.set_xai_key_set(true);
+    let to_save = key.clone();
+    blocking(move || secrets::set(&to_save)).await??;
+    state.set_key(Some(key)); // a barra deixa de mostrar "Falta a chave"
     tracing::info!("chave da xAI guardada");
-    Ok(())
+    // Guardada: agora vê-se o que ela deixa fazer (uma chave criada só para a voz não limpa texto).
+    Ok(state.xai().ok_or(MISSING_KEY)?.probe().await.logged())
 }
 
 #[tauri::command]
-pub async fn delete_xai_key(state: AppStateRef<'_>) -> CmdResult<()> {
-    blocking(secrets::delete_xai).await??;
-    let _ = state.events.send(DictationEvent::ProviderChanged);
-    state.set_xai_key_set(false);
+pub async fn delete_api_key(state: AppStateRef<'_>) -> CmdResult<()> {
+    blocking(secrets::delete).await??;
+    state.set_key(None);
     tracing::info!("chave da xAI apagada");
     Ok(())
 }
 
+/// Confirma que a chave guardada continua a ser aceite e o que lhe é permitido
+/// (custa uma fração de cêntimo: 0,1 s de silêncio e uma resposta de um token).
 #[tauri::command]
-pub async fn test_xai_key(state: AppStateRef<'_>) -> CmdResult<()> {
-    let key = blocking(secrets::get_xai)
-        .await??
-        .ok_or("não há nenhuma chave da xAI guardada")?;
-    Ok(xai::check_key(&state.http, &key).await?)
+pub async fn test_api_key(state: AppStateRef<'_>) -> CmdResult<Access> {
+    let xai = state.xai().ok_or("não há nenhuma chave da xAI guardada")?;
+    xai.check_key().await?;
+    Ok(xai.probe().await.logged())
 }
 
-/// Lista de modelos: da cache se tiver menos de 24 h (e `refresh` for falso), senão
-/// da API; se a API falhar, a cache antiga marcada como `stale`.
+/// Lista de modelos de texto: da cache se tiver menos de 24 h (e `refresh` for falso),
+/// senão da API; se a API falhar (ou não houver chave), a cache antiga marcada como `stale`.
 #[tauri::command]
-pub async fn list_models(
-    state: AppStateRef<'_>,
-    kind: ModelKind,
-    refresh: bool,
-) -> CmdResult<ModelList> {
+pub async fn list_models(state: AppStateRef<'_>, refresh: bool) -> CmdResult<ModelList> {
     let dir = state.cache_dir.clone();
     let cached = {
         let dir = dir.clone();
-        blocking(move || models::read(&dir, kind)).await?
+        blocking(move || models::read(&dir)).await?
     };
     let now = time::OffsetDateTime::now_utc();
     if !refresh && let Some(list) = cached.as_ref().filter(|l| l.is_fresh(now)) {
         return Ok(list.clone());
     }
-    match openrouter::list_models(&state.http, kind.output_modality()).await {
+    let stale = |list: ModelList| ModelList {
+        stale: true,
+        ..list
+    };
+    let Some(xai) = state.xai() else {
+        return cached.map(stale).ok_or_else(|| MISSING_KEY.into());
+    };
+    match xai.list_models().await {
         Ok(models) => {
             let list = ModelList {
                 fetched_at: now,
@@ -444,7 +384,7 @@ pub async fn list_models(
             };
             let to_write = list.clone();
             blocking(move || {
-                if let Err(e) = models::write(&dir, kind, &to_write) {
+                if let Err(e) = models::write(&dir, &to_write) {
                     tracing::warn!(error = %e, "não foi possível guardar a cache de modelos");
                 }
             })
@@ -454,10 +394,7 @@ pub async fn list_models(
         Err(e) => match cached {
             Some(list) => {
                 tracing::warn!(error = %e, "a usar a lista de modelos em cache");
-                Ok(ModelList {
-                    stale: true,
-                    ..list
-                })
+                Ok(stale(list))
             }
             None => Err(e.into()),
         },
@@ -554,11 +491,8 @@ pub async fn reprocess_history_entry(
         Ok((entry, wav))
     })
     .await??;
-    let state_ = Arc::clone(&state);
-    let providers = blocking(move || state_.load_providers())
-        .await??
-        .ok_or(state.missing_key_message())?;
-    let new = pipeline::reprocess(Arc::clone(&state), providers, wav.into(), &entry).await?;
+    let xai = state.xai().ok_or(MISSING_KEY)?;
+    let new = pipeline::reprocess(Arc::clone(&state), xai, wav.into(), &entry).await?;
     let state_ = Arc::clone(&state);
     let updated = blocking(move || {
         state_.history.update(&id, |e| {
@@ -708,11 +642,11 @@ pub fn main_take_open() -> Option<String> {
     settings_window::take_pending()
 }
 
-/// Abre a página das chaves do OpenRouter no browser. O endereço é fixo: a
+/// Abre a consola da xAI (onde se criam as chaves) no browser. O endereço é fixo: a
 /// janela não consegue pedir para abrir outra coisa qualquer.
 #[tauri::command]
-pub fn open_openrouter_keys() -> CmdResult<()> {
-    const URL: &str = "https://openrouter.ai/keys";
+pub fn open_xai_console() -> CmdResult<()> {
+    const URL: &str = xai::CONSOLE_KEYS_URL;
     #[cfg(windows)]
     let mut command = std::process::Command::new("explorer");
     #[cfg(target_os = "macos")]
@@ -799,13 +733,10 @@ pub async fn file_pick(app: AppHandle) -> CmdResult<Option<String>> {
 #[tauri::command]
 pub async fn file_start(state: AppStateRef<'_>, path: String) -> CmdResult<JobView> {
     let path = PathBuf::from(path);
-    let state_ = Arc::clone(&state);
-    let providers = blocking(move || state_.load_providers())
-        .await??
-        .ok_or(state.missing_key_message())?;
+    let xai = state.xai().ok_or(MISSING_KEY)?;
     let probe_path = path.clone();
     let info = blocking(move || decode::probe(&probe_path)).await??;
-    Ok(files::start(state.inner(), providers.stt, path, info)?)
+    Ok(files::start(state.inner(), xai, path, info)?)
 }
 
 #[tauri::command]
@@ -999,7 +930,7 @@ pub struct SummaryOut {
 }
 
 /// Resume um texto (a transcrição de um ficheiro, um ditado comprido) com o modelo
-/// dos resumos. O texto vai ao OpenRouter: quem chama (a janela) só o faz quando
+/// dos resumos. O texto vai à xAI: quem chama (a janela) só o faz quando
 /// carregas em "Resumir". O custo entra nas métricas e no orçamento do mês.
 #[tauri::command]
 pub async fn summarize_text(
@@ -1008,12 +939,9 @@ pub async fn summarize_text(
     kind: crate::summarize::Kind,
 ) -> CmdResult<SummaryOut> {
     let config = state.config();
-    let state_ = Arc::clone(&state);
-    let openrouter = blocking(move || state_.load_openrouter())
-        .await??
-        .ok_or(MISSING_KEY)?;
+    let xai = state.xai().ok_or(MISSING_KEY)?;
     let model = config.effective_summary_model().to_owned();
-    let summary = crate::summarize::summarize(&openrouter, &model, kind, &text).await?;
+    let summary = crate::summarize::summarize(&xai, &model, kind, &text).await?;
     let metrics = crate::metrics::DictationMetrics::for_summary(
         &model,
         text.chars().count(),
@@ -1052,179 +980,10 @@ pub async fn file_save_summary(state: AppStateRef<'_>, text: String) -> CmdResul
     Ok(path.display().to_string())
 }
 
-// ---------------------------------------------------------------- modelos locais
-
-/// O evento de progresso das descargas (para a janela de definições).
-const EVENT_LOCAL_MODELS: &str = "local-models:progress";
-
-#[derive(Serialize)]
-pub struct LocalModelView {
-    id: crate::local_models::LocalModelId,
-    label: &'static str,
-    description: &'static str,
-    warning: Option<&'static str>,
-    size_bytes: u64,
-    /// Memória aproximada com o modelo carregado.
-    ram_mb: u32,
-    installed: bool,
-    /// Bytes já descarregados (uma descarga parada retoma daí).
-    downloaded_bytes: u64,
-}
-
-#[derive(Serialize)]
-pub struct LocalModelsView {
-    /// Esta versão da app inclui o motor local?
-    available: bool,
-    /// O modelo está carregado em memória agora.
-    loaded: bool,
-    /// Uma descarga a decorrer (o id do modelo).
-    downloading: Option<crate::local_models::LocalModelId>,
-    models: Vec<LocalModelView>,
-}
-
-fn local_models_view(state: &AppState) -> LocalModelsView {
-    let dir = state.models_dir();
-    let downloading = state
-        .download
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .and_then(|d| d.id);
-    LocalModelsView {
-        available: crate::stt::local::AVAILABLE,
-        loaded: state.local.is_loaded(),
-        downloading,
-        models: crate::local_models::CATALOG
-            .iter()
-            .map(|m| LocalModelView {
-                id: m.id,
-                label: m.label,
-                description: m.description,
-                warning: m.warning,
-                size_bytes: m.total_bytes(),
-                ram_mb: m.ram_mb,
-                installed: m.is_installed(&dir),
-                downloaded_bytes: m.downloaded_bytes(&dir),
-            })
-            .collect(),
-    }
-}
-
-#[tauri::command]
-pub async fn local_models_list(state: AppStateRef<'_>) -> CmdResult<LocalModelsView> {
-    let state = Arc::clone(&state);
-    blocking(move || local_models_view(&state)).await
-}
-
-/// Começa a descarregar um modelo (a descarga corre em segundo plano; o progresso vem
-/// pelo evento `local-models:progress`). Uma de cada vez.
-#[tauri::command]
-pub async fn local_model_download(
-    app: AppHandle,
-    state: AppStateRef<'_>,
-    id: crate::local_models::LocalModelId,
-) -> CmdResult<()> {
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    {
-        let mut active = state
-            .download
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if active.is_some() {
-            return Err("já há um modelo a descarregar: espera que acabe ou cancela-o".into());
-        }
-        *active = Some(crate::local_models::ActiveDownload {
-            id: Some(id),
-            speaker: None,
-            cancel: Arc::clone(&cancel),
-        });
-    }
-    let client = crate::local_models::download_client()?;
-    let state = Arc::clone(&state);
-    tauri::async_runtime::spawn(async move {
-        let spec = crate::local_models::spec(id);
-        tracing::info!(model = spec.label, "a descarregar o modelo local");
-        let emit = {
-            let app = app.clone();
-            move |p: crate::local_models::Progress| {
-                let _ = app.emit_to(settings_window::LABEL, EVENT_LOCAL_MODELS, &p);
-            }
-        };
-        let result = crate::local_models::download(
-            &client,
-            spec,
-            &state.models_dir(),
-            &cancel,
-            emit.clone(),
-        )
-        .await;
-        *state
-            .download
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        let (state_name, message) = match &result {
-            Ok(()) => ("done", None),
-            Err(crate::local_models::DownloadError::Cancelled) => ("cancelled", None),
-            Err(e) => ("error", Some(e.to_string())),
-        };
-        if let Err(e) = &result {
-            tracing::warn!(model = spec.label, error = %e, "descarga do modelo local não concluída");
-        }
-        let total = spec.total_bytes();
-        emit(crate::local_models::Progress {
-            id: crate::local_models::dir_name(id),
-            file: String::new(),
-            done: if result.is_ok() {
-                total
-            } else {
-                spec.downloaded_bytes(&state.models_dir())
-            },
-            total,
-            state: state_name,
-            message,
-        });
-    });
-    Ok(())
-}
-
-#[tauri::command]
-pub fn local_model_cancel(state: AppStateRef<'_>) {
-    if let Some(active) = state
-        .download
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-    {
-        active
-            .cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-/// Apaga um modelo descarregado (e o que ficou a meio).
-#[tauri::command]
-pub async fn local_model_delete(
-    state: AppStateRef<'_>,
-    id: crate::local_models::LocalModelId,
-) -> CmdResult<()> {
-    if state.config().stt_engine == SttEngine::Local && state.config().local_model == id {
-        return Err("este é o modelo em uso: escolhe outro (ou a nuvem) antes de o apagar".into());
-    }
-    let state = Arc::clone(&state);
-    blocking(move || {
-        state.local.unload();
-        crate::local_models::delete(crate::local_models::spec(id), &state.models_dir())
-    })
-    .await??;
-    tracing::info!(?id, "modelo local apagado");
-    Ok(())
-}
-
 // ---------------------------------------------------------------- notas (reuniões)
 
 use crate::notes::{
     session::{self, StateView},
-    speakers,
     store::{self, Line, Meta, Mode, NotesStore},
 };
 
@@ -1425,147 +1184,6 @@ pub async fn notes_test_start(state: AppStateRef<'_>, seconds: u64) -> CmdResult
 }
 
 // ---------------------------------------------------------------- oradores (notes/speakers.rs)
-
-const EVENT_SPEAKERS: &str = "speakers:progress";
-
-#[derive(Serialize)]
-pub struct SpeakerModelView {
-    id: speakers::Model,
-    label: &'static str,
-    description: &'static str,
-    size_bytes: u64,
-    installed: bool,
-}
-
-#[derive(Serialize)]
-pub struct SpeakersView {
-    /// Esta compilação inclui o motor local (que também separa oradores)?
-    available: bool,
-    /// O modelo escolhido nas definições: é o que as Notas usam.
-    selected: speakers::Model,
-    models: Vec<SpeakerModelView>,
-    /// Qual dos modelos está a descarregar agora, se algum.
-    downloading: Option<speakers::Model>,
-}
-
-/// O progresso de uma descarga de oradores: o de `local_models::Progress` e o modelo.
-#[derive(Serialize)]
-struct SpeakersProgress {
-    model: speakers::Model,
-    #[serde(flatten)]
-    progress: crate::local_models::Progress,
-}
-
-fn speakers_view(state: &AppState) -> SpeakersView {
-    let dir = state.models_dir();
-    let downloading = state
-        .download
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .and_then(|d| d.speaker);
-    SpeakersView {
-        available: speakers::AVAILABLE,
-        selected: state.config().notes_speaker_model,
-        models: speakers::Model::ALL
-            .iter()
-            .map(|&m| SpeakerModelView {
-                id: m,
-                label: m.label(),
-                description: m.description(),
-                size_bytes: m.total_bytes(),
-                installed: speakers::is_installed(&dir, m),
-            })
-            .collect(),
-        downloading,
-    }
-}
-
-#[tauri::command]
-pub async fn speakers_list(state: AppStateRef<'_>) -> CmdResult<SpeakersView> {
-    let state = Arc::clone(&state);
-    blocking(move || speakers_view(&state)).await
-}
-
-/// Descarrega um modelo de oradores. O progresso vai no evento `speakers:progress`.
-#[tauri::command]
-pub async fn speakers_download(
-    app: AppHandle,
-    state: AppStateRef<'_>,
-    id: speakers::Model,
-) -> CmdResult<()> {
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    {
-        let mut active = state
-            .download
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if active.is_some() {
-            return Err("já há um modelo a descarregar: espera que acabe ou cancela-o".into());
-        }
-        *active = Some(crate::local_models::ActiveDownload {
-            id: None,
-            speaker: Some(id),
-            cancel: Arc::clone(&cancel),
-        });
-    }
-    let client = crate::local_models::download_client()?;
-    let state = Arc::clone(&state);
-    tauri::async_runtime::spawn(async move {
-        let emit = {
-            let app = app.clone();
-            move |p: crate::local_models::Progress| {
-                let _ = app.emit_to(
-                    settings_window::LABEL,
-                    EVENT_SPEAKERS,
-                    &SpeakersProgress {
-                        model: id,
-                        progress: p,
-                    },
-                );
-            }
-        };
-        tracing::info!(model = ?id, "a descarregar o modelo de oradores");
-        let result = crate::notes::speakers::download(
-            &client,
-            &state.models_dir(),
-            id,
-            &cancel,
-            emit.clone(),
-        )
-        .await;
-        *state
-            .download
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        let (state_name, message) = match &result {
-            Ok(()) => ("done", None),
-            Err(crate::local_models::DownloadError::Cancelled) => ("cancelled", None),
-            Err(e) => ("error", Some(e.to_string())),
-        };
-        if let Err(e) = &result {
-            tracing::warn!(error = %e, "descarga do modelo de oradores não concluída");
-        }
-        let total = id.total_bytes();
-        emit(crate::local_models::Progress {
-            id: "speakers",
-            file: String::new(),
-            done: if result.is_ok() { total } else { 0 },
-            total,
-            state: state_name,
-            message,
-        });
-    });
-    Ok(())
-}
-
-/// Apaga um modelo de oradores descarregado (e o que ficou a meio).
-#[tauri::command]
-pub async fn speakers_delete(state: AppStateRef<'_>, id: speakers::Model) -> CmdResult<()> {
-    let dir = state.models_dir();
-    blocking(move || crate::notes::speakers::delete(&dir, id)).await??;
-    Ok(())
-}
 
 /// Dá um nome a um orador separado ("Orador 2" → "Ana"). Nome vazio volta ao "Orador N".
 #[tauri::command]

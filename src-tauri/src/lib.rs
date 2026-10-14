@@ -9,7 +9,6 @@ mod files;
 mod focus;
 mod history;
 mod hotkey;
-mod local_models;
 mod logging;
 mod metrics;
 mod modkeys;
@@ -21,13 +20,13 @@ pub mod secrets;
 mod settings_window;
 mod sound;
 mod state;
-mod stt;
 mod summarize;
 mod sysmem;
 mod text;
 mod tray;
 mod updater;
 mod usage;
+mod xai;
 
 use std::{
     sync::Arc,
@@ -73,14 +72,15 @@ pub fn run() {
             let mut config = config::Config::load_or_create(&config_dir);
             tracing::info!(path = %config::Config::path(&config_dir).display(), ?config, "configuração");
 
-            let key_set = match secrets::get() {
-                Ok(key) => key.is_some(),
+            let key = match secrets::get() {
+                Ok(key) => key,
                 Err(e) => {
-                    tracing::error!(error = %e, "não foi possível ler a chave do cofre");
-                    false
+                    tracing::error!(error = %e, "não foi possível ler a chave da xAI do cofre");
+                    None
                 }
             };
-            // Quem já usava o Ditok (config.json de antes do guia e chave guardada)
+            let key_set = key.is_some();
+            // Quem já usava o Ditok (config.json de antes do guia e chave da xAI guardada)
             // não precisa do guia de primeira execução.
             if predates_onboarding && key_set && !config.onboarding_done {
                 config.onboarding_done = true;
@@ -88,20 +88,7 @@ pub fn run() {
                     tracing::warn!(error = %e, "não foi possível marcar o guia como feito");
                 }
             }
-            let xai_key_set = match secrets::get_xai() {
-                Ok(key) => key.is_some(),
-                Err(e) => {
-                    tracing::error!(error = %e, "não foi possível ler a chave da xAI do cofre");
-                    false
-                }
-            };
-            // Falta a chave do motor de transcrição escolhido?
-            let engine_ready = if config.stt_engine == config::SttEngine::Xai {
-                xai_key_set
-            } else {
-                key_set
-            };
-            let show_window = !config.onboarding_done || !engine_ready;
+            let show_window = !config.onboarding_done || !key_set;
 
             let tray = tray::Tray::new(app.handle(), tx.clone(), &config)?;
             // `Invalid` = o texto do atalho no config não se lê (não é culpa de outra app).
@@ -161,7 +148,7 @@ pub fn run() {
                 app.handle().clone(),
                 config,
                 dirs,
-                stt::http_client()?,
+                xai::http_client()?,
                 tx.clone(),
             ));
             // Os comandos da janela recebem o mesmo `Arc` via `State<Arc<AppState>>`.
@@ -180,8 +167,7 @@ pub fn run() {
             });
             // O menu do tray nasce com a linha do atalho certa; isto só a marca
             // "ocupado" se for o caso (a barra pede o estado quando carregar).
-            state.set_key_set(key_set);
-            state.set_xai_key_set(xai_key_set);
+            state.set_key(key);
             state.set_command_ok(command_ok);
             state.set_quick_ok(quick_ok);
             state.set_shortcut_ok(shortcut_ok);
@@ -255,9 +241,6 @@ pub fn run() {
             commands::set_api_key,
             commands::delete_api_key,
             commands::test_api_key,
-            commands::set_xai_key,
-            commands::delete_xai_key,
-            commands::test_xai_key,
             commands::list_models,
             commands::get_stats,
             commands::get_history,
@@ -288,10 +271,6 @@ pub fn run() {
             commands::correct_history_entry,
             commands::summarize_text,
             commands::file_save_summary,
-            commands::local_models_list,
-            commands::local_model_download,
-            commands::local_model_cancel,
-            commands::local_model_delete,
             commands::notes_state,
             commands::notes_accept_consent,
             commands::notes_start,
@@ -306,14 +285,11 @@ pub fn run() {
             commands::notes_output_devices,
             commands::notes_test_start,
             commands::notes_rename_speaker,
-            commands::speakers_list,
-            commands::speakers_download,
-            commands::speakers_delete,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,
             commands::main_take_open,
-            commands::open_openrouter_keys,
+            commands::open_xai_console,
             commands::list_input_devices,
             commands::mic_monitor,
         ])

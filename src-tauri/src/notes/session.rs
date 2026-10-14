@@ -25,19 +25,22 @@ use super::{
 };
 use crate::{
     audio::{resample::TARGET_RATE, wav},
-    config::SttEngine,
     metrics::{self, DictationMetrics},
     settings_window,
     state::AppState,
-    stt::{SttProvider, job},
+    xai::{
+        Xai,
+        retry::is_fatal,
+        stt::{self, SttRequest},
+    },
 };
 
 pub const EVENT_STATE: &str = "notes:state";
 pub const EVENT_LINE: &str = "notes:line";
 pub const EVENT_LEVEL: &str = "notes:level";
 
-/// Pedidos de transcrição ao mesmo tempo. O motor local atende um de cada vez de
-/// qualquer maneira; na nuvem, mais do que isto só atrasa o resto da fila.
+/// Pedidos de transcrição ao mesmo tempo. Mais do que isto só arrisca o limite de pedidos
+/// da xAI sem adiantar: cada enunciado é curto e a fila despacha-se depressa.
 const PARALLEL: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
@@ -60,18 +63,12 @@ pub enum NotesError {
     Unsupported(String),
     #[error("aceita primeiro o aviso sobre gravar conversas")]
     ConsentRequired,
-    #[error("falta a chave do OpenRouter (ou escolhe o motor local) para transcrever")]
+    #[error("falta a chave da xAI para transcrever: guarda-a nas Definições")]
     NoKey,
-    #[error(
-        "com o motor local, as Notas precisam da separação de oradores: ativa-a nas definições e descarrega os modelos de oradores"
-    )]
-    NeedsSpeakers,
     #[error(transparent)]
     Capture(#[from] CaptureError),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error("não foi possível ler a chave: {0}")]
-    Secret(#[from] crate::secrets::SecretError),
 }
 
 /// O que uma sessão em curso sabe de si própria.
@@ -242,20 +239,11 @@ fn capture_config(
     }
 }
 
-/// Começa a gravar. `stt` já vem escolhido (nuvem ou local) pelo chamador.
+/// Começa a gravar.
 pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, NotesError> {
     let config = state.config();
     if !config.notes_consent {
         return Err(NotesError::ConsentRequired);
-    }
-    // Com o motor local, a identificação de oradores é obrigatória: sem ela a reunião
-    // ficaria só com "Eu" e "Outros", e o motor local não tem outra forma de as separar.
-    if config.stt_engine == SttEngine::Local
-        && !(config.notes_speakers
-            && super::speakers::AVAILABLE
-            && super::speakers::is_installed(&state.models_dir(), config.notes_speaker_model))
-    {
-        return Err(NotesError::NeedsSpeakers);
     }
     if state.notes.phase() != Phase::Idle {
         return Err(NotesError::Busy);
@@ -263,11 +251,7 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
     if mode != Mode::InPerson {
         super::platform::check_system_audio().map_err(NotesError::Unsupported)?;
     }
-    let state_ = Arc::clone(state);
-    let providers = tauri::async_runtime::spawn_blocking(move || state_.load_providers())
-        .await
-        .map_err(|_| NotesError::NoKey)??
-        .ok_or(NotesError::NoKey)?;
+    let xai = state.xai().ok_or(NotesError::NoKey)?;
 
     let now = chrono::Local::now();
     let store_dir = state.data_dir.clone();
@@ -279,7 +263,7 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
             started_at: now.to_rfc3339(),
             ended_at: None,
             mode,
-            model: config.active_stt_model(),
+            model: stt::MODEL.to_owned(),
             cost_usd: 0.0,
             audio_ms: 0,
             interrupted: false,
@@ -336,13 +320,7 @@ pub async fn start(state: &Arc<AppState>, mode: Mode) -> Result<StateView, Notes
 
     tracing::info!(id = %meta.id, ?mode, model = %meta.model, "gravação de notas começada");
     let diar = diarized_track(state, mode);
-    tauri::async_runtime::spawn(pump(
-        Arc::clone(state),
-        providers.stt,
-        meta.clone(),
-        diar,
-        rx,
-    ));
+    tauri::async_runtime::spawn(pump(Arc::clone(state), xai, meta.clone(), diar, rx));
     publish(state);
     Ok(state.notes.view())
 }
@@ -362,19 +340,15 @@ pub async fn stop(state: &Arc<AppState>) -> Result<StateView, NotesError> {
 /// Recebe os eventos da captura, transcreve os enunciados e fecha a sessão.
 async fn pump(
     state: Arc<AppState>,
-    stt: Arc<dyn SttProvider>,
+    xai: Xai,
     meta: Meta,
     diar: Option<Track>,
     mut rx: UnboundedReceiver<CaptureEvent>,
 ) {
     let config = state.config();
     let rules = state.text_rules();
-    let model = meta.model.clone();
     let language = config.language.clone();
-    let keyterms: Arc<[String]> = crate::stt::keyterms(&config.dictionary).into();
-    // BETA: com o filtro ligado, cada enunciado passa pelo Silero antes do STT.
-    let speech_dir =
-        (config.notes_speech_gate && super::speech_gate::AVAILABLE).then(|| state.models_dir());
+    let keyterms: Arc<[String]> = stt::keyterms(&config.dictionary).into();
     let gate = Arc::new(Semaphore::new(PARALLEL));
     let mut tasks: JoinSet<()> = JoinSet::new();
 
@@ -396,44 +370,16 @@ async fn pump(
                         .await;
                     });
                 }
-                let counted = Arc::clone(&state);
-                let speech_dir = speech_dir.clone();
                 let job = UtteranceJob {
                     state: Arc::clone(&state),
-                    stt: Arc::clone(&stt),
+                    xai: xai.clone(),
                     rules: Arc::clone(&rules),
                     id: meta.id.clone(),
-                    model: model.clone(),
                     language: language.clone(),
                     keyterms: Arc::clone(&keyterms),
                 };
                 let gate = Arc::clone(&gate);
                 tasks.spawn(async move {
-                    // O filtro (BETA) corre antes do pedido: um enunciado sem fala não se
-                    // transcreve nem se paga.
-                    let u = match speech_dir {
-                        None => u,
-                        Some(dir) => {
-                            let Ok((u, speech)) = tauri::async_runtime::spawn_blocking(move || {
-                                let speech = super::speech_gate::has_speech(&dir, &u.samples);
-                                (u, speech)
-                            })
-                            .await
-                            else {
-                                return;
-                            };
-                            if !speech {
-                                tracing::debug!(
-                                    start_ms = u.start_ms,
-                                    "enunciado sem fala, não transcrito"
-                                );
-                                let audio_ms = u.end_ms.saturating_sub(u.start_ms);
-                                counted.notes.update(|a| a.audio_ms += audio_ms);
-                                return;
-                            }
-                            u
-                        }
-                    };
                     let wav = wav::encode_pcm16_mono(&u.samples, TARGET_RATE);
                     // O pedido espera a sua vez aqui, sem travar a receção de eventos.
                     let Ok(_permit) = gate.acquire().await else {
@@ -477,10 +423,9 @@ async fn pump(
 
 struct UtteranceJob {
     state: Arc<AppState>,
-    stt: Arc<dyn SttProvider>,
+    xai: Xai,
     rules: Arc<crate::text::TextRules>,
     id: String,
-    model: String,
     language: Option<String>,
     keyterms: Arc<[String]>,
 }
@@ -488,14 +433,11 @@ struct UtteranceJob {
 impl UtteranceJob {
     async fn run(self, u: Utterance, wav: bytes::Bytes) {
         let audio_ms = u.end_ms.saturating_sub(u.start_ms);
-        let result = job::transcribe(
-            &*self.stt,
-            wav,
-            &self.model,
-            self.language.as_deref(),
-            &self.keyterms,
-        )
-        .await;
+        let req = SttRequest {
+            language: self.language.as_deref(),
+            keyterms: &self.keyterms,
+        };
+        let result = self.xai.transcribe_retrying(wav, &req).await;
         let (text, failed, cost) = match result {
             Ok(t) => (
                 self.rules.apply_dictionary(t.text.trim()),
@@ -504,7 +446,7 @@ impl UtteranceJob {
             ),
             Err(e) => {
                 tracing::warn!(error = %e, start_ms = u.start_ms, "enunciado não transcrito");
-                if job::is_fatal(&e) {
+                if is_fatal(&e) {
                     let message = e.to_string();
                     self.state.notes.update(|a| a.error = Some(message));
                     publish(&self.state);
@@ -563,13 +505,8 @@ async fn finish(state: &Arc<AppState>, mut meta: Meta, diar: Option<Track>) {
     let config = state.config();
     let m = DictationMetrics {
         at: metrics::now(),
-        provider: if meta.model.starts_with("local/") {
-            "local"
-        } else {
-            "openrouter"
-        },
         model: meta.model.clone(),
-        transport: None,
+        transport: Some("multipart"),
         audio_ms: meta.audio_ms,
         wav_bytes: 0,
         mic_start_ms: None,
@@ -583,7 +520,6 @@ async fn finish(state: &Arc<AppState>, mut meta: Meta, diar: Option<Track>) {
         chars: 0,
         words: 0,
         app: None,
-        generation_id: None,
         error: None,
         file: true,
         command: false,
@@ -613,13 +549,9 @@ async fn finish(state: &Arc<AppState>, mut meta: Meta, diar: Option<Track>) {
 }
 
 /// Que faixa se separa em oradores nesta sessão: a dos outros (ou a do microfone, numa
-/// conversa presencial). `None` se estiver desligado ou faltar o motor ou os modelos.
+/// conversa presencial). `None` se a opção estiver desligada.
 fn diarized_track(state: &AppState, mode: Mode) -> Option<Track> {
-    let config = state.config();
-    if !config.notes_speakers
-        || !super::speakers::AVAILABLE
-        || !super::speakers::is_installed(&state.models_dir(), config.notes_speaker_model)
-    {
+    if !state.config().notes_speakers {
         return None;
     }
     Some(if mode == Mode::InPerson {
@@ -629,47 +561,67 @@ fn diarized_track(state: &AppState, mode: Mode) -> Option<Track> {
     })
 }
 
-/// Depois da reunião: separa quem falou na `track` e grava o orador em cada linha.
-/// O áudio temporário apaga-se sempre, com ou sem sucesso.
+/// Depois da reunião: separa quem falou na `track` (a xAI recebe a faixa inteira) e grava
+/// o orador em cada linha. O áudio temporário apaga-se sempre, com ou sem sucesso.
 async fn identify_speakers(state: &Arc<AppState>, id: &str, track: Track) -> Result<(), String> {
     state
         .notes
         .update(|a| a.step = Some("A identificar quem fala…"));
     publish(state);
+    let result = separate_speakers(state, id, track).await;
+    // Com ou sem sucesso, o áudio temporário (a voz de quem não deu consentimento a mais
+    // nada) não fica no disco.
     let (state_, id_) = (Arc::clone(state), id.to_owned());
-    let model = state.config().notes_speaker_model;
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
-        let store = NotesStore::new(&state_.data_dir);
-        let outcome = (|| {
-            let samples = store.read_pcm(&id_).map_err(|e| e.to_string())?;
-            if samples.is_empty() {
-                return Ok(0);
-            }
-            let started = std::time::Instant::now();
-            let segments = super::speakers::diarize(&state_.models_dir(), model, &samples)
-                .map_err(|e| e.to_string())?;
-            let mut lines = store.lines(&id_).map_err(|e| e.to_string())?;
-            super::speakers::assign(&mut lines, track, &segments);
-            store.set_lines(&id_, &lines).map_err(|e| e.to_string())?;
-            let speakers = segments.iter().map(|s| s.speaker).max().unwrap_or(0) as usize;
-            tracing::info!(
-                id = %id_,
-                speakers,
-                seconds = samples.len() / 16_000,
-                took_s = started.elapsed().as_secs_f32(),
-                "oradores separados"
-            );
-            Ok(speakers)
-        })();
-        store.delete_pcm(&id_);
-        outcome
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        NotesStore::new(&state_.data_dir).delete_pcm(&id_)
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
     if let Err(why) = &result {
         tracing::warn!(%why, "não foi possível separar os oradores");
     }
-    result.map(drop)
+    result
+}
+
+async fn separate_speakers(state: &Arc<AppState>, id: &str, track: Track) -> Result<(), String> {
+    let xai = state.xai().ok_or(crate::state::MISSING_KEY)?;
+    let language = state.config().language.clone();
+    let (state_, id_) = (Arc::clone(state), id.to_owned());
+    let pcm = tauri::async_runtime::spawn_blocking(move || {
+        NotesStore::new(&state_.data_dir).read_pcm(&id_)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    if pcm.is_empty() {
+        return Ok(());
+    }
+    let seconds = pcm.len() as f64 / stt::BYTES_PER_SEC;
+    let started = std::time::Instant::now();
+    let segments = super::speakers::diarize(&xai, pcm.into(), language.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    // A faixa enviada outra vez também se paga (0,10 US$ por hora).
+    state
+        .notes
+        .update(|a| a.cost_usd += stt::batch_cost(seconds));
+    let (state_, id_) = (Arc::clone(state), id.to_owned());
+    let speakers = segments.iter().map(|s| s.speaker).max().unwrap_or(0);
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let store = NotesStore::new(&state_.data_dir);
+        let mut lines = store.lines(&id_).map_err(|e| e.to_string())?;
+        super::speakers::assign(&mut lines, track, &segments);
+        store.set_lines(&id_, &lines).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    tracing::info!(
+        id,
+        speakers,
+        seconds = seconds as u64,
+        took_s = started.elapsed().as_secs_f32(),
+        "oradores separados"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

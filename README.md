@@ -2,7 +2,7 @@
 
 App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, notas de reuniões, métricas e definições.
 
-Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. A transcrição é feita através do [OpenRouter](https://openrouter.ai), da [xAI](https://x.ai) em tempo real ou, se preferires, no próprio computador com um motor local.
+Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. Tudo o que usa IA passa pelos modelos da [xAI](https://x.ai), com uma só chave: a transcrição (em tempo real enquanto falas), a limpeza do texto, o modo comando e os resumos.
 
 ## Usar
 
@@ -27,7 +27,7 @@ Por omissão, em baixo ao centro do ecrã (no monitor onde está o cursor) há u
 | Estado | O que mostra |
 | - | - |
 | Em repouso | pílula minúscula com a mascote |
-| A ouvir | barras que seguem o volume da tua voz e o tempo de gravação (fica laranja aos 45 s, perto do limite de 60 s do processamento do OpenRouter) |
+| A ouvir | barras que seguem o volume da tua voz e o tempo de gravação (fica laranja aos 5 min: o texto aparece enquanto falas, mas uma gravação tão longa já não é um ditado) |
 | A processar | três pontos animados |
 | Colado | contorno verde durante ~1 s |
 | Falhou | contorno vermelho; uma notificação explica o motivo |
@@ -62,7 +62,7 @@ O comando é resolvido no computador, sem IA. Só conta quando está isolado por
 
 Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua a correr. Tem modo claro e escuro.
 
-Na primeira execução aparece um guia em três passos: a chave do OpenRouter, o microfone (com um medidor de nível ao vivo) e uma experiência de ditado. Pode ser saltado em qualquer altura e não volta a aparecer.
+Na primeira execução aparece um guia em três passos: a chave da xAI, o microfone (com um medidor de nível ao vivo) e uma experiência de ditado. Pode ser saltado em qualquer altura e não volta a aparecer.
 
 | Página | O que tem |
 | - | - |
@@ -70,7 +70,7 @@ Na primeira execução aparece um guia em três passos: a chave do OpenRouter, o
 | Dicionário | palavras, expansões, comandos falados e importar/exportar (ver abaixo) |
 | Ficheiros | transcrever a gravação de uma aula ou um vídeo, arrastado para a janela, com resumo (ver abaixo) |
 | Notas | gravar uma reunião ou uma chamada, com transcrição ao vivo (ver abaixo) |
-| Métricas | latência p50/p90, custo e ditados por mês, orçamento, o que resta na chave, estatísticas de uso, últimos ditados, RAM da app e das janelas |
+| Métricas | latência p50/p90, custo e ditados por mês, orçamento, estado da chave, estatísticas de uso, últimos ditados, RAM da app e das janelas |
 
 ### Dicionário e expansões
 
@@ -85,7 +85,7 @@ Com a limpeza com IA ligada, as palavras vão no pedido ao modelo, para ele as e
 
 ### Modo comando
 
-Seleciona um texto numa app, carrega no atalho de comando e diz o que queres: "torna isto mais formal", "traduz para inglês". O texto selecionado é substituído pela resposta do modelo. Sem seleção, a instrução escreve texto novo no cursor ("escreve um email a recusar a reunião"). Usa o mesmo modelo da limpeza, por isso precisa dela ligada. Liga-se em **Definições → Geral**, com o atalho próprio (por omissão `Ctrl+Shift+Alt+Space`).
+Seleciona um texto numa app, carrega no atalho de comando e diz o que queres: "torna isto mais formal", "traduz para inglês". O texto selecionado é substituído pela resposta do modelo. Sem seleção, a instrução escreve texto novo no cursor ("escreve um email a recusar a reunião"). Usa o modelo de texto da limpeza, mesmo com a limpeza desligada. Liga-se em **Definições → Geral**, com o atalho próprio (por omissão `Ctrl+Shift+Alt+Space`).
 
 ### Histórico rápido
 
@@ -116,60 +116,70 @@ A transcrição aparece ao vivo, com cada linha marcada como "Eu" ou "Outros". A
 
 No fim, cada sessão fica numa pasta com a transcrição e os metadados, e pode ser resumida (com o modelo de resumos) e exportada. Quando a app fecha a meio de uma reunião, a sessão é recuperada como interrompida na próxima abertura.
 
-"Outros" não é separado por pessoa por omissão. Se marcares **Separar quem fala em "Outros" (Orador 1, 2…)**, no fim da reunião um modelo de voz local agrupa os trechos parecidos. Precisa dos modelos de voz (descarregados à parte) e só existe nos builds com o motor local (ver abaixo).
-
-**BETA: filtro de fala.** Com **Ignorar sons sem fala (teclado, tosse, música)** ligado, cada enunciado passa pelo Silero VAD (embebido na app) antes de ser transcrito, e os que não têm fala são descartados. Só existe nos builds com o motor local. Pode falhar em canto e música com voz, porque aí há fala de facto.
+"Outros" não é separado por pessoa por omissão. Se marcares **Separar quem fala em "Outros" (Orador 1, 2…)**, no fim da reunião a faixa dos outros (guardada num ficheiro temporário, apagado logo a seguir) vai inteira à xAI com `diarize=true`, que devolve quem disse cada palavra; o Ditok junta as palavras em trechos, numera os oradores pela ordem em que começam a falar e dá a cada linha o orador que mais se sobrepõe a ela. Custa mais 0,10 US$ por hora da faixa. Tem de ser numa só chamada: o número de um orador só quer dizer o mesmo dentro de um mesmo pedido, por isso não se faz enunciado a enunciado. O limite são 90 minutos.
 
 ### Transcrever ficheiros
 
 Arrasta a gravação de uma aula, de uma reunião ou um vídeo para a janela (ou usa **Ficheiros → Escolher ficheiro…**). Funciona com mp3, m4a, aac, wav, flac, ogg (vorbis), mp4, mov, mkv e outros contentores de áudio ou vídeo comuns. Opus (notas de voz do WhatsApp, webm) ainda não.
 
-1. Antes de começar aparece a duração e o custo estimado, ao preço dos teus últimos pedidos com o modelo atual (ou ao da lista de modelos, se ainda não houver nenhum), com um aviso se passar o orçamento do mês ou o que resta na chave.
-2. O ficheiro é lido aos bocados e partido em pedaços de ~2,5 min, cortados na pausa mais silenciosa perto desse ponto, para não partir palavras. Vão até 3 pedaços ao mesmo tempo para o modelo de transcrição atual. Um pedaço que falhe por um problema passageiro (rede, servidor ocupado) é repetido até duas vezes, com uma pausa de 2 s e 4 s. Os pedaços só com silêncio (um intervalo) não são enviados.
+1. Antes de começar aparece a duração e o custo estimado (0,10 US$ por hora de áudio), com um aviso se passar o orçamento do mês.
+2. O ficheiro é lido aos bocados e partido em pedaços de ~2,5 min, cortados na pausa mais silenciosa perto desse ponto, para não partir palavras. Vão até 3 pedaços ao mesmo tempo para a xAI. Um pedaço que falhe por um problema passageiro (rede, servidor ocupado) é repetido até duas vezes, com uma pausa de 2 s e 4 s. Os pedaços só com silêncio (um intervalo) não são enviados.
 3. Uma barra mostra o progresso e o tempo que falta. Podes fechar a janela: o trabalho continua e há uma notificação no fim.
 4. O texto fica na janela, com **Copiar texto** e **Guardar ao lado do original** (`aula.txt`, sem substituir nenhum ficheiro), e é guardada sempre uma cópia em `transcricoes\` na pasta de dados. Com **Resumir** obténs um resumo do texto, do tipo que escolheres.
 
 Os pedaços são juntos pela ordem do ficheiro, com um parágrafo novo quando o anterior acaba numa frase completa. Um pedaço que falhe de vez fica assinalado no texto (`[não foi possível transcrever 25:00–27:30]`). Ao parar a meio fica o que já estava transcrito. Só o dicionário é aplicado ao texto: comandos falados e expansões são para os teus ditados, e a limpeza com IA não é usada. O custo conta para o mês e para o orçamento.
 
-Uma aula de 1 h com o `elevenlabs/scribe-v2` custa ~$2; com o `openai/whisper-large-v3-turbo`, uns cêntimos.
+Uma aula de 1 h custa 0,10 US$.
 
 ### Resumos
 
 Uma aula, uma reunião ou um ditado comprido podem ser resumidos com o modelo de texto, numa única chamada. O resumo usa um modelo próprio (em **Definições → Limpeza com IA**) ou, se não tiver, o da limpeza. O texto é tratado como dados, não como instruções: uma aula com "ignora o que disseram antes" não muda o resumo. Uma hora de aula cabe num pedido; acima de um certo tamanho a app recusa, com a razão, em vez de cortar o texto em silêncio.
 
-### Motor xAI (streaming)
+### A xAI
 
-Em **Definições → Transcrição → Onde se transcreve** há uma terceira opção, **xAI, em tempo real**, com a tua própria chave da xAI (criada em [console.x.ai](https://console.x.ai)). A chave fica no cofre do sistema, numa entrada separada da do OpenRouter (`xai-api-key`), e é validada ao guardar (`GET /v1/models`, gratuito).
+Todos os modelos são da xAI, com uma única chave (criada em [console.x.ai](https://console.x.ai)) que fica no cofre do sistema, na entrada `xai-api-key`:
 
-Com este motor o áudio segue para a xAI **enquanto falas** (WebSocket em `wss://api.x.ai/v1/stt`, PCM 16 kHz) e o texto que ela vai ouvindo aparece numa dica por cima da pílula. Ao largar o atalho só falta o fim da frase, por isso o texto aparece quase de imediato; a colagem, o dicionário, os comandos de voz e a limpeza com IA funcionam como antes. O português é pedido como `pt-PT` e o texto vem formatado (números, moedas e unidades). O preço é de 0,20 US$ por hora de fala em streaming e 0,10 US$ em lote.
+| Para quê | Modelo | Como | Preço |
+| - | - | - | - |
+| Ditar e comandos | `grok-voice-transcribe-2.0` | WebSocket em `wss://api.x.ai/v1/stt` enquanto falas | 0,20 US$ por hora de fala |
+| Tentar de novo, reprocessar, ficheiros, notas | `grok-voice-transcribe-2.0` | `POST /v1/stt` com o áudio completo | 0,10 US$ por hora |
+| Separar oradores nas notas | `grok-voice-transcribe-2.0` | `POST /v1/stt` com `diarize=true` | 0,10 US$ por hora |
+| Limpeza, comandos, resumos | `grok-4.20-0309-non-reasoning` por omissão, à escolha | `POST /v1/chat/completions` | 1,25 / 2,50 US$ por milhão de tokens |
 
-Duas coisas a saber:
+Como o Ditok tira partido de a xAI ser o único fornecedor:
 
-- O WAV continua a ser gravado sempre. Se o stream falhar (sem rede, tempo esgotado, texto vazio), o ditado cai no lote (`POST /v1/stt`) com o WAV completo, e o "Tentar de novo", o reprocessar, os ficheiros e as notas usam sempre o lote.
-- A xAI só transcreve. A limpeza com IA, o modo comando e os resumos continuam a precisar da chave do OpenRouter, como com o motor local.
+- **Streaming no ditado e no comando.** O áudio segue enquanto falas (PCM 16 kHz) e o texto que a xAI vai ouvindo aparece numa dica por cima da pílula. Ao largar o atalho só falta o fim da frase (`finalize`): num teste com 8 s de fala o texto final chegou **~0,2 s depois de largar**, contra ~0,65 s do pedido em lote. O português é pedido como `pt-PT` e o texto vem formatado (números, moedas e unidades), com as palavras do dicionário como `keyterm`.
+- **Lote de recurso.** O WAV continua a ser gravado sempre. Se o stream falhar (sem rede, tempo esgotado, texto vazio), o ditado cai no lote com o WAV completo.
+- **Custo exato.** Nos pedidos de texto a xAI devolve `cost_in_usd_ticks` (1 US$ = 10^10 ticks), o que cobrou mesmo, já com o desconto da cache de prompts. Não se estima nada. A transcrição é cobrada à duração.
+- **Cache de prompts.** O prompt de sistema repete-se a cada ditado; o cabeçalho `x-grok-conv-id` (um por finalidade: limpeza, comando, resumo) ajuda a xAI a reaproveitá-lo, e esses tokens saem mais baratos.
+- **Modelos que raciocinam.** Os `grok-4.5` e seguintes não deixam desligar o raciocínio; o Ditok pede o esforço mais baixo (`reasoning_effort: low`) e dá folga ao limite de tokens. O padrão, `non-reasoning`, responde logo. A lista de modelos vem de `GET /v1/language-models` (com preços), guardada 24 h.
+- **Uma ligação aquecida.** Ao premir o atalho abre-se (ou reaproveita-se) a ligação HTTP/2 à xAI quando vai haver limpeza ou comando, para o pedido não pagar o handshake.
 
-### Motor local
+#### Permissões da chave
 
-Em **Definições → Transcrição → Onde se transcreve** podes escolher a **nuvem** (OpenRouter, o padrão) ou **este computador**. O motor local corre no próprio computador, sem custo e sem o áudio sair dele. Os modelos (Parakeet ou Whisper) não vêm no instalador: descarregam-se do Hugging Face quando os pedes, em **Modelos neste computador**, e cada ficheiro só fica disponível depois de o tamanho e o SHA-256 baterem certo. Uma descarga interrompida retoma de onde ia.
+As chaves da xAI têm **permissões por serviço**, escolhidas ao criá-las na consola. Uma chave criada só para a voz transcreve mas é recusada no chat (`403 Access to the chat endpoint is denied`), e a limpeza, os comandos e os resumos deixam de funcionar. **Definições → xAI e custos → Testar** (e o guardar da chave) verifica os dois serviços com 0,1 s de silêncio e uma resposta de um token, e diz qual está recusado. A correção está em console.x.ai: editar a chave para lhe dar acesso a todos os serviços (ou criar outra).
 
-Um modelo carregado ocupa entre 0,7 e 2,4 GB de RAM, por isso é carregado a pedido e largado ao fim de algum tempo sem uso. Os builds de release (Windows e macOS) incluem o motor. Num build de desenvolvimento sem a feature `local` a app compila e funciona com a nuvem, e a página do motor local diz que o motor não está incluído.
+Quando a limpeza falha por um problema destes, o texto cola-se na mesma, sem limpeza, e aparece um aviso (no máximo uma vez a cada 10 minutos).
 
 ### Estatísticas de uso
 
 Em **Métricas → Uso**: palavras por dia, a sequência de dias seguidos, um mapa de calor das últimas 53 semanas e as apps onde mais ditas. Só contagens: o texto nunca é guardado aqui. Há um botão para apagar estas estatísticas (os custos e os tempos ficam).
 
-### Orçamento e chave
+### Orçamento
 
-Em **Definições → Transcrição** podes definir um orçamento mensal em USD. Quando um ditado faz o gasto do mês passar os 80 % aparece uma notificação, e outra ao chegar aos 100 %. Cada aviso aparece uma vez por mês e o Ditok continua a funcionar depois do limite. O gasto é o que o OpenRouter reporta para a transcrição e a limpeza, somado por mês em UTC (como a faturação dele). No Início o valor fica âmbar a partir dos 80 % e vermelho aos 100 %, e nas Métricas há uma barra.
+Em **Definições → xAI e custos** podes definir um orçamento mensal em USD. Quando um ditado faz o gasto do mês passar os 80 % aparece uma notificação, e outra ao chegar aos 100 %. Cada aviso aparece uma vez por mês e o Ditok continua a funcionar depois do limite. O gasto é o que a xAI cobra pela transcrição e pela limpeza (ver acima), somado por mês em UTC. No Início o valor fica âmbar a partir dos 80 % e vermelho aos 100 %, e nas Métricas há uma barra.
 
-As Métricas mostram também quanto resta na chave do OpenRouter, se lhe tiveres posto um limite de gasto em [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys), com uma estimativa dos minutos de ditado que isso dá ao custo dos teus últimos ditados com o modelo atual. O valor vem de `GET /key`, que é gratuito, e é atualizado ao abrir a janela e depois de cada ditado.
+Uma chave normal da xAI não consegue perguntar quanto saldo lhe resta (isso é na consola), por isso as Métricas só dizem se há chave e levam à consola.
 
 ### Atualizações
 
 O Ditok procura versões novas nas [Releases do GitHub](https://github.com/ManuelBrito661/ditok/releases) 10 s depois de arrancar e depois a cada 6 h. Quando há uma, mostra uma notificação e um cartão **Nova versão** na janela; o botão **Atualizar** descarrega, instala e reinicia a app. As atualizações são assinadas e verificadas antes de instalar.
 
 ### Chave de API
-A chave do [OpenRouter](https://openrouter.ai/settings/keys) fica no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros, e a janela nunca a mostra: só indica se está configurada. Ao guardar, a app valida a chave no OpenRouter e só depois a põe no cofre. Uma chave recusada não é guardada; se não houver rede, é guardada sem validação e fica registado no log.
+
+A chave da [xAI](https://console.x.ai) fica no cofre do sistema (Gestor de Credenciais do Windows / Keychain do macOS), nunca em ficheiros, e a janela nunca a mostra: só indica se está configurada. Ao guardar, a app valida a chave na xAI e só depois a põe no cofre. Uma chave recusada não é guardada; se não houver rede, é guardada sem validação e fica registado no log. Depois de guardada, a app testa os dois serviços (voz e texto) e diz se a chave tem permissões em falta.
+
+A entrada antiga do OpenRouter (`openrouter-api-key`) já não é usada e fica no cofre até a apagares tu (no Windows, em *Gestor de Credenciais*; no macOS, no *Acesso às Chaves*).
 
 Em alternativa à janela, na pasta `src-tauri`:
 
@@ -177,22 +187,19 @@ Em alternativa à janela, na pasta `src-tauri`:
 cargo run --bin set-key --features cli
 ```
 
-### Sem ser o OpenRouter
-
-A transcrição na nuvem é feita pelo OpenRouter, com o modelo que escolheres em **Definições → Transcrição** (com pesquisa e preço na lista). A lista de modelos é guardada durante 24 h. Para transcrever sem rede ou sem custo, usa o motor local.
-
 ## Desempenho
 
-Medido no Windows em build de debug, com `openai/whisper-large-v3-turbo` (nuvem):
+Medido no Windows em build de debug, com a xAI:
 
 | | Valor |
 | - | - |
 | Arranque até o atalho funcionar | ~30 ms (a barra aparece ~0,3 s depois) |
-| Soltar a tecla → texto colado (2–4 s de fala) | 0,6–1,1 s, quase tudo é o pedido ao OpenRouter |
+| Soltar a tecla → texto final (streaming, 8 s de fala) | ~0,2 s, só falta o fim da frase |
+| O mesmo em lote (`POST /v1/stt`, 8 s de fala) | ~0,65 s, upload e transcrição |
 | RAM privada em repouso | ~107 MB: ~10 MB do Ditok + ~97 MB do WebView da barra |
 | RAM sem a barra | ~10 MB |
 
-O WebView2 corre com a aceleração por GPU desligada, o que poupa ~55 MB e não se nota numa barra deste tamanho. A RAM mostrada é a memória privada (o mesmo número do Gestor de Tarefas), não o working set, que conta várias vezes as DLLs partilhadas pelos processos do WebView2. Com o motor local, a RAM sobe para 0,7–2,4 GB enquanto o modelo está carregado e volta a descer quando é largado por inatividade.
+O WebView2 corre com a aceleração por GPU desligada, o que poupa ~55 MB e não se nota numa barra deste tamanho. A RAM mostrada é a memória privada (o mesmo número do Gestor de Tarefas), não o working set, que conta várias vezes as DLLs partilhadas pelos processos do WebView2.
 
 ## Ficheiros e logs
 
@@ -206,9 +213,8 @@ O WebView2 corre com a aceleração por GPU desligada, o que poupa ~55 MB e não
 | `audio\` | `%APPDATA%\com.manuelbrito.ditok\` | o áudio dos últimos 20 ditados (só se a opção estiver ligada) |
 | `transcricoes\` | `%APPDATA%\com.manuelbrito.ditok\` | uma cópia do texto de cada ficheiro transcrito |
 | `notas\` | `%APPDATA%\com.manuelbrito.ditok\` | as sessões de reuniões: metadados, transcrição, resumo |
-| `models\` | `%APPDATA%\com.manuelbrito.ditok\` | os modelos do motor local, descarregados por ti |
 | `debug\last.wav` | `%APPDATA%\com.manuelbrito.ditok\` | a última gravação (só se a opção estiver ligada) |
-| `models-*.json` | `%LOCALAPPDATA%\com.manuelbrito.ditok\` | cache da lista de modelos do OpenRouter, guardada durante 24 h |
+| `models-xai.json` | `%LOCALAPPDATA%\com.manuelbrito.ditok\` | cache da lista de modelos de texto da xAI, guardada durante 24 h |
 
 Logs:
 
@@ -226,12 +232,6 @@ pnpm install
 pnpm tauri dev
 ```
 
-Para incluir o motor local no build de desenvolvimento (a primeira compilação é mais demorada, porque o sherpa-onnx é descarregado):
-
-```bash
-pnpm tauri dev --features local
-```
-
 Verificações (são as mesmas que o CI corre em Windows e macOS):
 
 ```bash
@@ -246,7 +246,7 @@ cd src-tauri && cargo fmt --check && cargo test
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 ```
 
-O clippy passa sem avisos, mas no CI ainda não bloqueia (`continue-on-error`). Há um job informativo que compila e testa com `--features local`.
+O clippy passa sem avisos, mas no CI ainda não bloqueia (`continue-on-error`).
 
 Os ícones da app e do tray são gerados a partir das SVG em `design/mascot/`:
 
@@ -260,7 +260,7 @@ pnpm tauri icon src-tauri/icons/app-icon.png
 
 ### Publicar uma versão
 
-O workflow [release.yml](.github/workflows/release.yml) compila para Windows e macOS (universal) quando é feito push de uma tag `v*`, com o motor local incluído, e publica os instaladores e o `latest.json` usado pelas atualizações. Antes de compilar confirma que a versão da tag coincide com `Cargo.toml`, `tauri.conf.json` e `package.json`.
+O workflow [release.yml](.github/workflows/release.yml) compila para Windows e macOS (universal) quando é feito push de uma tag `v*`, e publica os instaladores e o `latest.json` usado pelas atualizações. Antes de compilar confirma que a versão da tag coincide com `Cargo.toml`, `tauri.conf.json` e `package.json`.
 
 1. Subir a versão em `package.json`, `src-tauri/tauri.conf.json` e `src-tauri/Cargo.toml` (e correr `cargo check` para atualizar o `Cargo.lock`).
 2. Commit `chore: release X.Y.Z`.
@@ -293,11 +293,11 @@ src-tauri/src/
   dict_io.rs          importar e exportar o dicionário (JSON, CSV, TXT)
   audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV,
                       leitura de ficheiros (symphonia) e cortes nas pausas
-  stt/                trait SttProvider; OpenRouter; xAI (lote REST + streaming WebSocket); motor local (sherpa-onnx, feature `local`);
-                      repetição de pedidos; descarregar o modelo local por inatividade; cache da lista de modelos
-  local_models.rs     catálogo e descarga dos modelos locais, com verificação SHA-256
+  xai/                o único fornecedor de modelos: cliente (mod.rs), transcrição em lote e em
+                      streaming (stt.rs), texto (chat.rs), lista de modelos com cache (models.rs)
+                      e repetição de pedidos (retry.rs)
   notes/              notetaker: as duas faixas (microfone e sistema), segmentação, sessões,
-                      armazenamento, separação de oradores e verificações
+                      armazenamento, separação de oradores (xAI) e verificações
   files.rs            transcrever um ficheiro: pedaços em paralelo, progresso, texto final
   cleanup.rs          limpeza opcional com LLM
   summarize.rs        resumos de transcrições (uma chamada ao modelo de texto)
@@ -313,7 +313,7 @@ src-tauri/src/
   updater.rs          procura e instala atualizações
   commands.rs         comandos Tauri chamados pela UI
   config.rs, secrets.rs, metrics.rs, history.rs, sysmem.rs, tray.rs, logging.rs
-  bin/set-key.rs      guardar a chave do OpenRouter (feature `cli`)
+  bin/set-key.rs      guardar a chave da xAI (feature `cli`)
   bin/notes-probe.rs  ferramenta de diagnóstico das notas (feature `cli`)
 src-tauri/Info.plist, Entitlements.plist   permissões do macOS (microfone)
 src/
@@ -321,7 +321,6 @@ src/
   home.ts, dictionary-page.ts, dictionary-add.ts, files-page.ts, notes-page.ts,
   metrics-page.ts, settings-dialog.ts, styles-panel.ts
                       Início, Dicionário, Ficheiros, Notas, Métricas e definições
-  local-engine.ts     modelos do motor local nas definições
   onboarding.ts       guia de primeira execução
   devices.ts          seletor de microfone (partilhado)
   summary.ts          resumos (Ficheiros e Notas)
@@ -345,7 +344,7 @@ Enquanto gravas, o Esc fica reservado ao Ditok para cancelar e não chega às ou
 Ainda não há uma verificação prévia da permissão de Acessibilidade com uma mensagem clara. A app só explica o que falta quando a colagem falha.
 
 ### Notas: "Outros" sem separar por pessoa
-Por omissão, todo o áudio do computador é "Outros". A separação por orador precisa do build com o motor local e dos modelos de voz, e é feita só no fim da reunião.
+Por omissão, todo o áudio do computador é "Outros". A separação por orador (xAI) é opcional e feita só no fim da reunião.
 
 ### Builds sem assinatura reconhecida
 A app é para uso pessoal, por isso não tem uma assinatura reconhecida pelo sistema e há um aviso na primeira execução. No Windows não é assinada. No macOS é assinada com um certificado autoassinado: chega para a permissão do microfone ficar guardada entre atualizações, mas a app não é notarizada pela Apple.

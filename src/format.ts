@@ -1,6 +1,6 @@
 // Formatação partilhada pelas páginas da janela principal.
 
-import type { MetricsRow, Style } from "./api";
+import type { Access, Style } from "./api";
 
 export const isMac = navigator.userAgent.includes("Mac");
 
@@ -136,19 +136,6 @@ export function budgetLevel(spent: number, budget: number | null): "" | "warn" |
   return spent >= budget ? "over" : spent >= budget * 0.8 ? "warn" : "";
 }
 
-/** Custo por minuto de áudio nos últimos registos com `model`, ou `null` se não
- *  houver nenhum. `withCleanup`: soma o custo da limpeza (os ficheiros não a têm). */
-export function costPerMinute(rows: MetricsRow[], model: string, withCleanup: boolean): number | null {
-  let cost = 0;
-  let audioMs = 0;
-  for (const r of rows) {
-    if (r.model !== model || r.cost_usd == null) continue;
-    cost += r.cost_usd + (withCleanup ? r.cleanup_cost_usd ?? 0 : 0);
-    audioMs += r.audio_ms;
-  }
-  return audioMs > 0 && cost > 0 ? (cost / audioMs) * 60_000 : null;
-}
-
 /** "4 min 21 s", "62 min", "1 h 05 min". */
 export function duration(seconds: number): string {
   const s = Math.round(seconds);
@@ -168,3 +155,15 @@ export const STYLE_LABEL: Record<Style, string> = {
   formal: "Formal",
   literal: "Literal",
 };
+
+/** O resultado de testar a chave, numa frase: o que funciona e o que a xAI recusou. As
+ *  chaves da xAI têm permissões por serviço, e uma criada só para a voz não escreve texto. */
+export function describeAccess(a: Access): { text: string; ok: boolean } {
+  if (!a.transcribe && !a.text) {
+    return { text: "A chave pode transcrever e escrever texto (limpeza, comandos, resumos).", ok: true };
+  }
+  const parts: string[] = [];
+  parts.push(a.transcribe ? `Transcrição: ${a.transcribe}` : "Transcrição: ok");
+  parts.push(a.text ? `Texto (limpeza, comandos, resumos): ${a.text}` : "Texto: ok");
+  return { text: parts.join(" · "), ok: false };
+}

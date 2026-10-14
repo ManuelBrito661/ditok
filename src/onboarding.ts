@@ -1,5 +1,5 @@
 // Guia de primeira execução: três passos num <dialog> por cima da janela.
-//   1. chave do OpenRouter (validada e guardada com o mesmo comando das definições)
+//   1. chave da xAI (validada e guardada com o mesmo comando das definições)
 //   2. microfone (seletor + medidor de nível ao vivo enquanto o passo está à vista)
 //   3. experimentar (o atalho atual e uma caixa onde ditas pela primeira vez)
 // "Saltar" está sempre à vista. Concluir ou saltar marca `onboarding_done`, para o
@@ -8,7 +8,7 @@
 import mascotUrl from "../design/mascot/a-ouvir.svg?inline";
 import { api, errorText, onMic, type MicEvent } from "./api";
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
-import { renderKeys } from "./format";
+import { describeAccess, renderKeys } from "./format";
 import { openShortcutSettings } from "./settings-dialog";
 import { $, app, notifyViewChange, onViewChange, save, toast } from "./store";
 
@@ -89,14 +89,14 @@ async function saveKey(): Promise<boolean> {
   msg.textContent = "A validar…";
   msg.className = "ob-msg";
   try {
-    const info = await api.setApiKey(input.value);
+    const access = await api.setApiKey(input.value);
     input.value = ""; // a chave não fica no DOM
     input.removeAttribute("aria-invalid");
     app.view.api_key_set = true;
-    app.key = info;
     notifyViewChange();
-    msg.textContent = info ? "Chave válida e guardada." : "Guardei a chave, mas não a consegui validar (sem rede?).";
-    msg.className = "ob-msg ok";
+    const { text, ok } = describeAccess(access);
+    msg.textContent = `Chave guardada. ${text}`;
+    msg.className = ok ? "ob-msg ok" : "ob-msg error";
     return true;
   } catch (e) {
     msg.textContent = errorText(e);
@@ -212,7 +212,7 @@ export function setupOnboarding() {
   });
   $("ob-key-input").addEventListener("input", () => $("ob-key-input").removeAttribute("aria-invalid"));
   $("ob-key-link").addEventListener("click", () =>
-    void api.openOpenRouterKeys().catch((e) => toast(`Não consegui abrir o browser: ${errorText(e)}`, "error")));
+    void api.openXaiConsole().catch((e) => toast(`Não consegui abrir o browser: ${errorText(e)}`, "error")));
 
   bindDeviceSelect($<HTMLSelectElement>("ob-device"), () => {
     // Outro microfone: o medidor reabre com ele.

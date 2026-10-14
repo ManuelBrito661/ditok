@@ -8,18 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     hotkey::{self, DEFAULT_COMMAND_SHORTCUT, DEFAULT_SHORTCUT},
-    local_models::LocalModelId,
-    stt::openrouter::Transport,
     text::{Replacement, Snippet},
+    xai::DEFAULT_CHAT_MODEL,
 };
-
-pub const DEFAULT_STT_MODEL: &str = "openai/whisper-large-v3-turbo";
-pub const DEFAULT_CLEANUP_MODEL: &str = "openai/gpt-4.1-nano";
 
 /// `#[serde(default)]` faz com que campos em falta no ficheiro usem o valor de
 /// `Default`: um config.json antigo continua válido quando acrescentamos campos.
-/// Campos desconhecidos (ex.: o antigo "provider") são ignorados, e `alias` aceita
-/// os nomes antigos dos campos renomeados.
+/// Campos desconhecidos (ex.: os do tempo do OpenRouter e do motor local) são
+/// ignorados, e `alias` aceita os nomes antigos dos campos renomeados.
 ///
 /// O mesmo struct é enviado à UI (`Serialize`) e recebido dela (`Deserialize`): o
 /// TypeScript tem uma interface com os mesmos campos em `src/api.ts`.
@@ -32,16 +28,13 @@ pub struct Config {
     /// para outras apps, mas a escolha em `command_shortcut` é guardada.
     pub command_enabled: bool,
     pub command_shortcut: String,
-    /// Slug completo do modelo no OpenRouter.
-    #[serde(alias = "openrouter_model")]
-    pub stt_model: String,
-    #[serde(alias = "openrouter_transport")]
-    pub transport: Transport,
     /// ISO-639-1 (ex.: "pt"); `None` para deteção automática.
     pub language: Option<String>,
     /// Quanto o LLM mexe no texto (ver `cleanup.rs`). Substitui o antigo
     /// `cleanup_enabled`, convertido em `migrate`.
     pub cleanup_level: CleanupLevel,
+    /// O modelo Grok que limpa os ditados e executa os comandos (ex.:
+    /// `grok-4.20-0309-non-reasoning`).
     pub cleanup_model: String,
     /// Depois de colar, deixa o ditado no clipboard (pronto para colar outra vez)
     /// em vez de repor o que lá estava.
@@ -72,25 +65,12 @@ pub struct Config {
     pub typing_wpm: u32,
     /// Modelo de texto dos resumos; vazio = o da limpeza (`cleanup_model`).
     pub summary_model: String,
-    /// Quem transcreve: o OpenRouter (nuvem) ou o motor local, neste computador
-    /// (ver `stt/local.rs`). Com o local, o áudio não sai daqui e não custa nada; a
-    /// limpeza com IA, os comandos e os resumos continuam a precisar de rede e de chave.
-    pub stt_engine: SttEngine,
-    /// O modelo do motor local (tem de estar descarregado: `local_models.rs`).
-    pub local_model: LocalModelId,
-    /// Minutos sem ditar até o modelo local ser largado da memória (ocupa 0,7 a 2,4 GB).
-    pub local_idle_minutes: u32,
     /// O aviso sobre gravar conversas foi aceite (ver `notes/`). Sem isto o notetaker não grava.
     pub notes_consent: bool,
     /// Nas Notas, separar quem fala dentro de "Outros" (Orador 1, 2…) no fim da reunião,
-    /// neste computador (ver `notes/speakers.rs`). Precisa do motor local e de dois modelos.
+    /// com a separação de oradores da xAI (ver `notes/speakers.rs`). Envia a faixa dos
+    /// outros uma segunda vez, inteira (0,10 US$ por hora de áudio).
     pub notes_speakers: bool,
-    /// O modelo que separa as vozes (ver `notes/speakers.rs`). Tem de estar descarregado.
-    pub notes_speaker_model: crate::notes::speakers::Model,
-    /// BETA. Nas Notas, descartar os enunciados sem fala (teclado, tosse, música sem voz)
-    /// antes de os transcrever, com o Silero VAD (ver `notes/speech_gate.rs`). Precisa do
-    /// motor local.
-    pub notes_speech_gate: bool,
     /// Palavras escritas à tua maneira depois da transcrição ("tauri" → "Tauri").
     pub dictionary: Vec<Replacement>,
     /// Frases que dão lugar a um texto ("o meu email" → o endereço).
@@ -115,19 +95,6 @@ pub struct Config {
     /// da limpeza (ver `Config::style_for`). Um config.json sem o campo recebe as
     /// regras iniciais (`default_styles`), por isso quem atualiza também as tem.
     pub styles: Vec<StyleRule>,
-}
-
-/// Quem transcreve os ditados. No JSON: "cloud" ou "local".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SttEngine {
-    /// O OpenRouter, com `stt_model`.
-    #[default]
-    Cloud,
-    /// O motor neste computador, com `local_model`.
-    Local,
-    /// A API da xAI, com a chave própria dela e transcrição em streaming (ver `stt/xai.rs`).
-    Xai,
 }
 
 /// Quanto a limpeza com IA mexe no texto. `rename_all = "lowercase"`: no JSON
@@ -242,11 +209,9 @@ impl Default for Config {
             shortcut: DEFAULT_SHORTCUT.to_owned(),
             command_enabled: true,
             command_shortcut: DEFAULT_COMMAND_SHORTCUT.to_owned(),
-            stt_model: DEFAULT_STT_MODEL.to_owned(),
-            transport: Transport::Multipart,
             language: Some("pt".to_owned()),
             cleanup_level: CleanupLevel::Off,
-            cleanup_model: DEFAULT_CLEANUP_MODEL.to_owned(),
+            cleanup_model: DEFAULT_CHAT_MODEL.to_owned(),
             keep_in_clipboard: true,
             history_enabled: true,
             history_limit: 50,
@@ -258,13 +223,8 @@ impl Default for Config {
             quick_history_shortcut: String::new(),
             typing_wpm: 40,
             summary_model: String::new(),
-            stt_engine: SttEngine::Cloud,
-            local_model: LocalModelId::default(),
-            local_idle_minutes: 5,
             notes_consent: false,
             notes_speakers: false,
-            notes_speaker_model: Default::default(),
-            notes_speech_gate: false,
             dictionary: Vec::new(),
             snippets: Vec::new(),
             sounds: true,
@@ -279,7 +239,9 @@ impl Default for Config {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("o modelo tem de ser o slug completo, com \"/\" (ex.: {DEFAULT_STT_MODEL})")]
+    #[error(
+        "o modelo de texto tem de ser o nome de um modelo da xAI, sem espaços (ex.: {DEFAULT_CHAT_MODEL})"
+    )]
     Model,
     #[error(
         "idioma inválido: usa um código de 2 letras (ex.: pt) ou deixa vazio para deteção automática"
@@ -313,10 +275,8 @@ pub enum ConfigError {
     QuickShortcutClash,
     #[error("a velocidade a escrever tem de estar entre 5 e 300 palavras por minuto")]
     TypingSpeed,
-    #[error("o tempo até largar o modelo local tem de estar entre 1 e 240 minutos")]
-    LocalIdle,
     #[error(
-        "o modelo dos resumos tem de ser o slug completo, com \"/\" (ex.: {DEFAULT_CLEANUP_MODEL}), ou ficar vazio"
+        "o modelo dos resumos tem de ser o nome de um modelo da xAI, sem espaços (ex.: {DEFAULT_CHAT_MODEL}), ou ficar vazio"
     )]
     SummaryModel,
 }
@@ -337,8 +297,10 @@ impl Config {
 
     /// Verifica o que vem da UI antes de o guardar.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let slug_ok = |s: &str| s.contains('/') && !s.contains(char::is_whitespace);
-        if !slug_ok(&self.stt_model) || !slug_ok(&self.cleanup_model) {
+        // O nome de um modelo da xAI: "grok-…", sem espaços.
+        let model_ok =
+            |s: &str| !s.is_empty() && s.chars().count() <= 100 && !s.contains(char::is_whitespace);
+        if !model_ok(&self.cleanup_model) {
             return Err(ConfigError::Model);
         }
         if let Some(lang) = &self.language
@@ -393,11 +355,8 @@ impl Config {
             return Err(ConfigError::SameShortcut);
         }
         let summary = self.summary_model.trim();
-        if !summary.is_empty() && !slug_ok(summary) {
+        if !summary.is_empty() && !model_ok(summary) {
             return Err(ConfigError::SummaryModel);
-        }
-        if !(1..=240).contains(&self.local_idle_minutes) {
-            return Err(ConfigError::LocalIdle);
         }
         if !(5..=300).contains(&self.typing_wpm) {
             return Err(ConfigError::TypingSpeed);
@@ -427,16 +386,6 @@ impl Config {
             }
         }
         Ok(())
-    }
-
-    /// O "modelo" que vai no pedido de transcrição e fica nas métricas e no histórico:
-    /// o do OpenRouter, ou `local/<modelo>` com o motor local.
-    pub fn active_stt_model(&self) -> String {
-        match self.stt_engine {
-            SttEngine::Cloud => self.stt_model.clone(),
-            SttEngine::Local => crate::stt::local::slug(self.local_model),
-            SttEngine::Xai => crate::stt::xai::MODEL_SLUG.to_owned(),
-        }
     }
 
     /// O modelo dos resumos: o escolhido, ou o da limpeza se estiver vazio.
@@ -559,6 +508,19 @@ fn migrate(value: &mut serde_json::Value) {
     if obj.get("shortcut").and_then(|v| v.as_str()) == Some(hotkey::LEGACY_SHORTCUT) {
         obj.insert("shortcut".into(), DEFAULT_SHORTCUT.into());
     }
+    // Até à 0.20 os modelos de texto eram do OpenRouter ("openai/gpt-4.1-nano"). Agora só
+    // há modelos da xAI: um nome que não seja de um Grok volta ao valor por omissão
+    // (tirar o campo faz o `serde` usar o `Default`; nos resumos, vazio = o da limpeza).
+    for field in ["cleanup_model", "summary_model"] {
+        let foreign = obj
+            .get(field)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .is_some_and(|m| !m.is_empty() && !m.starts_with("grok"));
+        if foreign {
+            obj.remove(field);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -659,12 +621,15 @@ mod tests {
 
     #[test]
     fn old_names_missing_and_unknown_fields_are_tolerated() {
-        let c: Config = serde_json::from_str(
-            r#"{"language": null, "openrouter_model": "google/chirp-3", "provider": "openrouter"}"#,
+        // Os campos do tempo do OpenRouter e do motor local já não existem: lêem-se e ignoram-se.
+        let c = Config::from_json(
+            br#"{"language": null, "stt_model": "openai/whisper-large-v3-turbo",
+                 "transport": "json", "stt_engine": "local", "local_model": "parakeet-v3",
+                 "local_idle_minutes": 5, "notes_speaker_model": "wespeaker",
+                 "notes_speech_gate": true, "provider": "openrouter"}"#,
         )
         .unwrap();
         assert_eq!(c.language, None);
-        assert_eq!(c.stt_model, "google/chirp-3");
         assert_eq!(c.shortcut, DEFAULT_SHORTCUT);
         assert_eq!(
             c.cleanup_level,
@@ -717,54 +682,21 @@ mod tests {
     }
 
     #[test]
-    fn local_engine_is_off_by_default_and_names_its_model() {
-        let mut c = Config::default();
-        assert_eq!(
-            c.stt_engine,
-            SttEngine::Cloud,
-            "a nuvem por omissão (também para quem atualiza)"
-        );
-        assert_eq!(c.local_idle_minutes, 5);
-        assert_eq!(c.active_stt_model(), c.stt_model);
-        c.stt_engine = SttEngine::Local;
-        c.local_model = LocalModelId::WhisperSmall;
-        assert_eq!(c.active_stt_model(), "local/whisper-small");
-        assert!(c.validate().is_ok());
-        c.local_idle_minutes = 0;
-        assert!(matches!(c.validate(), Err(ConfigError::LocalIdle)));
-        c.local_idle_minutes = 241;
-        assert!(matches!(c.validate(), Err(ConfigError::LocalIdle)));
-        // Um config.json antigo, sem os campos, lê-se com os valores por omissão.
-        let old: Config = serde_json::from_str(r#"{"sounds": false}"#).unwrap();
-        assert_eq!(old.stt_engine, SttEngine::Cloud);
-        assert_eq!(old.local_model, LocalModelId::ParakeetV3);
-        // E o JSON usa nomes em minúsculas.
-        let json = serde_json::to_value(&c).unwrap();
-        assert_eq!(json["stt_engine"], "local");
-        assert_eq!(json["local_model"], "whisper-small");
-        // A xAI: o motor lê-se de "xai" e dá nome ao modelo.
-        c.local_idle_minutes = 5;
-        c.stt_engine = serde_json::from_str(r#""xai""#).unwrap();
-        assert_eq!(c.stt_engine, SttEngine::Xai);
-        assert_eq!(c.active_stt_model(), "xai/grok-voice-transcribe-2.0");
-        assert!(c.validate().is_ok());
-    }
-
-    #[test]
-    fn speaker_model_defaults_to_wespeaker_and_names_itself_in_json() {
-        let c = Config::default();
-        assert_eq!(
-            c.notes_speaker_model,
-            crate::notes::speakers::Model::WeSpeaker
-        );
-        let json = serde_json::to_value(&c).unwrap();
-        assert_eq!(json["notes_speaker_model"], "wespeaker");
-        let titanet: Config =
-            serde_json::from_str(r#"{"notes_speaker_model": "titanet-large"}"#).unwrap();
-        assert_eq!(
-            titanet.notes_speaker_model,
-            crate::notes::speakers::Model::TitaNetLarge
-        );
+    fn models_from_other_providers_fall_back_to_the_xai_default() {
+        // Quem usava o OpenRouter tinha "openai/gpt-4.1-nano": agora é o Grok por omissão.
+        let old = Config::from_json(
+            br#"{"cleanup_model": "openai/gpt-4.1-nano", "summary_model": "anthropic/claude-haiku-4.5"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.cleanup_model, DEFAULT_CHAT_MODEL);
+        assert!(old.summary_model.is_empty(), "vazio = o da limpeza");
+        // Um Grok escolhido fica como está.
+        let grok =
+            Config::from_json(br#"{"cleanup_model": "grok-4.3", "summary_model": " grok-4.7 "}"#)
+                .unwrap();
+        assert_eq!(grok.cleanup_model, "grok-4.3");
+        assert_eq!(grok.effective_summary_model(), "grok-4.7");
+        assert!(grok.validate().is_ok());
     }
 
     #[test]
@@ -772,10 +704,10 @@ mod tests {
         let mut c = Config::default();
         assert!(c.summary_model.is_empty());
         assert_eq!(c.effective_summary_model(), c.cleanup_model);
-        c.summary_model = "  anthropic/claude-haiku-4.5 ".into();
-        assert_eq!(c.effective_summary_model(), "anthropic/claude-haiku-4.5");
+        c.summary_model = "  grok-4.7 ".into();
+        assert_eq!(c.effective_summary_model(), "grok-4.7");
         assert!(c.validate().is_ok());
-        c.summary_model = "sem barra".into();
+        c.summary_model = "com espaços".into();
         assert!(matches!(c.validate(), Err(ConfigError::SummaryModel)));
         c.summary_model = "   ".into();
         assert!(c.validate().is_ok(), "só espaços conta como vazio");
@@ -848,7 +780,7 @@ mod tests {
     fn roundtrips_through_disk() {
         let dir = std::env::temp_dir().join(format!("ditok-config-test-{}", std::process::id()));
         let c = Config {
-            transport: Transport::Json,
+            cleanup_level: CleanupLevel::High,
             ..Config::default()
         };
         c.save(&dir).unwrap();
@@ -860,10 +792,15 @@ mod tests {
     fn validation_rejects_bad_input() {
         assert!(Config::default().validate().is_ok());
         let bad_model = Config {
-            stt_model: "chirp-3".into(),
+            cleanup_model: "grok 4".into(),
             ..Config::default()
         };
         assert!(matches!(bad_model.validate(), Err(ConfigError::Model)));
+        let no_model = Config {
+            cleanup_model: String::new(),
+            ..Config::default()
+        };
+        assert!(matches!(no_model.validate(), Err(ConfigError::Model)));
         let bad_lang = Config {
             language: Some("PT-pt".into()),
             ..Config::default()

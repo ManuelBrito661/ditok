@@ -127,12 +127,15 @@ let mode: "dictation" | "command" = "dictation";
 /** Modo comando: havia texto selecionado? `null` enquanto não se sabe. */
 let hasSelection: boolean | null = null;
 
+/** A partir daqui (em segundos) a pílula avisa que a gravação já vai longa. */
+const LONG_RECORDING_S = 300;
+
 /** Sem seleção, o comando escreve texto novo no cursor. */
 const NO_SELECTION = "Sem seleção · a escrever";
 
 /** O texto da pílula a ouvir: o estilo (ou "Comando", se houver) e o tempo. */
 function recordingLabel(secs: number): string {
-  // Comprido demais para caber com o tempo: o aviso dos 45 s fica na cor.
+  // Comprido demais para caber com o tempo: o aviso das gravações longas fica na cor.
   if (mode === "command" && hasSelection === false) return NO_SELECTION;
   const time = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
   const tag = mode === "command" ? "Comando" : styleTag;
@@ -296,8 +299,8 @@ function onLevel(level: number) {
 
   const secs = Math.floor((performance.now() - recordingSince) / 1000);
   label.textContent = recordingLabel(secs);
-  // Aviso visual perto do limite de 60 s de processamento do OpenRouter.
-  pill.classList.toggle("long", secs >= 45);
+  // Aviso visual numa gravação muito longa (5 min): o stream da xAI é pensado para ditados, e se falhar o lote tem de enviar tudo de uma vez.
+  pill.classList.toggle("long", secs >= LONG_RECORDING_S);
 }
 
 // ---------------------------------------------------------------- rato

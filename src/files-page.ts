@@ -5,7 +5,7 @@
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, errorText, files, onFileJob, summaries, type FileJob, type FileProbe, type SummaryKind } from "./api";
-import { costPerMinute, duration, megabytes, usd } from "./format";
+import { duration, megabytes, usd } from "./format";
 import { $, app, toast } from "./store";
 import { describeResult, describeText, SUMMARY_KINDS } from "./summary";
 
@@ -37,58 +37,27 @@ async function choose(path: string) {
   await renderConfirm(probe);
 }
 
-/** Custo estimado: ao preço dos teus últimos pedidos com este modelo ou, se não
- *  houver nenhum, ao preço da lista de modelos (USD por segundo de áudio). */
-async function estimate(seconds: number, recent: Parameters<typeof costPerMinute>[0]): Promise<number | null> {
-  const model = app.view.config.stt_model;
-  const perMin = costPerMinute(recent, model, false);
-  if (perMin) return (perMin * seconds) / 60;
-  const list = await api.listModels("transcription").catch(() => null);
-  const m = list?.models.find((x) => x.id === model);
-  return m?.prompt_price != null && !m.completion_price ? m.prompt_price * seconds : null;
-}
+/** A xAI cobra 0,10 US$ por hora de áudio em lote, qualquer que seja o ficheiro. */
+const USD_PER_HOUR = 0.1;
 
 async function renderConfirm(p: FileProbe) {
-  const model = app.view.config.stt_model;
   $("fc-name").textContent = p.name;
   $("fc-meta").textContent = [p.duration_s != null ? duration(p.duration_s) : "duração desconhecida", megabytes(p.size_bytes)].join(" · ");
   $("fc-warning").hidden = true;
 
-  // Com o motor local não há custo: só quanto tempo leva, que depende do computador.
-  if (app.view.config.stt_engine === "local") {
-    // Velocidades medidas num portátil de 8 núcleos (vezes o tempo real), com folga.
-    const speed = { "parakeet-v3": 12, "whisper-small": 3, "whisper-turbo": 2.5, "whisper-medium": 1.5, "whisper-large-v3": 1, "qwen3-asr": 2 }[app.view.config.local_model];
-    const minutes = p.duration_s != null ? Math.max(1, Math.round(p.duration_s / speed / 60)) : null;
-    $("fc-estimate").textContent =
-      `Neste computador, sem custo${minutes != null ? `: leva cerca de ${minutes} min` : ""} (depende do teu computador).`;
-    return;
-  }
-  // A xAI cobra 0,10 US$ por hora de áudio em lote (sem dependência do modelo).
-  if (app.view.config.stt_engine === "xai") {
-    $("fc-estimate").textContent = p.duration_s != null
-      ? `Custo estimado: ~${usd((p.duration_s / 3600) * 0.1, 3)} com a xAI.`
-      : "Não sei estimar o custo com a xAI.";
-    return;
-  }
-  $("fc-estimate").textContent = "A estimar o custo…";
-
-  const stats = await api.getStats().catch(() => null);
-  const cost = p.duration_s != null ? await estimate(p.duration_s, stats?.recent ?? []) : null;
-  if (probe !== p) return; // entretanto escolheste outro ficheiro
+  const cost = p.duration_s != null ? (p.duration_s / 3600) * USD_PER_HOUR : null;
   $("fc-estimate").textContent = cost != null
-    ? `Custo estimado: ~${usd(cost, 2)} com ${model}.`
-    : `Não sei estimar o custo com ${model}.`;
+    ? `Custo estimado: ~${usd(cost, 3)} com a xAI.`
+    : "Não sei estimar o custo: o ficheiro não diz a duração.";
 
-  // Avisos antes de gastar: o orçamento do mês e o que resta na chave.
+  // Aviso antes de gastar: o orçamento do mês.
+  const stats = await api.getStats().catch(() => null);
+  if (probe !== p) return; // entretanto escolheste outro ficheiro
   const warnings: string[] = [];
   const budget = app.view.config.monthly_budget_usd;
   const spent = stats?.months[stats.current_month]?.cost_usd ?? 0;
   if (cost != null && budget && spent + cost > budget) {
     warnings.push(`Com esta transcrição passas o orçamento do mês (${usd(spent, 2)} + ~${usd(cost, 2)} de ${usd(budget, 2)}).`);
-  }
-  const left = app.key?.limit_remaining;
-  if (cost != null && left != null && cost > left) {
-    warnings.push(`A chave só tem ${usd(left, 2)}: a transcrição pode ficar a meio.`);
   }
   $("fc-warning").textContent = warnings.join(" ");
   $("fc-warning").hidden = warnings.length === 0;

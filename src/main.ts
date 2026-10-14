@@ -11,7 +11,7 @@ import { renderMemory, renderStats, renderUsage, scrollHeatToEnd, setupMetrics }
 import { renderNotesHint, setupNotes } from "./notes-page";
 import { isOnboardingOpen, openOnboarding, setupOnboarding } from "./onboarding";
 import { openKeySettings, openSettings, openShortcutSettings, setupSettings } from "./settings-dialog";
-import { $, app, engineKeyOk, notifyViewChange, onViewChange, refreshKey, toast } from "./store";
+import { $, app, notifyViewChange, onViewChange, toast } from "./store";
 
 type Page = "inicio" | "dicionario" | "ficheiros" | "notas" | "metricas";
 
@@ -41,8 +41,7 @@ function setupNav() {
 /** Ponto verde/âmbar na barra lateral: o ditado está pronto a usar? */
 function renderStatus() {
   const { shortcut_ok: shortcut } = app.view;
-  // Cada motor tem a sua chave (o local não precisa).
-  const key = engineKeyOk(app.view);
+  const key = app.view.api_key_set;
   $("status-dot").className = `dot ${key && shortcut ? "ok" : "warn"}`;
   $("status-text").textContent = !key ? "Falta a chave" : !shortcut ? "Atalho ocupado" : "Pronto a ditar";
 }
@@ -164,7 +163,6 @@ async function main() {
     renderStats(),
     renderUsage(),
     renderMemory(),
-    refreshKey(),
     checkUpdate(),
   ]);
 
@@ -173,7 +171,6 @@ async function main() {
     void refreshHome();
     void renderStats();
     void renderUsage();
-    void refreshKey(); // o gasto da chave mudou
   });
 }
 

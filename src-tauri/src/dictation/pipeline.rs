@@ -25,11 +25,11 @@ use crate::{
     metrics::{self, DictationMetrics},
     paste,
     state::AppState,
-    stt::{
-        LiveSession, Providers, SttError, SttProvider, SttRequest, Transcription,
-        openrouter::OpenRouter,
-    },
     text::{Applied, Processed, TextRules},
+    xai::{
+        ApiError, Xai,
+        stt::{self, LiveSession, SttRequest, Transcription},
+    },
 };
 
 /// Gravações mais curtas do que isto são quase de certeza toques acidentais.
@@ -172,7 +172,7 @@ fn record_metrics(state: &AppState, m: &DictationMetrics, budget: Option<f64>) {
 /// ainda for ela, ver `focus.rs`) e a app dona dela (decide o estilo).
 pub async fn process(
     state: Arc<AppState>,
-    providers: Providers,
+    xai: Xai,
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
     target: focus::Target,
@@ -187,7 +187,7 @@ pub async fn process(
     };
     transcribe_and_paste(
         state,
-        providers,
+        xai,
         rec,
         released_at,
         release_to_wav,
@@ -206,11 +206,11 @@ const STREAM_FINISH_WAIT: Duration = Duration::from_secs(5);
 /// lote (o caminho de sempre). Um stream sem texto, depois de a gravação ter fala,
 /// também cai no lote: mais vale pagar duas vezes do que perder o ditado.
 async fn transcribe_recording(
-    stt: &dyn SttProvider,
+    xai: &Xai,
     live: Option<LiveSession>,
     rec: &Recording,
     req: &SttRequest<'_>,
-) -> Result<Transcription, SttError> {
+) -> Result<Transcription, ApiError> {
     if let Some(live) = live {
         match live.finish(STREAM_FINISH_WAIT).await {
             Ok(t) if !t.text.trim().is_empty() => return Ok(t),
@@ -218,7 +218,7 @@ async fn transcribe_recording(
             Err(e) => tracing::warn!(error = %e, "o stream falhou; a usar o lote"),
         }
     }
-    stt.transcribe(rec.wav.clone(), req).await
+    xai.transcribe(rec.wav.clone(), req).await
 }
 
 /// Espera pela gravação e decide se vale a pena enviá-la. `Err` traz o fim do
@@ -274,7 +274,7 @@ async fn ready_recording(
 /// métricas contam a partir de agora (o tempo de gravação já passou há muito).
 pub async fn retry(
     state: Arc<AppState>,
-    providers: Providers,
+    xai: Xai,
     rec: Recording,
     target: focus::Target,
     commit: Commit,
@@ -285,7 +285,7 @@ pub async fn retry(
     );
     transcribe_and_paste(
         state,
-        providers,
+        xai,
         rec,
         Instant::now(),
         Duration::ZERO,
@@ -300,7 +300,7 @@ pub async fn retry(
 #[allow(clippy::too_many_arguments)] // cada um é uma parte distinta do ditado
 async fn transcribe_and_paste(
     state: Arc<AppState>,
-    providers: Providers,
+    xai: Xai,
     rec: Recording,
     released_at: Instant,
     release_to_wav: Duration,
@@ -316,29 +316,24 @@ async fn transcribe_and_paste(
     let style = config.style_for(target.app.as_deref());
     let plan = cleanup::plan(config.cleanup_level, style);
 
-    // O pipeline fala com o STT através do trait; o tipo concreto só é preciso
-    // para a limpeza, que é uma funcionalidade específica do OpenRouter.
-    let stt: &dyn SttProvider = &*providers.stt;
-    let stt_model = config.active_stt_model();
-    let keyterms = crate::stt::keyterms(&config.dictionary);
+    let keyterms = stt::keyterms(&config.dictionary);
     let req = SttRequest {
-        model: &stt_model,
         language: config.language.as_deref(),
         keyterms: &keyterms,
     };
-    let mut m = new_metrics(stt, &config, &rec, release_to_wav, false);
+    let mut m = new_metrics(&rec, release_to_wav, false);
     m.app = target.app.as_deref().map(crate::usage::app_key);
     let mut history_entry = None;
     let mut applied = Applied::default();
     let mut stt_guard: Option<SttMetricsGuard> = None;
 
-    let outcome = match transcribe_recording(stt, live, &rec, &req).await {
+    let outcome = match transcribe_recording(&xai, live, &rec, &req).await {
         Err(e) => {
-            tracing::error!(error = %e, model = %stt_model, "transcrição falhou");
+            tracing::error!(error = %e, "transcrição falhou");
             state.notify(&format!("Transcrição falhou: {e}"));
             m.error = Some(e.to_string());
             Outcome::Failed {
-                reason: FailReason::from_stt(&e),
+                reason: FailReason::from_api(&e),
                 // Só para erros que podem correr bem à segunda. `clone` barato (o
                 // WAV é `Bytes`): o original ainda vai para o WAV de diagnóstico.
                 retry: FailReason::retryable(&e).then(|| rec.clone()),
@@ -348,7 +343,6 @@ async fn transcribe_and_paste(
             m.stt_ms = Some(ms(t.elapsed));
             m.transport = Some(t.transport);
             m.cost_usd = t.usage.cost;
-            m.generation_id = t.generation_id;
             // A partir daqui a transcrição já foi paga: se o ditado for cancelado,
             // o guarda regista pelo menos isto.
             stt_guard = Some(SttMetricsGuard {
@@ -367,10 +361,10 @@ async fn transcribe_and_paste(
                 applied = local.applied;
                 let cleaned = if let Some(plan) = plan
                     && let Some(input) = local.cleanup_input()
-                    && let Some(llm) = providers.llm.as_deref()
                 {
                     clean_with_llm(
-                        llm,
+                        &state,
+                        &xai,
                         &config.cleanup_model,
                         plan,
                         &rules,
@@ -417,7 +411,7 @@ async fn transcribe_and_paste(
                         at: m.at,
                         raw_text: (text != raw).then_some(raw),
                         text,
-                        model: config.active_stt_model(),
+                        model: stt::MODEL.to_owned(),
                         audio_ms: m.audio_ms,
                         total_ms: m.total_ms,
                         pasted: matches!(outcome, Outcome::Pasted),
@@ -500,17 +494,10 @@ fn record_in_background(
 }
 
 /// As métricas de uma gravação antes de a enviar (o resto vai sendo preenchido).
-fn new_metrics(
-    stt: &dyn SttProvider,
-    config: &Config,
-    rec: &Recording,
-    release_to_wav: Duration,
-    command: bool,
-) -> DictationMetrics {
+fn new_metrics(rec: &Recording, release_to_wav: Duration, command: bool) -> DictationMetrics {
     DictationMetrics {
         at: metrics::now(),
-        provider: stt.name(),
-        model: config.active_stt_model(),
+        model: stt::MODEL.to_owned(),
         transport: None,
         audio_ms: ms(rec.audio),
         wav_bytes: rec.wav.len(),
@@ -525,7 +512,6 @@ fn new_metrics(
         chars: 0,
         words: 0,
         app: None,
-        generation_id: None,
         file: false,
         command,
         summary: false,
@@ -539,15 +525,18 @@ fn new_metrics(
 ///
 /// Diferenças do ditado: sem regras locais nem limpeza (a instrução não é texto
 /// a colar), sem "Tentar de novo" (repetir precisava da mesma seleção) e com o
-/// clipboard já mexido pela cópia da seleção (ver `selection.rs`).
+/// clipboard já mexido pela cópia da seleção (ver `selection.rs`). A instrução
+/// também vai em streaming (`live`): o texto já está pronto quando largas o atalho.
+#[allow(clippy::too_many_arguments)] // cada um é uma parte distinta do comando
 pub async fn command(
     state: Arc<AppState>,
-    providers: Providers,
+    xai: Xai,
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
     target: focus::Target,
     selection: Selection,
     commit: Commit,
+    live: Option<LiveSession>,
 ) -> Outcome {
     // Se sairmos daqui sem colar (falha, silêncio, cancelamento), o `Drop` da
     // `selection` repõe o clipboard. Não é preciso fazer nada nesses caminhos.
@@ -562,43 +551,35 @@ pub async fn command(
         state.notify("O modo comando precisa de um modelo de texto: escolhe um em Definições → Limpeza com IA.");
         return Outcome::failed(FailReason::NoModel);
     }
-    // Com o motor local pode não haver chave, e o comando precisa do LLM.
-    let Some(llm) = providers.llm.clone() else {
-        tracing::warn!("modo comando sem chave do OpenRouter");
-        state.notify(crate::state::MISSING_KEY);
-        return Outcome::failed(FailReason::NoKey);
-    };
 
-    let stt: &dyn SttProvider = &*providers.stt;
-    let stt_model = config.active_stt_model();
-    let keyterms = crate::stt::keyterms(&config.dictionary);
+    let keyterms = stt::keyterms(&config.dictionary);
     let req = SttRequest {
-        model: &stt_model,
         language: config.language.as_deref(),
         keyterms: &keyterms,
     };
-    let mut m = new_metrics(stt, &config, &rec, release_to_wav, true);
+    let mut m = new_metrics(&rec, release_to_wav, true);
     m.app = target.app.as_deref().map(crate::usage::app_key);
     let mut history_entry = None;
     let mut stt_guard: Option<SttMetricsGuard> = None;
 
     // A cópia da seleção começou antes deste processamento (ver `Selection`),
     // por isso corre ao mesmo tempo que a transcrição: `join!` espera pelas duas.
-    let (transcribed, selected) =
-        tokio::join!(stt.transcribe(rec.wav.clone(), &req), selection.text());
+    let (transcribed, selected) = tokio::join!(
+        transcribe_recording(&xai, live, &rec, &req),
+        selection.text()
+    );
 
     let outcome = match transcribed {
         Err(e) => {
-            tracing::error!(error = %e, model = %stt_model, "transcrição do comando falhou");
+            tracing::error!(error = %e, "transcrição do comando falhou");
             state.notify(&format!("Transcrição falhou: {e}"));
             m.error = Some(e.to_string());
-            Outcome::failed(FailReason::from_stt(&e))
+            Outcome::failed(FailReason::from_api(&e))
         }
         Ok(t) => {
             m.stt_ms = Some(ms(t.elapsed));
             m.transport = Some(t.transport);
             m.cost_usd = t.usage.cost;
-            m.generation_id = t.generation_id;
             stt_guard = Some(SttMetricsGuard {
                 state: Arc::clone(&state),
                 budget: config.monthly_budget_usd,
@@ -627,14 +608,14 @@ pub async fn command(
                     selection_chars = chars,
                     "a pedir o comando ao LLM"
                 );
-                match command::run(&llm, &model, &instruction, selected.as_deref()).await {
+                match command::run(&xai, &model, &instruction, selected.as_deref()).await {
                     Err(e) => {
                         tracing::error!(error = %e, model, "comando falhou");
                         state.notify(&format!("O comando falhou: {e}"));
                         m.error = Some(e.to_string());
                         let reason = match e {
-                            SttError::Decode(_) => FailReason::BadAnswer,
-                            ref e => FailReason::from_stt(e),
+                            ApiError::Decode(_) => FailReason::BadAnswer,
+                            ref e => FailReason::from_api(e),
                         };
                         Outcome::failed(reason)
                     }
@@ -739,7 +720,7 @@ pub struct Reprocessed {
 /// `Err` traz uma frase pronta a mostrar.
 pub async fn reprocess(
     state: Arc<AppState>,
-    providers: Providers,
+    xai: Xai,
     wav: bytes::Bytes,
     original: &HistoryEntry,
 ) -> Result<Reprocessed, String> {
@@ -754,18 +735,14 @@ pub async fn reprocess(
         .unwrap_or_else(|| config.style_for(original.app.as_deref()));
     let plan = cleanup::plan(config.cleanup_level, style);
 
-    let stt: &dyn SttProvider = &*providers.stt;
-    let stt_model = config.active_stt_model();
-    let keyterms = crate::stt::keyterms(&config.dictionary);
+    let keyterms = stt::keyterms(&config.dictionary);
     let req = SttRequest {
-        model: &stt_model,
         language: config.language.as_deref(),
         keyterms: &keyterms,
     };
     let mut m = DictationMetrics {
         at: metrics::now(),
-        provider: stt.name(),
-        model: config.active_stt_model(),
+        model: stt::MODEL.to_owned(),
         transport: None,
         audio_ms: original.audio_ms,
         wav_bytes: wav.len(),
@@ -780,16 +757,15 @@ pub async fn reprocess(
         chars: 0,
         words: 0,
         app: None,
-        generation_id: None,
         file: false,
         command: false,
         summary: false,
         error: None,
     };
 
-    let result = match stt.transcribe(wav, &req).await {
+    let result = match xai.transcribe(wav, &req).await {
         Err(e) => {
-            tracing::error!(error = %e, model = %stt_model, "reprocessamento: transcrição falhou");
+            tracing::error!(error = %e, "reprocessamento: transcrição falhou");
             m.error = Some(e.to_string());
             Err(format!("Transcrição falhou: {e}"))
         }
@@ -797,7 +773,6 @@ pub async fn reprocess(
             m.stt_ms = Some(ms(t.elapsed));
             m.transport = Some(t.transport);
             m.cost_usd = t.usage.cost;
-            m.generation_id = t.generation_id;
             let raw = t.text.trim().to_owned();
             if raw.is_empty() {
                 Err("Não ouvi nada nesta gravação.".to_owned())
@@ -805,10 +780,10 @@ pub async fn reprocess(
                 let local = rules.apply_styled(&raw, style);
                 let cleaned = if let Some(plan) = plan
                     && let Some(input) = local.cleanup_input()
-                    && let Some(llm) = providers.llm.as_deref()
                 {
                     clean_with_llm(
-                        llm,
+                        &state,
+                        &xai,
                         &config.cleanup_model,
                         plan,
                         &rules,
@@ -826,7 +801,7 @@ pub async fn reprocess(
                 Ok(Reprocessed {
                     raw_text: (text != raw).then_some(raw),
                     text,
-                    model: config.active_stt_model(),
+                    model: stt::MODEL.to_owned(),
                     total_ms: ms(started.elapsed()),
                 })
             }
@@ -860,8 +835,10 @@ pub async fn reprocess(
 /// A limpeza com IA é um extra: se falhar, demorar mais de 6 s ou estragar o
 /// texto (mexer nas linhas ou nas expansões), devolve `None` e cola-se o texto
 /// sem limpeza.
+#[allow(clippy::too_many_arguments)] // cada um é uma parte distinta da limpeza
 async fn clean_with_llm(
-    openrouter: &OpenRouter,
+    state: &AppState,
+    xai: &Xai,
     model: &str,
     plan: cleanup::Plan,
     rules: &TextRules,
@@ -869,7 +846,7 @@ async fn clean_with_llm(
     input: &str,
     m: &mut DictationMetrics,
 ) -> Option<String> {
-    match cleanup::clean(openrouter, model, plan, input, rules.vocabulary()).await {
+    match cleanup::clean(xai, model, plan, input, rules.vocabulary()).await {
         Ok(c) => {
             m.cleanup_ms = Some(ms(c.elapsed));
             m.cleanup_cost_usd = c.cost;
@@ -882,9 +859,30 @@ async fn clean_with_llm(
         }
         Err(e) => {
             tracing::warn!(error = %e, model, "limpeza falhou; a colar o texto sem limpeza");
+            warn_cleanup_blocked(state, &e);
             None
         }
     }
+}
+
+/// Um erro que a limpeza vai ter sempre (chave sem permissão, sem créditos…) passaria
+/// despercebido: o texto cola-se na mesma, só que sem limpeza. Avisa-se uma vez de vez em
+/// quando, não a cada ditado.
+fn warn_cleanup_blocked(state: &AppState, e: &ApiError) {
+    use std::sync::Mutex;
+    const EVERY: Duration = Duration::from_secs(10 * 60);
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    if !crate::xai::retry::is_fatal(e) {
+        return;
+    }
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if last.is_some_and(|t| t.elapsed() < EVERY) {
+        return;
+    }
+    *last = Some(Instant::now());
+    state.notify(&format!("A limpeza com IA não está a funcionar: {e}"));
 }
 
 /// O que aconteceu na thread de colagem.

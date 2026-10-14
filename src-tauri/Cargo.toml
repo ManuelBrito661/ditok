@@ -27,9 +27,6 @@ required-features = ["cli"]
 
 [features]
 cli = []
-# O motor de transcrição local (sherpa-onnx, estático). Sem isto a app compila na mesma
-# (e a UI diz que o motor não está incluído), mas o build é bem mais pequeno e rápido.
-local = ["dep:sherpa-onnx"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -50,8 +47,6 @@ cpal = "0.18.2"
 rtrb = "0.4.0"
 rubato = "5.0.1"
 bytes = "1.12.1"
-async-trait = "0.1.92"
-base64 = "0.23.1"
 rpassword = "7.5.4"
 tauri-plugin-notification = "2.6.0"
 time = { version = "0.3.55", features = ["formatting", "macros", "serde"] }
@@ -61,16 +56,13 @@ enigo = "0.6.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["http2", "multipart", "json", "rustls-no-provider"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 tauri-plugin-autostart = "2.7.0"
-sysinfo = { version = "0.38.4", default-features = false, features = ["system", "disk"] }
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 tauri-plugin-updater = "2.13.3"
 tauri-plugin-process = "2.4.0"
 regex = "1.13.1"
 symphonia = { version = "0.5.5", features = ["mp3", "aac", "isomp4", "alac"] }
 tauri-plugin-dialog = "2.8.2"
-# Só com `--features local` (o motor de transcrição local; ver stt/local.rs).
-sherpa-onnx = { version = "=1.13.8", optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
-sha2 = "0.10"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 

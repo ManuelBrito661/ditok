@@ -2,20 +2,12 @@
 // "toast", a confirmação de ações destrutivas e uma lista de quem quer saber quando as definições mudam (Início,
 // modal de definições). Assim cada página não precisa de conhecer as outras.
 
-import { api, errorText, type Config, type KeyInfo, type SettingsView } from "./api";
+import { api, errorText, type Config, type SettingsView } from "./api";
 
 export const app = {
   /** Preenchido em `main()` antes de qualquer página ser desenhada. */
   view: undefined as unknown as SettingsView,
-  /** Gasto e limite da chave do OpenRouter; `null` sem chave ou sem rede. */
-  key: null as KeyInfo | null,
 };
-
-/** Volta a pedir ao OpenRouter o que resta na chave (no arranque e depois de cada ditado). */
-export async function refreshKey() {
-  app.key = app.view.api_key_set ? await api.testApiKey().catch(() => null) : null;
-  notifyViewChange();
-}
 
 const listeners: Array<() => void> = [];
 
@@ -131,15 +123,3 @@ export const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
   return el as T;
 };
 
-/** O motor de transcrição escolhido tem o que precisa para ditar? A nuvem precisa da
- *  chave do OpenRouter, a xAI da dela, o motor local de nenhuma. */
-export function engineKeyOk(view: SettingsView): boolean {
-  switch (view.config.stt_engine) {
-    case "local":
-      return true;
-    case "xai":
-      return view.xai_key_set;
-    default:
-      return view.api_key_set;
-  }
-}
