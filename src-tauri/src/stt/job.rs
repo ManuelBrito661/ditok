@@ -61,8 +61,9 @@ pub async fn transcribe(
     wav: Bytes,
     model: &str,
     language: Option<&str>,
+    keyterms: &[String],
 ) -> Result<Transcription, SttError> {
-    transcribe_with_backoff(provider, wav, model, language, BACKOFF).await
+    transcribe_with_backoff(provider, wav, model, language, keyterms, BACKOFF).await
 }
 
 /// Como `transcribe`, com a espera base à escolha (os testes não esperam segundos).
@@ -71,12 +72,13 @@ async fn transcribe_with_backoff(
     wav: Bytes,
     model: &str,
     language: Option<&str>,
+    keyterms: &[String],
     backoff: Duration,
 ) -> Result<Transcription, SttError> {
     let req = SttRequest {
         model,
         language,
-        keyterms: &[],
+        keyterms,
     };
     let mut attempt = 0;
     loop {
@@ -178,6 +180,7 @@ mod tests {
             Bytes::from_static(b"RIFF"),
             "m/m",
             Some("pt"),
+            &[],
             Duration::ZERO,
         )
         .await

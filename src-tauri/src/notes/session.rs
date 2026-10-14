@@ -371,6 +371,7 @@ async fn pump(
     let rules = state.text_rules();
     let model = meta.model.clone();
     let language = config.language.clone();
+    let keyterms: Arc<[String]> = crate::stt::keyterms(&config.dictionary).into();
     // BETA: com o filtro ligado, cada enunciado passa pelo Silero antes do STT.
     let speech_dir =
         (config.notes_speech_gate && super::speech_gate::AVAILABLE).then(|| state.models_dir());
@@ -404,6 +405,7 @@ async fn pump(
                     id: meta.id.clone(),
                     model: model.clone(),
                     language: language.clone(),
+                    keyterms: Arc::clone(&keyterms),
                 };
                 let gate = Arc::clone(&gate);
                 tasks.spawn(async move {
@@ -480,12 +482,20 @@ struct UtteranceJob {
     id: String,
     model: String,
     language: Option<String>,
+    keyterms: Arc<[String]>,
 }
 
 impl UtteranceJob {
     async fn run(self, u: Utterance, wav: bytes::Bytes) {
         let audio_ms = u.end_ms.saturating_sub(u.start_ms);
-        let result = job::transcribe(&*self.stt, wav, &self.model, self.language.as_deref()).await;
+        let result = job::transcribe(
+            &*self.stt,
+            wav,
+            &self.model,
+            self.language.as_deref(),
+            &self.keyterms,
+        )
+        .await;
         let (text, failed, cost) = match result {
             Ok(t) => (
                 self.rules.apply_dictionary(t.text.trim()),
