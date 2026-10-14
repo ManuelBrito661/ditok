@@ -217,6 +217,7 @@ async fn run(
         path.clone(),
         config.active_stt_model(),
         config.language.clone(),
+        crate::stt::keyterms(&config.dictionary).into(),
         cancel,
         move |p| {
             progress_state.files.update(&progress_state.app, |v| {
@@ -394,6 +395,7 @@ async fn transcribe_file(
     path: PathBuf,
     model: String,
     language: Option<String>,
+    keyterms: Arc<[String]>,
     mut cancel: watch::Receiver<bool>,
     mut progress: impl FnMut(Progress),
 ) -> Outcome {
@@ -458,10 +460,11 @@ async fn transcribe_file(
                     }
                     Some(wav) => {
                         out.sent += chunk.length;
-                        let (stt, model, language) = (Arc::clone(&stt), model.clone(), language.clone());
+                        let (stt, model, language, keyterms) =
+                            (Arc::clone(&stt), model.clone(), language.clone(), Arc::clone(&keyterms));
                         let (index, start, length) = (chunk.index, chunk.start, chunk.length);
                         tasks.spawn(async move {
-                            let result = job::transcribe(&*stt, wav, &model, language.as_deref()).await;
+                            let result = job::transcribe(&*stt, wav, &model, language.as_deref(), &keyterms).await;
                             ChunkResult { index, start, length, result }
                         });
                     }
@@ -668,9 +671,15 @@ mod tests {
         println!("{} → {:?}", path.display(), info.duration);
         let (_cancel, rx) = watch::channel(false);
         let started = Instant::now();
-        let out = transcribe_file(Arc::new(or), path, model, Some("en".into()), rx, |p| {
-            println!("  {:?} transcritos, ${:.5}", p.done, p.cost)
-        })
+        let out = transcribe_file(
+            Arc::new(or),
+            path,
+            model,
+            Some("en".into()),
+            Arc::from([]),
+            rx,
+            |p| println!("  {:?} transcritos, ${:.5}", p.done, p.cost),
+        )
         .await;
         println!(
             "{:?} em {:?}, ${:.5}, {} falhados\n---\n{}",
