@@ -60,7 +60,7 @@ O comando é resolvido no computador, sem IA. Só conta quando está isolado por
 
 ## A janela
 
-Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua a correr. Tem modo claro e escuro.
+Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. A janela só existe enquanto está aberta: ao fechá-la é destruída, para libertar a RAM do WebView, e a app continua a correr. Tem modo claro e escuro, segue o do sistema, e a barra lateral encolhe para só os ícones em janelas estreitas.
 
 Na primeira execução aparece um guia em três passos: a chave da xAI, o microfone (com um medidor de nível ao vivo) e uma experiência de ditado. Pode ser saltado em qualquer altura e não volta a aparecer.
 
@@ -71,6 +71,7 @@ Na primeira execução aparece um guia em três passos: a chave da xAI, o microf
 | Ficheiros | transcrever a gravação de uma aula ou um vídeo, arrastado para a janela, com resumo (ver abaixo) |
 | Notas | gravar uma reunião ou uma chamada, com transcrição ao vivo (ver abaixo) |
 | Métricas | latência p50/p90, custo e ditados por mês, orçamento, estado da chave, estatísticas de uso, últimos ditados, RAM da app e das janelas |
+| Definições | Geral (atalhos, microfone, áudio do computador, sons), xAI e custos (chave e orçamento), Limpeza (nível e modelos de texto), Estilos por app e Dados. É uma página, não uma janela por cima: tem separadores na horizontal e cada alteração grava-se logo |
 
 ### Dicionário e expansões
 
@@ -133,7 +134,7 @@ Uma aula de 1 h custa 0,10 US$.
 
 ### Resumos
 
-Uma aula, uma reunião ou um ditado comprido podem ser resumidos com o modelo de texto, numa única chamada. O resumo usa um modelo próprio (em **Definições → Limpeza com IA**) ou, se não tiver, o da limpeza. O texto é tratado como dados, não como instruções: uma aula com "ignora o que disseram antes" não muda o resumo. Uma hora de aula cabe num pedido; acima de um certo tamanho a app recusa, com a razão, em vez de cortar o texto em silêncio.
+Uma aula, uma reunião ou um ditado comprido podem ser resumidos com o modelo de texto, numa única chamada. O resumo usa um modelo próprio (em **Definições → Limpeza**) ou, se não tiver, o da limpeza. O texto é tratado como dados, não como instruções: uma aula com "ignora o que disseram antes" não muda o resumo. Uma hora de aula cabe num pedido; acima de um certo tamanho a app recusa, com a razão, em vez de cortar o texto em silêncio.
 
 ### A xAI
 
@@ -319,7 +320,7 @@ src-tauri/Info.plist, Entitlements.plist   permissões do macOS (microfone)
 src/
   main.ts             janela principal: navegação e cartão de atualização
   home.ts, dictionary-page.ts, dictionary-add.ts, files-page.ts, notes-page.ts,
-  metrics-page.ts, settings-dialog.ts, styles-panel.ts
+  metrics-page.ts, settings-page.ts, styles-panel.ts
                       Início, Dicionário, Ficheiros, Notas, Métricas e definições
   onboarding.ts       guia de primeira execução
   devices.ts          seletor de microfone (partilhado)

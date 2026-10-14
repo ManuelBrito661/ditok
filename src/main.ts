@@ -1,5 +1,5 @@
 // Janela principal do Ditok. Sem framework: cada módulo trata de uma parte
-// (Início, Métricas, modal de definições) e o estado partilhado está em store.ts.
+// (Início, Métricas, Definições…), a navegação está em nav.ts e o estado partilhado em store.ts.
 
 import "@fontsource/instrument-serif/latin-400.css";
 import mascotUrl from "../design/mascot/parado.svg?inline";
@@ -10,32 +10,20 @@ import { clearHomeHistory, refreshHome, setupHome } from "./home";
 import { renderMemory, renderStats, renderUsage, scrollHeatToEnd, setupMetrics } from "./metrics-page";
 import { renderNotesHint, setupNotes } from "./notes-page";
 import { isOnboardingOpen, openOnboarding, setupOnboarding } from "./onboarding";
-import { openKeySettings, openSettings, openShortcutSettings, setupSettings } from "./settings-dialog";
+import { onPage, showPage, type Page } from "./nav";
+import { openKeySettings, openShortcutSettings, setupSettings } from "./settings-page";
 import { $, app, notifyViewChange, onViewChange, toast } from "./store";
-
-type Page = "inicio" | "dicionario" | "ficheiros" | "notas" | "metricas";
-
-/** Muda de página. `focus`: leva o foco para o título da nova página, para quem
- *  usa teclado ou leitor de ecrã saber que mudou (não quando a mudança é automática). */
-function showPage(page: Page, focus = false) {
-  for (const link of document.querySelectorAll<HTMLButtonElement>(".nav-link[data-page]")) {
-    if (link.dataset.page === page) link.setAttribute("aria-current", "page");
-    else link.removeAttribute("aria-current");
-  }
-  for (const p of document.querySelectorAll<HTMLElement>(".page")) p.hidden = p.id !== `page-${page}`;
-  document.querySelector("main")!.scrollTop = 0;
-  if (focus) document.querySelector<HTMLElement>(`#page-${page} h1`)?.focus({ preventScroll: true });
-  if (page === "metricas") {
-    void renderMemory().catch(() => {});
-    scrollHeatToEnd(); // só tem largura agora que a página está visível
-  }
-}
 
 function setupNav() {
   for (const link of document.querySelectorAll<HTMLButtonElement>(".nav-link[data-page]")) {
     link.addEventListener("click", () => showPage(link.dataset.page as Page, true));
   }
-  $("open-settings").addEventListener("click", () => openSettings());
+  onPage("metricas", {
+    show: () => {
+      void renderMemory().catch(() => {});
+      scrollHeatToEnd(); // só tem largura agora que a página está visível
+    },
+  });
 }
 
 /** Ponto verde/âmbar na barra lateral: o ditado está pronto a usar? */
@@ -165,6 +153,8 @@ async function main() {
     renderMemory(),
     checkUpdate(),
   ]);
+  // A partir daqui, mudar de página anima (ver `page-in` em styles.css); o arranque não.
+  document.body.dataset.ready = "";
 
   // Atualiza o Início e as métricas quando acaba um ditado, sem polling.
   await onDictationRecorded(() => {

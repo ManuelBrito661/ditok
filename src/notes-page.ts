@@ -101,6 +101,8 @@ function renderState(s: NotesState) {
     }
     $("notes-detail").hidden = detail == null;
     $("notes-list-box").hidden = detail != null;
+    // Com uma gravação aberta, o "Começar a gravar" não faz companhia à leitura.
+    $("notes-idle").hidden = detail != null;
     return;
   }
   detail = null;
@@ -526,6 +528,7 @@ async function openDetail(id: string) {
   }
   const { meta, lines, summary } = detail;
   $("notes-list-box").hidden = true;
+  $("notes-idle").hidden = true;
   $("notes-detail").hidden = false;
   $<HTMLInputElement>("nd-title").value = meta.title;
   $<HTMLInputElement>("nd-mic").value = meta.mic_name;
@@ -551,6 +554,7 @@ function closeDetail() {
   detail = null;
   $("notes-detail").hidden = true;
   $("notes-list-box").hidden = false;
+  $("notes-idle").hidden = state?.phase !== "idle";
   void refreshList();
 }
 

@@ -9,7 +9,7 @@ import mascotUrl from "../design/mascot/a-ouvir.svg?inline";
 import { api, errorText, onMic, type MicEvent } from "./api";
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
 import { describeAccess, renderKeys } from "./format";
-import { openShortcutSettings } from "./settings-dialog";
+import { openShortcutSettings } from "./settings-page";
 import { $, app, notifyViewChange, onViewChange, save, toast } from "./store";
 
 type Step = "key" | "mic" | "try";

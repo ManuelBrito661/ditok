@@ -3,7 +3,7 @@
 
 import { api, errorText, type Percentiles, type Stats, type UsageSummary } from "./api";
 import { budgetLevel, dateTime, duration, monthLabel, ms, usd } from "./format";
-import { openSettings } from "./settings-dialog";
+import { openSettings } from "./settings-page";
 import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 
 let stats: Stats | null = null;

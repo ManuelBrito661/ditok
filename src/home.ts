@@ -19,7 +19,7 @@ import {
   usd,
 } from "./format";
 import { addDictionaryEntry, countWordIn, suggestFrom } from "./dictionary-add";
-import { openSettings } from "./settings-dialog";
+import { openSettings } from "./settings-page";
 import { describeResult, summaryModel, wordCount } from "./summary";
 import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 

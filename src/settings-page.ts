@@ -1,5 +1,5 @@
-// Modal de definições, com separadores à esquerda como no Flow. Cada alteração é
-// gravada logo que acontece (sem botão "Guardar" global).
+// Página de definições, com separadores horizontais. Cada alteração é gravada logo
+// que acontece (sem botão "Guardar" global).
 
 import {
   api,
@@ -11,24 +11,28 @@ import {
 } from "./api";
 import { bindDeviceSelect, loadDevices, syncDeviceSelect } from "./devices";
 import { ago, describeAccess, heldModifiers, prettyShortcut, renderKeys, shortcutFromEvent, usd } from "./format";
+import { onPage, showPage } from "./nav";
 import { $, app, confirmDanger, notifyViewChange, onViewChange, save, toast } from "./store";
 import { renderOutputDevices } from "./notes-page";
 import { refreshRecentApps, setupStyles } from "./styles-panel";
 
 export type Tab = "geral" | "transcricao" | "limpeza" | "estilos" | "dados";
 
-const dialog = () => $<HTMLDialogElement>("settings");
 let models: Array<{ load: (refresh: boolean) => Promise<void>; loaded: boolean }> = [];
+/** Pára os captadores de atalho que estejam à espera de teclas (ao sair da página). */
+const shortcutStoppers: Array<() => void> = [];
 
-/** Abre o modal (opcionalmente num separador) e carrega as listas de modelos na primeira vez. */
-export function openSettings(tab: Tab = "geral") {
-  selectTab(tab);
-  if (!dialog().open) {
-    dialog().showModal();
-    // A cada abertura: entretanto podes ter ligado ou desligado um headset.
-    void loadDevices($<HTMLSelectElement>("input-device"));
-    void renderOutputDevices();
-  }
+/** Vai à página das definições, opcionalmente a um separador. */
+export function openSettings(tab?: Tab) {
+  if (tab) selectTab(tab);
+  showPage("config");
+}
+
+/** Quando a página aparece: as listas de dispositivos refrescam-se (entretanto podes ter
+ *  ligado ou desligado um headset) e as de modelos pedem-se na primeira vez. */
+function onShown() {
+  void loadDevices($<HTMLSelectElement>("input-device"));
+  void renderOutputDevices();
   for (const m of models) {
     if (!m.loaded) {
       m.loaded = true;
@@ -38,7 +42,7 @@ export function openSettings(tab: Tab = "geral") {
 }
 
 function selectTab(tab: Tab) {
-  for (const t of document.querySelectorAll<HTMLButtonElement>('#settings [role="tab"]')) {
+  for (const t of document.querySelectorAll<HTMLButtonElement>('#page-config [role="tab"]')) {
     const selected = t.id === `tab-${tab}`;
     t.setAttribute("aria-selected", String(selected));
     t.tabIndex = selected ? 0 : -1;
@@ -62,25 +66,24 @@ export function openKeySettings() {
 }
 
 function setupTabs() {
-  const tabs = [...document.querySelectorAll<HTMLButtonElement>('#settings [role="tab"]')];
+  const tabs = [...document.querySelectorAll<HTMLButtonElement>('#page-config [role="tab"]')];
   const idOf = (t: HTMLButtonElement) => t.id.slice(4) as Tab;
   for (const [i, t] of tabs.entries()) {
     t.addEventListener("click", () => selectTab(idOf(t)));
-    // Setas cima/baixo mudam de separador (padrão ARIA para tablist vertical).
+    // Setas esquerda/direita, Home e End mudam de separador (padrão ARIA para tablist horizontal).
     t.addEventListener("keydown", (e) => {
-      const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
-      if (!step) return;
+      const next =
+        e.key === "ArrowRight" ? tabs[(i + 1) % tabs.length]
+        : e.key === "ArrowLeft" ? tabs[(i - 1 + tabs.length) % tabs.length]
+        : e.key === "Home" ? tabs[0]
+        : e.key === "End" ? tabs[tabs.length - 1]
+        : null;
+      if (!next) return;
       e.preventDefault();
-      const next = tabs[(i + step + tabs.length) % tabs.length];
       selectTab(idOf(next));
       next.focus();
     });
   }
-  $("settings-close").addEventListener("click", () => dialog().close());
-  // Clicar no fundo escurecido (fora da caixa) também fecha.
-  dialog().addEventListener("click", (e) => {
-    if (e.target === dialog()) dialog().close();
-  });
 }
 
 // ---------------------------------------------------------------- atalho
@@ -131,7 +134,7 @@ function setupShortcut(
 
   const onKey = (e: KeyboardEvent) => {
     e.preventDefault();
-    e.stopPropagation(); // impede também que o Esc feche o modal
+    e.stopPropagation(); // o Esc cancela a captura e não chega a mais nada
     if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return stop();
     const shortcut = shortcutFromEvent(e);
     if (!shortcut) {
@@ -162,8 +165,8 @@ function setupShortcut(
     window.addEventListener("keyup", onKeyUp, true);
   });
 
-  // Fechar o modal a meio da gravação não pode deixar o teclado "capturado".
-  dialog().addEventListener("close", () => recordingShortcut === field && stop());
+  // Sair da página a meio da captura não pode deixar o teclado "capturado".
+  shortcutStoppers.push(() => recordingShortcut === field && stop());
 
   $(`${prefix}-reset`).addEventListener("click", async () => {
     error.hidden = true;
@@ -469,10 +472,16 @@ export function setupSettings(onHistoryCleared: () => void) {
   setupStyles();
   onViewChange(renderControls);
   renderControls();
-  // As listas de modelos só são pedidas quando o modal abre pela primeira vez.
+  // As listas de modelos só são pedidas quando a página aparece pela primeira vez.
   $("summary-reset").addEventListener("click", () => void save({ summary_model: "" }));
   models = [
     modelPicker("cleanup", "cleanup_model"),
     modelPicker("summary", "summary_model"),
   ];
+  onPage("config", {
+    show: onShown,
+    hide: () => {
+      for (const stop of shortcutStoppers) stop();
+    },
+  });
 }

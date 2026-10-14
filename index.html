@@ -15,27 +15,27 @@
           <strong>Ditok</strong>
         </div>
 
-        <button type="button" class="nav-link" data-page="inicio" aria-current="page">
+        <button type="button" class="nav-link" data-page="inicio" aria-current="page" title="Início">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1Z"/></svg>
-          Início
+          <span class="nav-label">Início</span>
         </button>
-        <button type="button" class="nav-link" data-page="dicionario">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v14H6.5A2.5 2.5 0 0 0 4 19.5Zm0 0A2.5 2.5 0 0 0 6.5 22H20v-5"/><path d="M9 8h6"/></svg>
-          Dicionário
-        </button>
-        <button type="button" class="nav-link" data-page="ficheiros">
+        <button type="button" class="nav-link" data-page="ficheiros" title="Ficheiros">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/><path d="M9 17v-4m3 4v-6m3 6v-3"/></svg>
-          Ficheiros
+          <span class="nav-label">Ficheiros</span>
           <span id="nav-file-progress" class="nav-badge" hidden></span>
         </button>
-        <button type="button" class="nav-link" data-page="notas">
+        <button type="button" class="nav-link" data-page="notas" title="Notas">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-          Notas
+          <span class="nav-label">Notas</span>
           <span id="nav-notes-rec" class="nav-badge rec" hidden>●</span>
         </button>
-        <button type="button" class="nav-link" data-page="metricas">
+        <button type="button" class="nav-link" data-page="dicionario" title="Dicionário">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v14H6.5A2.5 2.5 0 0 0 4 19.5Zm0 0A2.5 2.5 0 0 0 6.5 22H20v-5"/><path d="M9 8h6"/></svg>
+          <span class="nav-label">Dicionário</span>
+        </button>
+        <button type="button" class="nav-link" data-page="metricas" title="Métricas">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/></svg>
-          Métricas
+          <span class="nav-label">Métricas</span>
         </button>
 
         <div class="sidebar-bottom">
@@ -45,12 +45,12 @@
             <button id="update-install" type="button" class="primary small">Atualizar</button>
           </div>
 
-          <button type="button" id="open-settings" class="nav-link">
+          <button type="button" id="open-settings" class="nav-link" data-page="config" title="Definições">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
-            Definições
+            <span class="nav-label">Definições</span>
           </button>
 
-          <div class="sidebar-status">
+          <div class="sidebar-status" title="Estado do ditado">
             <span id="status-dot" class="dot"></span>
             <span id="status-text">A carregar…</span>
           </div>
@@ -65,10 +65,26 @@
           <header class="page-head">
             <h1 id="home-title" class="serif" tabindex="-1">Olá</h1>
             <ul class="stats" aria-label="Este mês">
-              <li><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><b id="s-count">—</b> ditados</li>
-              <li><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg><b id="s-words">—</b> palavras</li>
-              <li title="Tempo normal desde que largas o atalho até o texto aparecer"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg><b id="s-speed">—</b> até colar</li>
-              <li id="s-cost-item"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.4-1-1.6-1.7-3-1.7-1.7 0-3 .9-3 2.1 0 2.9 6 1.4 6 4.3 0 1.2-1.3 2.1-3 2.1-1.4 0-2.6-.7-3-1.7M12 6.3v1.5m0 8.4v1.5"/></svg><b id="s-cost">—</b> <span id="s-cost-of"></span>este mês</li>
+              <li>
+                <span class="stat-label"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Ditados</span>
+                <b id="s-count">—</b>
+                <span class="stat-sub">este mês</span>
+              </li>
+              <li>
+                <span class="stat-label"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Palavras</span>
+                <b id="s-words">—</b>
+                <span class="stat-sub">este mês</span>
+              </li>
+              <li title="Tempo normal desde que largas o atalho até o texto aparecer">
+                <span class="stat-label"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>Até colar</span>
+                <b id="s-speed">—</b>
+                <span class="stat-sub">tempo normal</span>
+              </li>
+              <li id="s-cost-item">
+                <span class="stat-label"><svg class="icon stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.4-1-1.6-1.7-3-1.7-1.7 0-3 .9-3 2.1 0 2.9 6 1.4 6 4.3 0 1.2-1.3 2.1-3 2.1-1.4 0-2.6-.7-3-1.7M12 6.3v1.5m0 8.4v1.5"/></svg>Custo</span>
+                <b id="s-cost">—</b>
+                <span class="stat-sub"><span id="s-cost-of"></span>este mês</span>
+              </li>
             </ul>
           </header>
 
@@ -77,8 +93,8 @@
             <button id="key-banner-open" type="button" class="primary small">Configurar</button>
           </div>
 
-          <div class="promo">
-            <div class="promo-text">
+          <div class="hero">
+            <div class="hero-text">
               <h2 class="serif">Segura <span id="promo-keys" class="keys"></span> e fala em qualquer app</h2>
               <p>Quando largas, escrevo onde estiver o cursor. Um toque rápido deixa-me a ouvir até voltares a carregar; <kbd>Esc</kbd> cancela.</p>
             </div>
@@ -243,7 +259,7 @@
             <h1 id="files-title" class="serif" tabindex="-1">Transcrever um ficheiro</h1>
             <p class="muted">
               A gravação de uma aula, uma reunião ou um vídeo. É partida nas pausas e enviada aos bocados à xAI,
-              de transcrição, vários ao mesmo tempo. Podes fechar a janela enquanto trabalha: aviso quando acabar.
+              vários ao mesmo tempo. Podes fechar a janela enquanto trabalha: aviso quando acabar.
             </p>
           </header>
 
@@ -541,43 +557,19 @@
           </div>
         </section>
 
-        <!-- Se as definições não chegarem no arranque, nada mais funciona: diz porquê. -->
-        <section id="boot-error" class="page empty boot-error" aria-labelledby="boot-error-title" hidden>
-          <img class="empty-mascot" alt="" width="88" height="80" />
-          <h1 id="boot-error-title" class="serif" tabindex="-1">Não consegui arrancar</h1>
-          <p class="muted">Não consegui ler as definições.</p>
-          <p id="boot-error-text" class="muted"></p>
-          <button id="boot-retry" type="button" class="primary">Tentar de novo</button>
-        </section>
-      </main>
-    </div>
+        <!-- ============================================================ Definições -->
+        <section id="page-config" class="page" aria-labelledby="settings-title" hidden>
+          <header class="page-head">
+            <h1 id="settings-title" class="serif" tabindex="-1">Definições</h1>
+          </header>
 
-    <!-- Aparece por cima de tudo enquanto arrastas um ficheiro para a janela. -->
-    <div id="drop-overlay" class="drop-overlay" hidden>
-      <div class="drop-overlay-box">
-        <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
-        <strong>Larga para transcrever</strong>
-      </div>
-    </div>
-
-    <!-- ============================================================ Definições (modal) -->
-    <dialog id="settings" aria-labelledby="settings-title">
-      <div class="dlg">
-        <nav class="dlg-nav">
-          <h2 id="settings-title" class="dlg-heading">Definições</h2>
-          <div role="tablist" aria-orientation="vertical" aria-label="Separadores das definições">
+          <div class="tabs" role="tablist" aria-orientation="horizontal" aria-label="Separadores das definições">
             <button type="button" role="tab" id="tab-geral" aria-controls="panel-geral" aria-selected="true">Geral</button>
             <button type="button" role="tab" id="tab-transcricao" aria-controls="panel-transcricao" aria-selected="false" tabindex="-1">xAI e custos</button>
-            <button type="button" role="tab" id="tab-limpeza" aria-controls="panel-limpeza" aria-selected="false" tabindex="-1">Limpeza com IA</button>
-            <button type="button" role="tab" id="tab-estilos" aria-controls="panel-estilos" aria-selected="false" tabindex="-1">Estilos por app</button>
-            <button type="button" role="tab" id="tab-dados" aria-controls="panel-dados" aria-selected="false" tabindex="-1">Dados e privacidade</button>
+            <button type="button" role="tab" id="tab-limpeza" aria-controls="panel-limpeza" aria-selected="false" tabindex="-1">Limpeza</button>
+            <button type="button" role="tab" id="tab-estilos" aria-controls="panel-estilos" aria-selected="false" tabindex="-1">Estilos</button>
+            <button type="button" role="tab" id="tab-dados" aria-controls="panel-dados" aria-selected="false" tabindex="-1">Dados</button>
           </div>
-        </nav>
-
-        <div class="dlg-body">
-          <button type="button" id="settings-close" class="icon-button dlg-close" aria-label="Fechar definições">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
-          </button>
 
           <!-- Geral -->
           <section role="tabpanel" id="panel-geral" aria-labelledby="tab-geral">
@@ -951,9 +943,26 @@
             </div>
             <p class="row-desc paths" id="paths"></p>
           </section>
-        </div>
+        </section>
+
+        <!-- Se as definições não chegarem no arranque, nada mais funciona: diz porquê. -->
+        <section id="boot-error" class="page empty boot-error" aria-labelledby="boot-error-title" hidden>
+          <img class="empty-mascot" alt="" width="88" height="80" />
+          <h1 id="boot-error-title" class="serif" tabindex="-1">Não consegui arrancar</h1>
+          <p class="muted">Não consegui ler as definições.</p>
+          <p id="boot-error-text" class="muted"></p>
+          <button id="boot-retry" type="button" class="primary">Tentar de novo</button>
+        </section>
+      </main>
+    </div>
+
+    <!-- Aparece por cima de tudo enquanto arrastas um ficheiro para a janela. -->
+    <div id="drop-overlay" class="drop-overlay" hidden>
+      <div class="drop-overlay-box">
+        <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+        <strong>Larga para transcrever</strong>
       </div>
-    </dialog>
+    </div>
 
     <!-- ============================================================ Guia de primeira execução
          Três passos (chave, microfone, experimentar) por cima da janela. Só um passo
@@ -982,6 +991,7 @@
             </p>
             <ol class="ob-howto">
               <li>Abre a <button id="ob-key-link" type="button" class="link">consola da xAI</button> (console.x.ai), entra em API Keys e cria uma chave.</li>
+              <li>Dá-lhe acesso a todos os serviços: a voz e o texto (limpeza, comandos, resumos) são permissões diferentes.</li>
               <li>Copia-a e cola-a aqui. Valido-a antes de a guardar.</li>
             </ol>
             <form id="ob-key-form" class="ob-key-form">
