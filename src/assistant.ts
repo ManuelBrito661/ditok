@@ -474,7 +474,7 @@ function renderChrome(v: AssistantView) {
   $("empty-screen").hidden = !v.screen_shortcut;
   if (v.screen_shortcut) renderKeys($("empty-screen-keys"), v.screen_shortcut);
   input().placeholder = v.attachment
-    ? "Pergunta sobre a captura… (Enter sem texto: explica)"
+    ? "Pergunta sobre a captura…"
     : v.conversation?.capture
       ? "Pergunta mais sobre a captura…"
       : "Escreve ou diz o que queres…";
