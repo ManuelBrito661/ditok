@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hotkey::{self, DEFAULT_COMMAND_SHORTCUT, DEFAULT_SHORTCUT},
+    hotkey::{self, DEFAULT_COMMAND_SHORTCUT, DEFAULT_SCREEN_SHORTCUT, DEFAULT_SHORTCUT},
     text::{Replacement, Snippet},
     xai::DEFAULT_CHAT_MODEL,
 };
@@ -30,6 +30,13 @@ pub struct Config {
     pub command_shortcut: String,
     /// Onde aparece a resposta do modo comando (ver `CommandOutput`).
     pub command_output: CommandOutput,
+    /// Perguntar sobre o ecrã (ver `screen/`): um atalho tira uma fotografia do ecrã, escolhes
+    /// a área, escreves ou dizes o que queres saber e a resposta abre no assistente. Desligado,
+    /// o atalho fica livre para outras apps, mas a escolha em `screen_shortcut` é guardada.
+    pub screen_enabled: bool,
+    pub screen_shortcut: String,
+    /// Modelo que vê as imagens das capturas do ecrã; vazio = o da limpeza (`cleanup_model`).
+    pub vision_model: String,
     /// ISO-639-1 (ex.: "pt"); `None` para deteção automática.
     pub language: Option<String>,
     /// Quanto o LLM mexe no texto (ver `cleanup.rs`). Substitui o antigo
@@ -225,6 +232,9 @@ impl Default for Config {
             command_enabled: true,
             command_shortcut: DEFAULT_COMMAND_SHORTCUT.to_owned(),
             command_output: CommandOutput::default(),
+            screen_enabled: true,
+            screen_shortcut: DEFAULT_SCREEN_SHORTCUT.to_owned(),
+            vision_model: String::new(),
             language: Some("pt".to_owned()),
             cleanup_level: CleanupLevel::Off,
             cleanup_model: DEFAULT_CHAT_MODEL.to_owned(),
@@ -287,8 +297,14 @@ pub enum ConfigError {
     TooManyStyles,
     #[error("o atalho de comando tem de ser diferente do atalho de ditado")]
     SameShortcut,
-    #[error("o atalho do histórico rápido tem de ser diferente dos de ditado e de comando")]
+    #[error("o atalho do histórico rápido tem de ser diferente dos outros atalhos do Ditok")]
     QuickShortcutClash,
+    #[error("o atalho de perguntar sobre o ecrã tem de ser diferente dos outros atalhos do Ditok")]
+    ScreenShortcutClash,
+    #[error(
+        "o modelo das capturas do ecrã tem de ser o nome de um modelo da xAI, sem espaços (ex.: {DEFAULT_CHAT_MODEL}), ou ficar vazio"
+    )]
+    VisionModel,
     #[error("a velocidade a escrever tem de estar entre 5 e 300 palavras por minuto")]
     TypingSpeed,
     #[error(
@@ -377,12 +393,25 @@ impl Config {
         if !(5..=300).contains(&self.typing_wpm) {
             return Err(ConfigError::TypingSpeed);
         }
+        let vision = self.vision_model.trim();
+        if !vision.is_empty() && !model_ok(vision) {
+            return Err(ConfigError::VisionModel);
+        }
         let quick = self.quick_history_shortcut.trim();
+        // Um atalho desligado não está registado, por isso pode repetir-se.
+        let screen = self.screen_enabled.then_some(self.screen_shortcut.as_str());
         if !quick.is_empty()
             && (hotkey::same_shortcut(quick, &self.shortcut)
-                || (self.command_enabled && hotkey::same_shortcut(quick, &self.command_shortcut)))
+                || (self.command_enabled && hotkey::same_shortcut(quick, &self.command_shortcut))
+                || screen.is_some_and(|s| hotkey::same_shortcut(quick, s)))
         {
             return Err(ConfigError::QuickShortcutClash);
+        }
+        if let Some(screen) = screen
+            && (hotkey::same_shortcut(screen, &self.shortcut)
+                || (self.command_enabled && hotkey::same_shortcut(screen, &self.command_shortcut)))
+        {
+            return Err(ConfigError::ScreenShortcutClash);
         }
         if self.styles.len() > MAX_STYLES {
             return Err(ConfigError::TooManyStyles);
@@ -409,6 +438,16 @@ impl Config {
         let model = self.summary_model.trim();
         if model.is_empty() {
             &self.cleanup_model
+        } else {
+            model
+        }
+    }
+
+    /// O modelo que vê as capturas do ecrã: o escolhido, ou o da limpeza se estiver vazio.
+    pub fn effective_vision_model(&self) -> &str {
+        let model = self.vision_model.trim();
+        if model.is_empty() {
+            self.cleanup_model.trim()
         } else {
             model
         }
@@ -770,6 +809,65 @@ mod tests {
             ..Config::default()
         };
         assert!(free.validate().is_ok());
+    }
+
+    #[test]
+    fn the_screen_shortcut_is_on_by_default_and_must_differ_from_the_others() {
+        let c = Config::default();
+        assert!(c.screen_enabled);
+        assert_eq!(c.screen_shortcut, DEFAULT_SCREEN_SHORTCUT);
+        assert!(c.validate().is_ok());
+        // Um config.json de antes da funcionalidade recebe os valores por omissão.
+        let old = Config::from_json(br#"{"sounds": false}"#).unwrap();
+        assert!(old.screen_enabled && old.screen_shortcut == DEFAULT_SCREEN_SHORTCUT);
+        assert!(old.vision_model.is_empty());
+
+        let clash_command = Config {
+            screen_shortcut: c.command_shortcut.clone(),
+            ..Config::default()
+        };
+        assert!(matches!(
+            clash_command.validate(),
+            Err(ConfigError::ScreenShortcutClash)
+        ));
+        let clash_dictation = Config {
+            screen_shortcut: c.shortcut.clone(),
+            ..Config::default()
+        };
+        assert!(matches!(
+            clash_dictation.validate(),
+            Err(ConfigError::ScreenShortcutClash)
+        ));
+        let clash_quick = Config {
+            quick_history_shortcut: c.screen_shortcut.clone(),
+            ..Config::default()
+        };
+        assert!(matches!(
+            clash_quick.validate(),
+            Err(ConfigError::QuickShortcutClash)
+        ));
+        // Desligado, o atalho não está registado: pode repetir-se.
+        let off = Config {
+            screen_enabled: false,
+            screen_shortcut: c.command_shortcut.clone(),
+            quick_history_shortcut: c.screen_shortcut.clone(),
+            ..Config::default()
+        };
+        assert!(off.validate().is_ok());
+    }
+
+    #[test]
+    fn the_vision_model_falls_back_to_the_cleanup_model() {
+        let mut c = Config::default();
+        assert_eq!(c.effective_vision_model(), DEFAULT_CHAT_MODEL);
+        c.vision_model = "  grok-4.7 ".into();
+        assert_eq!(c.effective_vision_model(), "grok-4.7");
+        assert!(c.validate().is_ok());
+        c.vision_model = "com espaços".into();
+        assert!(matches!(c.validate(), Err(ConfigError::VisionModel)));
+        c.vision_model = "   ".into();
+        assert!(c.validate().is_ok());
+        assert_eq!(c.effective_vision_model(), DEFAULT_CHAT_MODEL);
     }
 
     #[test]

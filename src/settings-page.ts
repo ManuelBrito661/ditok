@@ -90,7 +90,7 @@ function setupTabs() {
 // ---------------------------------------------------------------- atalho
 
 /** Qual dos captadores de atalho está à espera de teclas (só um de cada vez). */
-let recordingShortcut: "shortcut" | "command_shortcut" | "quick_history_shortcut" | null = null;
+let recordingShortcut: "shortcut" | "command_shortcut" | "screen_shortcut" | "quick_history_shortcut" | null = null;
 
 /** Mostra o atalho em teclas, ou "Nenhum" quando não há (o do histórico rápido começa assim). */
 function showShortcut(el: HTMLElement, shortcut: string) {
@@ -101,8 +101,8 @@ function showShortcut(el: HTMLElement, shortcut: string) {
 /** O captador de atalho ("Mudar" → prime a combinação), para o de ditado e o de
  *  comando. `prefix` é o início dos ids no HTML; `field`, o campo do Config. */
 function setupShortcut(
-  prefix: "shortcut" | "command-shortcut" | "quick-history",
-  field: "shortcut" | "command_shortcut" | "quick_history_shortcut",
+  prefix: "shortcut" | "command-shortcut" | "screen-shortcut" | "quick-history",
+  field: "shortcut" | "command_shortcut" | "screen_shortcut" | "quick_history_shortcut",
 ) {
   const button = $<HTMLButtonElement>(`${prefix}-record`);
   const display = $(`${prefix}-display`);
@@ -245,8 +245,9 @@ function price(m: ModelInfo): string {
   return `${perM(m.prompt_price)} / ${perM(m.completion_price)} por M tokens`;
 }
 
-/** Um seletor de modelos de texto com pesquisa (limpeza ou resumos). */
-function modelPicker(prefix: "cleanup" | "summary", field: "cleanup_model" | "summary_model") {
+/** Um seletor de modelos de texto com pesquisa (limpeza, resumos ou capturas do ecrã). Os das
+ *  capturas só mostram os que veem imagens. */
+function modelPicker(prefix: "cleanup" | "summary" | "vision", field: "cleanup_model" | "summary_model" | "vision_model") {
   const list = $<HTMLUListElement>(`${prefix}-models`);
   const search = $<HTMLInputElement>(`${prefix}-search`);
   const meta = $(`${prefix}-meta`);
@@ -254,13 +255,16 @@ function modelPicker(prefix: "cleanup" | "summary", field: "cleanup_model" | "su
 
   const render = () => {
     const current = app.view.config[field];
-    // Os resumos sem modelo próprio usam o da limpeza.
+    // Os resumos e as capturas sem modelo próprio usam o da limpeza.
     $(`${prefix}-current`).textContent = current
       ? `Atual: ${current}`
       : `Atual: o mesmo da limpeza (${app.view.config.cleanup_model})`;
     if (!data) return;
     const q = search.value.trim().toLowerCase();
-    const matches = data.models.filter((m) => !q || m.id.toLowerCase().includes(q));
+    // O escolhido não sai da lista das capturas só porque a lista (antiga) não diz que vê imagens.
+    const matches = data.models.filter(
+      (m) => (!q || m.id.toLowerCase().includes(q)) && (prefix !== "vision" || m.vision || m.id === current),
+    );
     // O modelo selecionado aparece sempre primeiro; depois os que não raciocinam (mais rápidos).
     matches.sort((a, b) => Number(b.id === current) - Number(a.id === current) || Number(a.reasoning) - Number(b.reasoning));
     // Se o foco estava na lista, volta para a opção selecionada depois de a redesenhar.
@@ -333,6 +337,7 @@ function renderControls() {
   const c = app.view.config;
   if (recordingShortcut !== "shortcut") renderKeys($("shortcut-display"), c.shortcut);
   if (recordingShortcut !== "command_shortcut") renderKeys($("command-shortcut-display"), c.command_shortcut);
+  if (recordingShortcut !== "screen_shortcut") renderKeys($("screen-shortcut-display"), c.screen_shortcut);
   if (recordingShortcut !== "quick_history_shortcut") showShortcut($("quick-history-display"), c.quick_history_shortcut);
   // Outra app ocupou o atalho: diz porquê ele não funciona até escolheres outro.
   $("shortcut-busy").hidden = app.view.shortcut_ok;
@@ -340,6 +345,9 @@ function renderControls() {
   $("command-shortcut-busy").hidden = !c.command_enabled || app.view.command_ok;
   // Desligado, o atalho fica à vista (e pode ser mudado), mas esbatido.
   $("command-shortcut-row").classList.toggle("is-off", !c.command_enabled);
+  $<HTMLInputElement>("screen-enabled").checked = c.screen_enabled;
+  $("screen-shortcut-busy").hidden = !c.screen_enabled || app.view.screen_ok;
+  $("screen-shortcut-row").classList.toggle("is-off", !c.screen_enabled);
   $("quick-history-busy").hidden = !c.quick_history_shortcut || app.view.quick_ok;
   syncDeviceSelect($<HTMLSelectElement>("input-device"));
   $<HTMLSelectElement>("language").value = c.language ?? "";
@@ -372,6 +380,7 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   checkbox("sounds", "sounds");
   checkbox("history-enabled", "history_enabled");
   checkbox("command-enabled", "command_enabled");
+  checkbox("screen-enabled", "screen_enabled");
   // Desligar apaga o áudio já guardado (commands.rs, save_settings): digo-o.
   $<HTMLInputElement>("keep-audio").addEventListener("change", async (e) => {
     const on = (e.target as HTMLInputElement).checked;
@@ -472,6 +481,7 @@ export function setupSettings(onHistoryCleared: () => void) {
   setupUpdates();
   setupShortcut("shortcut", "shortcut");
   setupShortcut("command-shortcut", "command_shortcut");
+  setupShortcut("screen-shortcut", "screen_shortcut");
   setupShortcut("quick-history", "quick_history_shortcut");
   setupKey();
   bindSimpleControls(onHistoryCleared);
@@ -480,9 +490,11 @@ export function setupSettings(onHistoryCleared: () => void) {
   renderControls();
   // As listas de modelos só são pedidas quando a página aparece pela primeira vez.
   $("summary-reset").addEventListener("click", () => void save({ summary_model: "" }));
+  $("vision-reset").addEventListener("click", () => void save({ vision_model: "" }));
   models = [
     modelPicker("cleanup", "cleanup_model"),
     modelPicker("summary", "summary_model"),
+    modelPicker("vision", "vision_model"),
   ];
   onPage("config", {
     show: onShown,

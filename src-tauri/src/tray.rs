@@ -6,9 +6,12 @@
 //! O mesmo menu abre com o clique direito no ícone e na pílula da barra
 //! (`overlay::popup_menu`). No Windows, o clique esquerdo no ícone abre a janela.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use serde::Serialize;
@@ -29,13 +32,18 @@ use crate::{
 
 const MENU_OPEN_SETTINGS: &str = "open_settings";
 const MENU_OPEN_ASSISTANT: &str = "open_assistant";
+const MENU_SCREEN: &str = "screen";
 const MENU_PASTE_LAST: &str = "paste_last";
 const MENU_RETRY: &str = "retry";
 const MENU_SHORTCUT: &str = "shortcut";
 const MENU_COMMAND: &str = "command";
 /// Onde fica a linha do atalho de comando: logo a seguir à do atalho de ditado
-/// (abrir, assistente, colar, tentar de novo, separador, atalho → posição 6).
-const COMMAND_POSITION: usize = 6;
+/// (abrir, assistente, perguntar sobre o ecrã, colar, tentar de novo, separador, atalho →
+/// posição 7).
+const COMMAND_POSITION: usize = 7;
+/// Quanto se espera, depois de escolher "Perguntar sobre o ecrã" no menu, antes de fotografar:
+/// o menu tem de ter acabado de fechar, para não sair na fotografia.
+const MENU_SETTLE: Duration = Duration::from_millis(250);
 const MENU_MUTE: &str = "mute";
 const MENU_RESET_OVERLAY: &str = "reset_overlay";
 const MENU_QUIT: &str = "quit";
@@ -86,6 +94,8 @@ impl TrayState {
 pub struct TrayMenu {
     menu: Menu<Wry>,
     shortcut: MenuItem<Wry>,
+    /// "Perguntar sobre o ecrã", com o atalho no texto; desativado com a opção desligada.
+    screen: MenuItem<Wry>,
     /// Só está no menu com o modo comando ligado (`command_shown`).
     command: MenuItem<Wry>,
     command_shown: AtomicBool,
@@ -131,6 +141,16 @@ pub fn sync_menu(app: &AppHandle, status: &Status, sounds: bool) {
     if let Err(e) = m.shortcut.set_text(text) {
         tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
     }
+    if let Err(e) = m
+        .screen
+        .set_text(screen_text(
+            status.screen_label.as_deref(),
+            status.screen_ok,
+        ))
+        .and_then(|()| m.screen.set_enabled(status.screen_label.is_some()))
+    {
+        tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
+    }
     // A linha do modo comando só aparece com ele ligado. `swap` devolve o valor
     // antigo: só se mexe no menu quando muda.
     let show = status.command_label.is_some();
@@ -167,6 +187,16 @@ pub fn sync_menu(app: &AppHandle, status: &Status, sounds: bool) {
     }
     if let Err(e) = m.mute.set_checked(!sounds) {
         tracing::warn!(error = %e, "não foi possível mudar o menu do tray");
+    }
+}
+
+/// O texto do item de perguntar sobre o ecrã: com o atalho, ou a dizer que está ocupado ou
+/// desligado.
+fn screen_text(label: Option<&str>, ok: bool) -> String {
+    match (label, ok) {
+        (Some(label), true) => format!("Perguntar sobre o ecrã ({label})"),
+        (Some(label), false) => format!("Perguntar sobre o ecrã (atalho ocupado: {label})"),
+        (None, _) => "Perguntar sobre o ecrã (desligado)".to_owned(),
     }
 }
 
@@ -226,6 +256,18 @@ impl Tray {
         let open = MenuItemBuilder::with_id(MENU_OPEN_SETTINGS, "Abrir o Ditok").build(app)?;
         let assistant =
             MenuItemBuilder::with_id(MENU_OPEN_ASSISTANT, "Abrir o assistente").build(app)?;
+        let screen = MenuItemBuilder::with_id(
+            MENU_SCREEN,
+            screen_text(
+                config
+                    .screen_enabled
+                    .then(|| hotkey::pretty(&config.screen_shortcut))
+                    .as_deref(),
+                true,
+            ),
+        )
+        .enabled(config.screen_enabled)
+        .build(app)?;
         // Desativado até haver um ditado para colar (o orquestrador ativa-o).
         let paste_last = MenuItemBuilder::with_id(MENU_PASTE_LAST, "Colar o último ditado")
             .enabled(false)
@@ -256,6 +298,7 @@ impl Tray {
         let menu = MenuBuilder::new(app)
             .item(&open)
             .item(&assistant)
+            .item(&screen)
             .item(&paste_last)
             .item(&retry)
             .separator()
@@ -292,6 +335,12 @@ impl Tray {
                     }
                     MENU_OPEN_ASSISTANT => {
                         crate::assistant::window::open(app);
+                    }
+                    MENU_SCREEN => {
+                        tracing::info!("menu: perguntar sobre o ecrã");
+                        let _ = events.send(DictationEvent::Screen {
+                            settle: MENU_SETTLE,
+                        });
                     }
                     MENU_PASTE_LAST => {
                         tracing::info!("menu: colar o último ditado");
@@ -338,6 +387,7 @@ impl Tray {
         app.manage(TrayMenu {
             menu,
             shortcut,
+            screen,
             command,
             command_shown: AtomicBool::new(false),
             mute,

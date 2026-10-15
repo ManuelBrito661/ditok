@@ -70,6 +70,16 @@ pub struct Message {
     pub spoken: bool,
 }
 
+/// A captura do ecrã com que a conversa começou (ver `screen/`). A imagem NÃO se guarda em
+/// disco, porque pode mostrar qualquer coisa que tenhas aberta: vive na memória enquanto a
+/// conversa está aberta (`Assistant`). Aqui fica só o que a descreve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capture {
+    /// Tamanho, em píxeis, da imagem que seguiu para o modelo.
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conversation {
     /// Só letras e algarismos: é o nome do ficheiro (ver `history::is_valid_id`).
@@ -86,6 +96,9 @@ pub struct Conversation {
     /// A app onde estavas ("whatsapp.exe"), se se soube qual era.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
+    /// A conversa é sobre uma captura do ecrã.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<Capture>,
     pub messages: Vec<Message>,
 }
 
@@ -98,8 +111,15 @@ impl Conversation {
             updated_at: now,
             selection,
             app,
+            capture: None,
             messages: Vec::new(),
         }
+    }
+
+    /// A conversa passa a ser sobre uma captura do ecrã.
+    pub fn with_capture(mut self, capture: Capture) -> Self {
+        self.capture = Some(capture);
+        self
     }
 
     /// Acrescenta uma mensagem e devolve-a. O título vem do primeiro pedido.
@@ -439,6 +459,33 @@ mod tests {
         assert!(
             raw.contains("\"stopped\"") && !raw.contains("\"done\""),
             "{raw}"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_capture_is_described_on_disk_but_the_image_is_not() {
+        let dir = tmp("capture");
+        let store = ChatStore::new(&dir);
+        let at = datetime!(2026-10-14 10:00 UTC);
+        let mut c = Conversation::new(at, None, Some("code.exe".into())).with_capture(Capture {
+            width: 1280,
+            height: 720,
+        });
+        c.push(Role::User, "o que quer dizer este erro?".into(), true, at);
+        save(&store, &c);
+        let raw = fs::read_to_string(dir.join("conversas").join(format!("{}.json", c.id))).unwrap();
+        assert!(
+            raw.contains("\"capture\":{\"width\":1280,\"height\":720}"),
+            "{raw}"
+        );
+        assert_eq!(store.load(&c.id).unwrap().capture, c.capture);
+        // Uma conversa antiga, sem o campo, continua a abrir.
+        let plain = conversation(at, "traduz", "Hello");
+        assert_eq!(plain.capture, None);
+        assert!(
+            !serde_json::to_string(&plain).unwrap().contains("capture"),
+            "sem captura, nada no ficheiro"
         );
         let _ = fs::remove_dir_all(dir);
     }

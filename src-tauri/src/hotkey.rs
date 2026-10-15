@@ -4,7 +4,7 @@
 
 use std::{
     sync::atomic::{AtomicU64, Ordering},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use tauri::{AppHandle, Runtime, plugin::TauriPlugin};
@@ -31,6 +31,9 @@ pub const LEGACY_SHORTCUT: &str = "CommandOrControl+Shift+Space";
 /// Windows só dispara um atalho se os modificadores forem exatamente os
 /// registados, por isso não se confunde com outros.
 pub const DEFAULT_COMMAND_SHORTCUT: &str = "CommandOrControl+Shift+Alt+Space";
+/// O de "perguntar sobre o ecrã" (ver `screen/`). Como o de comando, tem Shift e Alt para
+/// não coincidir com os atalhos das outras apps.
+pub const DEFAULT_SCREEN_SHORTCUT: &str = "CommandOrControl+Shift+Alt+KeyS";
 
 /// O `id()` do atalho de comando registado, ou `NO_COMMAND`. O handler do plugin
 /// corre noutra thread e só recebe o atalho premido: compara-o com isto para
@@ -38,6 +41,8 @@ pub const DEFAULT_COMMAND_SHORTCUT: &str = "CommandOrControl+Shift+Alt+Space";
 static COMMAND_ID: AtomicU64 = AtomicU64::new(NO_COMMAND);
 /// O mesmo para o atalho do histórico rápido.
 static QUICK_ID: AtomicU64 = AtomicU64::new(NO_COMMAND);
+/// O mesmo para o atalho de perguntar sobre o ecrã.
+static SCREEN_ID: AtomicU64 = AtomicU64::new(NO_COMMAND);
 /// Fora do intervalo de um `u32`, por isso nunca é o `id()` de um atalho.
 const NO_COMMAND: u64 = u64::MAX;
 
@@ -91,6 +96,13 @@ pub fn plugin<R: Runtime>(tx: UnboundedSender<DictationEvent>) -> TauriPlugin<R>
                     return;
                 }
                 DictationEvent::QuickHistory
+            } else if u64::from(shortcut.id()) == SCREEN_ID.load(Ordering::Relaxed) {
+                if !pressed {
+                    return;
+                }
+                DictationEvent::Screen {
+                    settle: Duration::ZERO,
+                }
             } else {
                 let mode = if u64::from(shortcut.id()) == COMMAND_ID.load(Ordering::Relaxed) {
                     Mode::Command
@@ -296,11 +308,51 @@ pub fn change_quick<R: Runtime>(
     old: Option<&str>,
     new: Option<&str>,
 ) -> Result<(), HotkeyError> {
+    change_key_only(app, old, new, &QUICK_ID, parse_quick)?;
+    tracing::info!(?old, ?new, "atalho do histórico rápido");
+    Ok(())
+}
+
+fn parse_quick(shortcut: &str) -> Result<Shortcut, HotkeyError> {
+    parse_key_only(shortcut, "o histórico rápido", "Ctrl+Shift+H")
+}
+
+/// Regista o atalho de perguntar sobre o ecrã (no arranque).
+pub fn register_screen<R: Runtime>(app: &AppHandle<R>, shortcut: &str) -> Result<(), HotkeyError> {
+    change_screen(app, None, Some(shortcut))
+}
+
+/// Troca o atalho de perguntar sobre o ecrã, como `change_quick`: `old` é o que está
+/// registado agora e `new` o que passa a estar (`None` = desligar).
+pub fn change_screen<R: Runtime>(
+    app: &AppHandle<R>,
+    old: Option<&str>,
+    new: Option<&str>,
+) -> Result<(), HotkeyError> {
+    change_key_only(app, old, new, &SCREEN_ID, parse_screen)?;
+    tracing::info!(?old, ?new, "atalho de perguntar sobre o ecrã");
+    Ok(())
+}
+
+fn parse_screen(shortcut: &str) -> Result<Shortcut, HotkeyError> {
+    parse_key_only(shortcut, "perguntar sobre o ecrã", "Ctrl+Shift+Alt+S")
+}
+
+/// A parte comum dos atalhos que só aceitam combinações com tecla: regista `new` antes de
+/// largar `old` (se falhar, fica tudo como estava) e guarda o `id` do novo em `slot`, que
+/// é o que o handler do plugin compara para saber que atalho foi premido.
+fn change_key_only<R: Runtime>(
+    app: &AppHandle<R>,
+    old: Option<&str>,
+    new: Option<&str>,
+    slot: &AtomicU64,
+    parse_new: fn(&str) -> Result<Shortcut, HotkeyError>,
+) -> Result<(), HotkeyError> {
     let old_key = old.and_then(parse_loose).and_then(|p| match p {
         Parsed::Key(key) => Some(key),
         Parsed::Mods(_) => None,
     });
-    let new_key = new.map(parse_quick).transpose()?;
+    let new_key = new.map(parse_new).transpose()?;
     if old_key == new_key {
         return Ok(());
     }
@@ -315,21 +367,23 @@ pub fn change_quick<R: Runtime>(
     if let Some(key) = old_key
         && let Err(e) = app.global_shortcut().unregister(key)
     {
-        tracing::warn!(error = %e, "não foi possível largar o atalho antigo do histórico rápido");
+        tracing::warn!(error = %e, "não foi possível largar o atalho antigo");
     }
-    let id = new_key.map_or(NO_COMMAND, |key| u64::from(key.id()));
-    QUICK_ID.store(id, Ordering::Relaxed);
-    tracing::info!(?old, ?new, "atalho do histórico rápido");
+    slot.store(
+        new_key.map_or(NO_COMMAND, |key| u64::from(key.id())),
+        Ordering::Relaxed,
+    );
     Ok(())
 }
 
-fn parse_quick(shortcut: &str) -> Result<Shortcut, HotkeyError> {
+fn parse_key_only(shortcut: &str, what: &str, example: &str) -> Result<Shortcut, HotkeyError> {
     match parse(shortcut)? {
         Parsed::Key(key) => Ok(key),
         Parsed::Mods(_) => Err(HotkeyError::Invalid {
             shortcut: shortcut.to_owned(),
-            reason: "o histórico rápido precisa de uma tecla (ex.: Ctrl+Shift+H), não só de modificadores"
-                .into(),
+            reason: format!(
+                "{what} precisa de uma tecla (ex.: {example}), não só de modificadores"
+            ),
         }),
     }
 }
@@ -481,6 +535,35 @@ mod tests {
         ));
         assert!(matches!(
             parse_quick("KeyH"),
+            Err(HotkeyError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn the_screen_shortcut_default_is_a_key_combination() {
+        assert!(parse(DEFAULT_SCREEN_SHORTCUT).is_ok());
+        assert!(parse_screen(DEFAULT_SCREEN_SHORTCUT).is_ok());
+        assert_eq!(
+            pretty(DEFAULT_SCREEN_SHORTCUT),
+            if cfg!(target_os = "macos") {
+                "Cmd+Shift+Option+S"
+            } else {
+                "Ctrl+Shift+Alt+S"
+            }
+        );
+        assert!(!same_shortcut(
+            DEFAULT_SCREEN_SHORTCUT,
+            DEFAULT_COMMAND_SHORTCUT
+        ));
+        assert!(!same_shortcut(DEFAULT_SCREEN_SHORTCUT, DEFAULT_SHORTCUT));
+        // Só modificadores não serve: ficaria a competir com o ditado.
+        let err = parse_screen("Control+Alt").unwrap_err().to_string();
+        assert!(
+            err.contains("perguntar sobre o ecrã precisa de uma tecla"),
+            "{err}"
+        );
+        assert!(matches!(
+            parse_screen("KeyS"),
             Err(HotkeyError::Invalid { .. })
         ));
     }

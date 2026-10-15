@@ -74,6 +74,12 @@ pub enum DictationEvent {
     PasteLast,
     /// O atalho do histórico rápido: abre o menu com os últimos ditados.
     QuickHistory,
+    /// O atalho de perguntar sobre o ecrã (ou o item do menu): fotografa o ecrã e abre a
+    /// janela de seleção, ou fecha-a se já estiver aberta. `settle`: quanto esperar antes de
+    /// fotografar, para um menu que acabou de fechar não sair na fotografia.
+    Screen {
+        settle: Duration,
+    },
     /// Um ditado escolhido no histórico rápido: cola-o onde estavas.
     PasteText(String),
     /// A colagem pedida por `PasteLast` acabou.
@@ -129,6 +135,10 @@ struct Orchestrator {
     /// começou, por isso o que dizes continua a conversa dela e não há seleção a copiar
     /// (um Ctrl+C ali copiaria da própria janela).
     follow_up: bool,
+    /// A janela de seleção da captura do ecrã estava aberta quando a gravação começou: o que
+    /// dizes é a pergunta sobre a captura e vai para a caixa de texto dela, em vez de ser
+    /// colado numa app (ver `pipeline::screen_prompt`). Vale para os dois atalhos.
+    into_screen: bool,
     /// O stream de transcrição do ditado (ou comando) em curso. Largá-lo fecha a
     /// ligação; ao parar passa para o processamento, que espera pelo texto final.
     live: Option<LiveSession>,
@@ -183,6 +193,7 @@ async fn run(
         target: focus::Target::default(),
         selection: None,
         follow_up: false,
+        into_screen: false,
         live: None,
         job: None,
         next_job: 0,
@@ -264,6 +275,16 @@ impl Orchestrator {
                     crate::quick_history::open(&app);
                 } else {
                     tracing::info!("histórico rápido pedido a meio de um ditado; ignorado");
+                }
+                return;
+            }
+            DictationEvent::Screen { settle } => {
+                // A meio de um ditado não se abre outra coisa; já aberta e a ditar a pergunta,
+                // o atalho também não a fecha por engano.
+                if self.machine.phase() == Phase::Idle {
+                    crate::screen::start(&app, settle);
+                } else {
+                    tracing::info!("captura do ecrã pedida a meio de um ditado; ignorada");
                 }
                 return;
             }
@@ -354,7 +375,11 @@ impl Orchestrator {
             crate::overlay::emit_latched(&app);
             // Modo comando alternado: a tecla acabou de ser largada, por isso é a
             // altura segura de copiar a seleção (ver `capture_selection`).
-            if self.machine.mode() == Mode::Command && self.selection.is_none() && !self.follow_up {
+            if self.machine.mode() == Mode::Command
+                && self.selection.is_none()
+                && !self.follow_up
+                && !self.into_screen
+            {
                 self.selection = Some(Selection::capture(app.clone(), self.target.window));
             }
         }
@@ -383,9 +408,11 @@ impl Orchestrator {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             let keyterms = xai::stt::keyterms(&config.dictionary);
             let session = xai.stream(config.language.clone(), keyterms, rx);
-            // O texto ao vivo só aparece no ditado: no comando, a pílula diz "Comando".
-            if mode == Mode::Dictation {
-                forward_partials(&app, session.partials.clone());
+            // O texto ao vivo só aparece no ditado: no comando, a pílula diz "Comando". Com a
+            // captura do ecrã aberta, aparece na caixa de pergunta dela (seja qual for o atalho).
+            self.into_screen = crate::screen::window::is_open(&app);
+            if mode == Mode::Dictation || self.into_screen {
+                forward_partials(&app, session.partials.clone(), self.into_screen);
             }
             self.live = Some(session);
             tx
@@ -397,7 +424,11 @@ impl Orchestrator {
         // O nome da app da janela já capturada (microssegundos; depois do
         // microfone para não o atrasar).
         self.target = focus::Target::of(window);
-        if let Some(app) = &self.target.app {
+        // Com a captura do ecrã aberta, a janela em foco é a do próprio Ditok: não serve de
+        // sugestão para os estilos por app.
+        if !self.into_screen
+            && let Some(app) = &self.target.app
+        {
             self.deps.state.note_app(app);
         }
         // A pílula mostra o estilo enquanto ouve, se não for o Predefinido. No
@@ -454,6 +485,14 @@ impl Orchestrator {
         let state = Arc::clone(&self.deps.state);
         let commit = Commit::default();
         let live = self.live.take();
+        if self.into_screen {
+            // A pergunta da captura do ecrã: o texto vai para a caixa dela, nada se cola.
+            self.selection = None;
+            self.spawn_job(commit.clone(), false, async move {
+                pipeline::screen_prompt(state, xai, recording, released_at, commit, live).await
+            });
+            return;
+        }
         if self.machine.mode() == Mode::Command {
             // Em modo alternar a seleção já foi copiada ao largar a tecla; a
             // segurar, copia-se agora (a tecla acabou de ser largada). Corre
@@ -681,14 +720,23 @@ impl Orchestrator {
 /// Quanto tempo se agrupam as atualizações do texto ao vivo antes de chegarem à barra.
 const PARTIAL_EVERY: Duration = Duration::from_millis(100);
 
-/// Leva o texto que o stream vai ouvindo à barra, no máximo ~10 vezes por segundo.
-/// Acaba sozinha quando o stream termina (o emissor é largado).
-fn forward_partials(app: &tauri::AppHandle, mut partials: tokio::sync::watch::Receiver<String>) {
+/// Leva o texto que o stream vai ouvindo à barra (ou, com `to_screen`, à caixa de pergunta
+/// da captura do ecrã), no máximo ~10 vezes por segundo. Acaba sozinha quando o stream
+/// termina (o emissor é largado).
+fn forward_partials(
+    app: &tauri::AppHandle,
+    mut partials: tokio::sync::watch::Receiver<String>,
+    to_screen: bool,
+) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         while partials.changed().await.is_ok() {
             let text = partials.borrow_and_update().clone();
-            crate::overlay::emit_partial(&app, &text);
+            if to_screen {
+                crate::screen::emit_partial(&app, &text);
+            } else {
+                crate::overlay::emit_partial(&app, &text);
+            }
             tokio::time::sleep(PARTIAL_EVERY).await;
         }
     });

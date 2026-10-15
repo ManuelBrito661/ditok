@@ -734,6 +734,35 @@
               </div>
             </div>
 
+            <h4 class="section-title">Perguntar sobre o ecrã</h4>
+            <p class="muted panel-intro">
+              Carrega no atalho: o ecrã "congela" e escolhes uma área (ou o ecrã todo). Escreve ou diz o que queres
+              saber ("o que quer dizer este erro?", "responde a este email") e a área segue para a xAI com a pergunta.
+              A resposta abre no assistente, onde continuas a conversa sobre a mesma imagem.
+            </p>
+            <div class="rows">
+              <label class="row switch">
+                <span class="row-text">
+                  <span class="row-title">Ligar perguntar sobre o ecrã</span>
+                  <span class="row-desc">Só vai à xAI a área que escolheres, e só depois de a enviares. A fotografia nunca é guardada em disco. Precisa de um modelo que veja imagens (em Limpeza com IA).</span>
+                </span>
+                <input id="screen-enabled" type="checkbox" role="switch" />
+              </label>
+              <div class="row" id="screen-shortcut-row">
+                <div class="row-text">
+                  <span id="screen-shortcut-label" class="row-title">Atalho de perguntar sobre o ecrã</span>
+                  <span class="row-desc">Uma combinação com tecla. Com a seleção aberta, o microfone do ditado (o botão, ou o atalho de ditado) escreve a pergunta na caixa; Esc cancela. No macOS, precisa da permissão "Gravação do ecrã".</span>
+                  <p id="screen-shortcut-busy" class="error" hidden>Outra app está a usar este atalho, por isso perguntar sobre o ecrã não funciona. Escolhe outro em "Mudar".</p>
+                  <p id="screen-shortcut-error" class="error" hidden></p>
+                </div>
+                <div class="row-control">
+                  <span id="screen-shortcut-display" class="keys" aria-labelledby="screen-shortcut-label"></span>
+                  <button id="screen-shortcut-record" type="button" class="secondary">Mudar</button>
+                  <button id="screen-shortcut-reset" type="button" class="ghost">Repor</button>
+                </div>
+              </div>
+            </div>
+
             <h4 class="section-title">Histórico rápido</h4>
             <p class="muted panel-intro">
               Um atalho abre um menu junto ao cursor com os últimos 9 ditados. Escolhe um (clique, setas e Enter, ou a
@@ -876,6 +905,23 @@
                 </div>
                 <ul id="summary-models" class="model-list" role="listbox" aria-label="Modelos de texto para os resumos"></ul>
                 <p class="row-desc" id="summary-meta"></p>
+              </div>
+              <div class="row stacked">
+                <div class="row-text">
+                  <span class="row-title">Modelo para capturas do ecrã</span>
+                  <span class="row-desc">
+                    Tem de ser um modelo que veja imagens (a lista só mostra esses). Serve a "Perguntar sobre o ecrã" e
+                    as perguntas seguintes sobre a mesma captura.
+                  </span>
+                  <span class="row-desc" id="vision-current"></span>
+                </div>
+                <div class="row-control">
+                  <input id="vision-search" type="search" placeholder="Pesquisar modelos…" aria-label="Pesquisar modelos para as capturas do ecrã" />
+                  <button id="vision-refresh" type="button" class="secondary">Atualizar lista</button>
+                  <button id="vision-reset" type="button" class="ghost">Usar o da limpeza</button>
+                </div>
+                <ul id="vision-models" class="model-list" role="listbox" aria-label="Modelos que veem imagens, para as capturas do ecrã"></ul>
+                <p class="row-desc" id="vision-meta"></p>
               </div>
             </div>
           </section>

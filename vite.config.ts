@@ -5,14 +5,16 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  // Três páginas: a janela principal (index.html), a barra flutuante (overlay.html) e o
-  // assistente (assistant.html). Cada uma só carrega o JS/CSS de que precisa.
+  // Quatro páginas: a janela principal (index.html), a barra flutuante (overlay.html), o
+  // assistente (assistant.html) e a seleção da captura do ecrã (screen.html). Cada uma só
+  // carrega o JS/CSS de que precisa.
   build: {
     rollupOptions: {
       input: {
         main: "index.html",
         overlay: "overlay.html",
         assistant: "assistant.html",
+        screen: "screen.html",
       },
     },
   },

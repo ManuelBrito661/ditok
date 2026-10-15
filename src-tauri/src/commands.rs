@@ -25,7 +25,7 @@ use crate::{
     history::{self, HistoryEntry, HistoryItem},
     hotkey,
     metrics::Stats,
-    overlay, paste, secrets, settings_window,
+    overlay, paste, screen, secrets, settings_window,
     state::{AppState, MISSING_KEY, Status},
     sysmem::{self, MemoryReport},
     updater::{self, UpdateInfo},
@@ -81,6 +81,8 @@ pub struct SettingsView {
     command_ok: bool,
     /// O atalho do histórico rápido está registado (ou não há atalho).
     quick_ok: bool,
+    /// O atalho de perguntar sobre o ecrã está registado (ou a opção está desligada).
+    screen_ok: bool,
     autostart: bool,
     paths: Paths,
 }
@@ -93,6 +95,7 @@ async fn settings_view(app: &AppHandle, state: &Arc<AppState>) -> CmdResult<Sett
         shortcut_ok: state.shortcut_ok(),
         command_ok: state.command_ok(),
         quick_ok: state.quick_ok(),
+        screen_ok: state.screen_ok(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         paths: Paths {
             config: Config::path(&state.config_dir).display().to_string(),
@@ -124,6 +127,14 @@ pub async fn save_settings(
             return Err(e.into());
         }
     };
+    let screen = match apply_screen_shortcut(&app, &state, &current, &config) {
+        Ok(screen) => screen,
+        Err(e) => {
+            command.undo(&app, &state);
+            quick.undo(&app, &state);
+            return Err(e.into());
+        }
+    };
     // O atalho estava a funcionar antes desta gravação? (Se não, o antigo não
     // está registado e não há nada para largar nem para repor.)
     let was_ok = state.shortcut_ok();
@@ -138,6 +149,7 @@ pub async fn save_settings(
         if let Err(e) = changed {
             command.undo(&app, &state);
             quick.undo(&app, &state);
+            screen.undo(&app, &state);
             return Err(e.into());
         }
         now_ok = true;
@@ -171,6 +183,7 @@ pub async fn save_settings(
         }
         command.undo(&app, &state);
         quick.undo(&app, &state);
+        screen.undo(&app, &state);
         if now_ok != was_ok {
             state.set_shortcut_ok(now_ok);
         }
@@ -260,54 +273,124 @@ fn apply_command_shortcut(
     })
 }
 
-/// O que `apply_quick_shortcut` mudou, para o poder desfazer (como `CommandChange`).
-struct QuickChange {
+/// Os atalhos extra que só aceitam uma combinação com tecla e se podem desligar.
+#[derive(Clone, Copy)]
+enum Extra {
+    Quick,
+    Screen,
+}
+
+impl Extra {
+    fn change(
+        self,
+        app: &AppHandle,
+        old: Option<&str>,
+        new: Option<&str>,
+    ) -> Result<(), hotkey::HotkeyError> {
+        match self {
+            Self::Quick => hotkey::change_quick(app, old, new),
+            Self::Screen => hotkey::change_screen(app, old, new),
+        }
+    }
+
+    fn ok(self, state: &AppState) -> bool {
+        match self {
+            Self::Quick => state.quick_ok(),
+            Self::Screen => state.screen_ok(),
+        }
+    }
+
+    fn set_ok(self, state: &AppState, ok: bool) {
+        match self {
+            Self::Quick => state.set_quick_ok(ok),
+            Self::Screen => state.set_screen_ok(ok),
+        }
+    }
+}
+
+/// O que `apply_extra_shortcut` mudou, para o poder desfazer (como `CommandChange`).
+struct ExtraChange {
+    which: Extra,
     /// Atalho registado antes e depois (`None` = nenhum).
     before: Option<String>,
     after: Option<String>,
     was_ok: bool,
 }
 
-impl QuickChange {
+impl ExtraChange {
     fn undo(&self, app: &AppHandle, state: &AppState) {
         if self.before != self.after
-            && let Err(e) = hotkey::change_quick(app, self.after.as_deref(), self.before.as_deref())
+            && let Err(e) = self
+                .which
+                .change(app, self.after.as_deref(), self.before.as_deref())
         {
-            tracing::warn!(error = %e, "não foi possível repor o atalho do histórico rápido");
+            tracing::warn!(error = %e, "não foi possível repor o atalho");
         }
-        state.set_quick_ok(self.was_ok);
+        self.which.set_ok(state, self.was_ok);
     }
 }
 
-/// O atalho do histórico rápido: vazio no config é "desligado". Como no comando,
-/// um atalho novo ocupado por outra app é um erro; o mesmo atalho, antes ocupado,
-/// só volta a ser tentado em silêncio.
+/// O atalho do histórico rápido: vazio no config é "desligado".
 fn apply_quick_shortcut(
     app: &AppHandle,
     state: &AppState,
     current: &Config,
     config: &Config,
-) -> Result<QuickChange, hotkey::HotkeyError> {
+) -> Result<ExtraChange, hotkey::HotkeyError> {
     let non_empty = |s: &str| Some(s.trim().to_owned()).filter(|s| !s.is_empty());
-    let was_ok = state.quick_ok();
-    let saved = non_empty(&current.quick_history_shortcut);
+    apply_extra_shortcut(
+        app,
+        state,
+        Extra::Quick,
+        non_empty(&current.quick_history_shortcut),
+        non_empty(&config.quick_history_shortcut),
+    )
+}
+
+/// O atalho de perguntar sobre o ecrã: desligado = sem atalho registado.
+fn apply_screen_shortcut(
+    app: &AppHandle,
+    state: &AppState,
+    current: &Config,
+    config: &Config,
+) -> Result<ExtraChange, hotkey::HotkeyError> {
+    let wanted = |c: &Config| {
+        c.screen_enabled
+            .then(|| c.screen_shortcut.trim().to_owned())
+            .filter(|s| !s.is_empty())
+    };
+    apply_extra_shortcut(app, state, Extra::Screen, wanted(current), wanted(config))
+}
+
+/// Liga, desliga ou troca um atalho extra, como o de comando: um atalho novo ocupado por
+/// outra app é um erro (a gravação falha e a janela diz porquê); o mesmo atalho, antes
+/// ocupado, só volta a ser tentado em silêncio. `saved` é o que está no config agora e
+/// `wanted` o que passa a estar.
+fn apply_extra_shortcut(
+    app: &AppHandle,
+    state: &AppState,
+    which: Extra,
+    saved: Option<String>,
+    wanted: Option<String>,
+) -> Result<ExtraChange, hotkey::HotkeyError> {
+    let was_ok = which.ok(state);
     // O que está mesmo registado agora: com o atalho ocupado, nada.
     let before = saved.clone().filter(|_| was_ok);
-    let wanted = non_empty(&config.quick_history_shortcut);
     let (after, now_ok) = if before == wanted {
         (before.clone(), was_ok || wanted.is_none())
     } else if wanted.is_some() && wanted == saved {
         // Estava ocupado e continua igual: tenta outra vez, sem erro se falhar.
-        match hotkey::change_quick(app, None, wanted.as_deref()) {
+        match which.change(app, None, wanted.as_deref()) {
             Ok(()) => (wanted, true),
             Err(_) => (None, false),
         }
     } else {
-        hotkey::change_quick(app, before.as_deref(), wanted.as_deref())?;
+        which.change(app, before.as_deref(), wanted.as_deref())?;
         (wanted, true)
     };
-    state.set_quick_ok(now_ok);
-    Ok(QuickChange {
+    which.set_ok(state, now_ok);
+    Ok(ExtraChange {
+        which,
         before,
         after,
         was_ok,
@@ -1300,4 +1383,53 @@ pub async fn assistant_apply(
 #[tauri::command]
 pub fn assistant_close(app: AppHandle) {
     assistant::window::close(&app);
+}
+
+/// A miniatura da captura de ecrã da conversa `id` (`data:image/jpeg;base64,…`), ou `null` se a
+/// conversa não a tem mais (uma conversa do histórico: a imagem nunca vai para o disco).
+#[tauri::command]
+pub fn assistant_capture(state: AppStateRef<'_>, id: String) -> Option<String> {
+    assistant::thumbnail(&state, &id)
+}
+
+// ---------------------------------------------------------------- perguntar sobre o ecrã (screen/)
+
+/// O que a janela de seleção precisa para se desenhar; `null` se a captura já não existe.
+#[tauri::command]
+pub fn screen_view(state: AppStateRef<'_>) -> Option<screen::View> {
+    screen::view(&state)
+}
+
+/// A fotografia do ecrã, em JPEG (binário, sem passar por base64).
+#[tauri::command]
+pub async fn screen_image(state: AppStateRef<'_>) -> CmdResult<tauri::ipc::Response> {
+    let state = Arc::clone(&state);
+    let bytes = blocking(move || screen::display_image(&state)).await??;
+    Ok(tauri::ipc::Response::new(bytes.as_ref().clone()))
+}
+
+/// A página desenhou a fotografia: mostra a janela.
+#[tauri::command]
+pub fn screen_ready(app: AppHandle) {
+    screen::reveal(&app);
+}
+
+/// Envia a área escolhida com a pergunta (`prompt` vazio = o pedido de sempre). `spoken`:
+/// a pergunta foi dita.
+#[tauri::command]
+pub async fn screen_submit(
+    state: AppStateRef<'_>,
+    prompt: String,
+    area: screen::shot::Area,
+    viewport: screen::shot::Viewport,
+    spoken: bool,
+) -> CmdResult<()> {
+    let state = Arc::clone(&state);
+    screen::submit(&state, prompt, area, viewport, spoken).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn screen_cancel(app: AppHandle) {
+    screen::cancel(&app);
 }

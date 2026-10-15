@@ -1,6 +1,6 @@
 # Ditok
 
-App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, notas de reuniões, métricas e definições. O modo comando tem ainda a sua mini-janela, o assistente, com conversa e histórico.
+App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, notas de reuniões, métricas e definições. O modo comando tem ainda a sua mini-janela, o assistente, com conversa e histórico, e podes **perguntar sobre o ecrã**: um atalho tira uma fotografia, escolhes uma área, escreves (ou dizes) o que queres saber e a área segue para a IA com a pergunta.
 
 Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. Tudo o que usa IA passa pelos modelos da [xAI](https://x.ai), com uma só chave: a transcrição (em tempo real enquanto falas), a limpeza do texto, o modo comando e os resumos.
 
@@ -14,6 +14,7 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. Tudo o que usa IA pass
 | Mover a barra | arrastar a pílula (fora dos botões) para outro sítio do ecrã |
 | Cancelar a gravação | **Esc** (ou o **✕** na barra) |
 | Modo comando | atalho próprio, ligado em **Definições → Geral** (ver abaixo) |
+| Perguntar sobre o ecrã | **Ctrl+Shift+Alt+S** (Mac: **⌘⇧⌥S**), ligado por omissão (ver [abaixo](#perguntar-sobre-o-ecrã)) |
 | Abrir o assistente | tray → **Abrir o assistente** (ver abaixo) |
 | Histórico rápido | atalho próprio, sem nenhum por omissão (ver abaixo) |
 
@@ -95,7 +96,7 @@ Em **Onde aparece a resposta** (também em Definições → Geral) podes voltar 
 
 Um popup sem moldura, de cantos arredondados e fundo ligeiramente translúcido (420×650), com a sua própria interface, onde o modo comando mostra a resposta. Segue o tema do sistema (claro ou escuro). Aparece junto ao canto direito do monitor onde estás, a meio da altura (para não tapar o texto que editas), fica por cima das outras apps e não ocupa lugar na barra de tarefas. Arrasta-se pela barra de cima e fecha-se com o ✕ ou com `Esc`.
 
-- **A resposta chega à medida que é escrita.** O botão da caixa de texto passa a **Parar**, e o que já veio fica. Por cima do primeiro pedido fica o texto que tinhas selecionado, numa citação que se abre com um clique.
+- **A resposta chega à medida que é escrita.** O botão da caixa de texto passa a **Parar**, e o que já veio fica. Por cima do primeiro pedido fica o texto que tinhas selecionado, numa citação que se abre com um clique (ou, numa pergunta sobre o ecrã, a miniatura da captura, que se abre com um clique).
 - **Por baixo de cada resposta:** **Copiar**, **Substituir seleção** (ou **Inserir no cursor**, se não havia seleção) e **Tentar de novo**. "Substituir" volta à app de onde deste o comando e cola lá a resposta (ver as limitações) e fecha o popup, para não ficar por cima do que acabaste de editar; a conversa fica no histórico. Os botões da última resposta estão sempre à vista; os das outras aparecem ao passar o rato. Um bloco de código tem o seu próprio **Copiar**.
 - **A conversa continua.** Escreve na caixa de texto ("mais curto", "em inglês", "porquê?") ou, com a janela em primeiro plano, carrega no atalho de comando e diz o pedido: nesse caso não se copia nenhuma seleção, o que dizes é mais uma mensagem da conversa. Um comando dado noutra app abre uma conversa nova.
 - **Histórico** (o botão ☰ ou `Ctrl+K`): as conversas agrupadas por dia (hoje, ontem, últimos 7 e 30 dias, mais antigas), com pesquisa no texto todo. Apagar pede um segundo clique, e **Apagar todas** também. A pesquisa não distingue maiúsculas.
@@ -104,6 +105,22 @@ Um popup sem moldura, de cantos arredondados e fundo ligeiramente translúcido (
 Fechar a janela não pára uma resposta a chegar nem perde a conversa: ela continua no Ditok e reabre-se em tray → **Abrir o assistente** (ou no próximo comando). As conversas ficam guardadas em `conversas\` na pasta de dados (um ficheiro por conversa, as últimas 200) **só com o histórico ligado** (Definições → Geral); desligado, a conversa só existe enquanto está aberta, e nada fica em disco. **Apagar histórico** (Definições → Dados) apaga também as conversas.
 
 Cada resposta custa o que a xAI cobrar ao modelo de texto, com o custo exato, e entra nas Métricas e no orçamento do mês. Numa conversa comprida seguem para o modelo as mensagens mais recentes (até ~48 mil caracteres); o primeiro pedido, com o texto selecionado, vai sempre. O texto selecionado é tratado como dados: uma instrução escrita lá dentro não é obedecida.
+
+### Perguntar sobre o ecrã
+
+Carrega no atalho (por omissão `Ctrl+Shift+Alt+S`, no Mac `⌘⇧⌥S`; muda-se, ou desliga-se, em **Definições → Geral**; também está no menu do tray, em **Perguntar sobre o ecrã**, e carregar outra vez no atalho fecha a seleção). O ecrã onde está o cursor "congela" e escolhes **o que queres mostrar** à IA e **o que queres saber**, tudo no mesmo sítio:
+
+1. **A área.** Arrasta um retângulo (depois podes movê-lo por dentro e ajustá-lo pelas pegas), ou escolhe o ecrã todo com um clique ou `Enter`. A etiqueta diz o tamanho, em píxeis, do que vai seguir.
+2. **A pergunta.** Aparece ao lado da área, para escreveres. Ou **dizes-a**: o botão do microfone, ou o atalho de ditado de sempre (`Ctrl+Win`, `Fn` no Mac), escreve o que dizes na caixa (com o texto a aparecer à medida que falas) em vez de o colar numa app. Podes juntar escrita e voz, e corrigir antes de enviar. Começar a escrever sem ter escolhido nada, ou a ditar, escolhe o ecrã todo.
+3. **Enviar.** `Enter` (ou o botão). Com a caixa vazia o botão diz **Explicar** e pergunta "o que se vê". `Esc`, o ✕ ou mudar de janela cancelam, e nada sai do computador.
+
+A resposta abre no [assistente](#o-assistente), que mostra a miniatura da captura por cima do pedido e **continua a conversa sobre a mesma imagem** ("e como se corrige?", "traduz o que lá diz"). Com **Inserir no cursor** passas a resposta para a app onde estavas.
+
+- **O que sai do computador.** Só a área escolhida, e só quando envias, para a xAI (o texto que lá estiver escrito é conteúdo a ler, nunca instruções: tal como com a seleção do modo comando, a IA não obedece ao que a imagem disser). O lado maior é reduzido a 2048 px; segue em PNG (ou em JPEG, se o PNG passar de 4 MB).
+- **A fotografia nunca vai para o disco.** Vive na memória enquanto a janela de seleção está aberta e a miniatura enquanto a conversa está aberta no assistente. Uma conversa reaberta do histórico guarda a pergunta e a resposta, mas diz que a captura já não está guardada.
+- **Modelo.** Tem de ver imagens. Por omissão é o da limpeza (**Definições → Limpeza → Modelo para capturas do ecrã** escolhe outro; a lista só mostra os que aceitam imagens). Se o modelo não as aceitar, a resposta diz-te onde mudar. O custo conta nas Métricas e no orçamento como o de qualquer resposta do assistente.
+- **Um monitor de cada vez**: o do cursor, quando carregas no atalho. Se o atalho estiver ocupado por outra app, as definições dizem-no.
+- **macOS**: precisa da permissão **Gravação do ecrã** (Definições do Sistema → Privacidade e Segurança). Sem ela, o macOS dá só o papel de parede; por isso o Ditok pergunta antes e, se faltar, pede-a e explica. Depois de a dar, fecha e abre o Ditok.
 
 ### Histórico rápido
 
@@ -163,6 +180,7 @@ Todos os modelos são da xAI, com uma única chave (criada em [console.x.ai](htt
 | Tentar de novo, reprocessar, ficheiros, notas | `grok-voice-transcribe-2.0` | `POST /v1/stt` com o áudio completo | 0,10 US$ por hora |
 | Separar oradores nas notas | `grok-voice-transcribe-2.0` | `POST /v1/stt` com `diarize=true` | 0,10 US$ por hora |
 | Limpeza, comandos, resumos | `grok-4.20-0309-non-reasoning` por omissão, à escolha | `POST /v1/chat/completions` | 1,25 / 2,50 US$ por milhão de tokens |
+| Perguntar sobre o ecrã | o da limpeza por omissão, ou um que veja imagens à escolha | `POST /v1/chat/completions` com a captura em `image_url` (base64) | o que a xAI cobrar, com a imagem em tokens de entrada |
 
 Como o Ditok tira partido de a xAI ser o único fornecedor:
 
@@ -228,7 +246,7 @@ O WebView2 corre com a aceleração por GPU desligada, o que poupa ~55 MB e não
 | `costs.json` | `%APPDATA%\com.manuelbrito.ditok\` | custo e número de ditados por mês |
 | `usage.json` | `%APPDATA%\com.manuelbrito.ditok\` | contagens de palavras por dia e por app (sem texto) |
 | `history.json` | `%APPDATA%\com.manuelbrito.ditok\` | texto dos últimos ditados (só se o histórico estiver ligado) |
-| `conversas\` | `%APPDATA%\com.manuelbrito.ditok\` | as conversas do assistente, um ficheiro cada, as últimas 200 (só se o histórico estiver ligado) |
+| `conversas\` | `%APPDATA%\com.manuelbrito.ditok\` | as conversas do assistente, um ficheiro cada, as últimas 200 (só se o histórico estiver ligado). Numa pergunta sobre o ecrã fica só o tamanho da captura, nunca a imagem |
 | `audio\` | `%APPDATA%\com.manuelbrito.ditok\` | o áudio dos últimos 20 ditados (só se a opção estiver ligada) |
 | `transcricoes\` | `%APPDATA%\com.manuelbrito.ditok\` | uma cópia do texto de cada ficheiro transcrito |
 | `notas\` | `%APPDATA%\com.manuelbrito.ditok\` | as sessões de reuniões: metadados, transcrição, resumo |
@@ -310,6 +328,8 @@ src-tauri/src/
   command.rs          modo comando: o prompt e a resposta sem janela (`command_output: paste`)
   assistant/          o assistente: conversa e streaming (mod.rs), conversas em disco (store.rs),
                       popup transparente (window.rs)
+  screen/             perguntar sobre o ecrã: sessão e envio (mod.rs), fotografia do monitor com o
+                      xcap (grab.rs), recorte e codificação (shot.rs), janela de seleção (window.rs)
   text.rs             comandos falados, dicionário e expansões (no computador)
   dict_io.rs          importar e exportar o dicionário (JSON, CSV, TXT)
   audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV,
@@ -347,6 +367,7 @@ src/
   onboarding.ts       guia de primeira execução
   assistant.ts, assistant-history.ts, assistant-text.ts, assistant-icons.ts, assistant.css
                       a janela do assistente (assistant.html)
+  screen.ts, screen.css   a seleção da captura do ecrã (screen.html)
   devices.ts          seletor de microfone (partilhado)
   summary.ts          resumos (Ficheiros e Notas)
   api.ts, store.ts, format.ts   tipos dos comandos, estado partilhado e formatação
@@ -367,6 +388,9 @@ O fundo do popup é translúcido, mas não desfocado: uma página web só desfoc
 
 ### Assistente: "Substituir" e a app de origem
 "Substituir" volta à app de onde deste o comando e cola lá a resposta. No Windows volta à **janela**; se a fechaste (ou se era uma app aberta como administrador), o texto fica no clipboard e o botão avisa. No macOS volta à **app** (pelo número do processo, porque as janelas não se verificam) e precisa da mesma permissão de Acessibilidade da colagem. Uma conversa que reabras do histórico, ou que comeces a escrever na própria janela, já não sabe de onde veio: só tem **Copiar**.
+
+### Perguntar sobre o ecrã: um monitor, e janelas protegidas
+Só se fotografa o monitor onde está o cursor. No Windows a fotografia é feita por GDI: o conteúdo que uma app protege (vídeo com DRM, algumas janelas de bancos) pode vir preto, como numa captura de ecrã normal. A fotografia é tirada no instante em que carregas no atalho: tudo o que estiver visível (um menu aberto, uma dica) sai nela, e o que se mexe (um vídeo) fica parado. No macOS é preciso a permissão **Gravação do ecrã** (ver acima), e a primeira vez o sistema pergunta.
 
 ### Esc durante a gravação
 Enquanto gravas, o Esc fica reservado ao Ditok para cancelar e não chega às outras apps. Fora da gravação não é intercetado.
