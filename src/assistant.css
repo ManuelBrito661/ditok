@@ -454,10 +454,11 @@ button { font: inherit; color: inherit; }
 }
 
 /* A captura do ecrã sobre que a conversa começou: uma tira que se abre com um clique. */
-.shot { align-self: stretch; margin: 0; }
+.shot { align-self: flex-start; margin: 0; }
+.shot.open { align-self: stretch; }
 .shot-toggle {
   display: block;
-  width: 100%;
+  width: 150px;
   padding: 0;
   border: 0;
   border-radius: var(--r-md);
@@ -473,10 +474,11 @@ button { font: inherit; color: inherit; }
   display: block;
   width: 100%;
   height: auto;
-  max-height: 132px;
+  max-height: 84px;
   object-fit: cover;
   object-position: top left;
 }
+.shot.open .shot-toggle { width: 100%; }
 .shot.open img { max-height: none; }
 .shot figcaption {
   margin-top: 6px;
