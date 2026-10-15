@@ -653,11 +653,21 @@ export interface ScreenArea {
   height: number;
 }
 
+/** Uma resposta binária do backend. Pelo canal rápido do Tauri chega como `ArrayBuffer`; quando o
+ *  WebView2 cai para o canal de reserva (postMessage) chega como uma lista de números, e um
+ *  `Blob` feito dessa lista seria o texto "255,216,…", não a imagem. */
+function toBytes(value: unknown): Uint8Array {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (Array.isArray(value)) return Uint8Array.from(value as number[]);
+  throw new Error(`resposta binária inesperada (${Object.prototype.toString.call(value)})`);
+}
+
 export const screen = {
   /** `null`: a captura já não existe. */
   view: () => invoke<ScreenView | null>("screen_view"),
   /** A fotografia do ecrã, em JPEG. */
-  image: () => invoke<ArrayBuffer>("screen_image"),
+  image: async () => toBytes(await invoke<unknown>("screen_image")),
   /** Já desenhei a fotografia: mostra a janela. */
   ready: () => invoke<void>("screen_ready"),
   /** Envia a área com a pergunta (vazia = "explica o que se vê"). `viewport`: o tamanho visível da

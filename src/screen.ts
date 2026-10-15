@@ -351,7 +351,12 @@ function dictateHint(label: string) {
 
 async function drawShot() {
   const bytes = await screen.image();
-  const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+  // Um JPEG começa por FF D8: se não, diz-se no registo o que chegou em vez de "could not be decoded".
+  if (bytes.length < 2 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+    const head = Array.from(bytes.subarray(0, 8), (b) => b.toString(16).padStart(2, "0")).join(" ");
+    throw new Error(`a fotografia não é um JPEG (${bytes.length} bytes, começa por ${head || "nada"})`);
+  }
+  const bitmap = await createImageBitmap(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
   const canvas = $<HTMLCanvasElement>("shot");
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
