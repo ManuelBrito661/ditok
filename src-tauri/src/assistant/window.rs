@@ -86,14 +86,15 @@ fn place(window: &WebviewWindow) {
         .ok()
         .and_then(|p| window.monitor_from_point(p.x, p.y).ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten());
-    let (Some(monitor), Ok(size)) = (monitor, window.outer_size()) else {
+    let Some(monitor) = monitor else {
         // Sem saber onde, fica onde o sistema o pôs.
         return;
     };
-    // Contas em píxeis físicos com a escala do monitor de destino.
+    // Contas em píxeis físicos com a escala do monitor de destino. O tamanho não se
+    // pergunta à janela: escondida, ainda não o tem (`outer_size` dá 0×0 em Linux).
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
-    let (width, height) = (f64::from(size.width), f64::from(size.height));
+    let (width, height) = (WIDTH * scale, HEIGHT * scale);
     let right = f64::from(area.position.x) + f64::from(area.size.width);
     let top = f64::from(area.position.y);
     let x = right - width + (MARGIN - EDGE) * scale;
