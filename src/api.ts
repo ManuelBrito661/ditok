@@ -608,6 +608,10 @@ export interface AssistantView {
   /** O atalho de perguntar sobre o ecrã, no formato do config; `null` com a opção desligada. */
   screen_shortcut: string | null;
   key_missing: boolean;
+  /** A captura do ecrã anexada, à espera da pergunta (vai com a próxima mensagem). */
+  attachment: { width: number; height: number; thumb: string } | null;
+  /** Texto ditado durante a captura, para pôr na caixa de texto (depois chama-se `takeDraft`). */
+  draft: string | null;
 }
 
 /** Uma linha da lista de conversas (assistant/store.rs, Summary). */
@@ -650,6 +654,10 @@ export const assistant = {
    *  voltar a ela e o texto ficou no clipboard. */
   apply: (messageId: string) => invoke<{ pasted: boolean }>("assistant_apply", { messageId }),
   close: () => invoke<void>("assistant_close"),
+  /** Tira a captura do ecrã anexada. */
+  dropAttachment: () => invoke<void>("assistant_drop_attachment"),
+  /** O texto ditado (`draft`) já está na caixa: o backend esquece-o. */
+  takeDraft: () => invoke<void>("assistant_take_draft"),
   /** A miniatura da captura de uma conversa (`data:image/jpeg;base64,…`); `null` se já não existe
    *  (a imagem só vive na memória, nunca no histórico). */
   capture: (id: string) => invoke<string | null>("assistant_capture", { id }),
@@ -675,8 +683,6 @@ export interface ScreenView {
   /** Tamanho, em píxeis, da fotografia. */
   width: number;
   height: number;
-  /** O atalho de ditar, legível ("Ctrl+Win"). */
-  dictate: string;
 }
 
 /** A área escolhida, em píxeis CSS da janela (screen/shot.rs, Area). */
@@ -704,38 +710,11 @@ export const screen = {
   image: async () => toBytes(await invoke<unknown>("screen_image")),
   /** Já desenhei a fotografia: mostra a janela. */
   ready: () => invoke<void>("screen_ready"),
-  /** Envia a área com a pergunta (vazia = "explica o que se vê"). `viewport`: o tamanho visível da
-   *  página, com que o backend converte a área em píxeis da fotografia. */
-  submit: (prompt: string, area: ScreenArea, viewport: { width: number; height: number }, spoken: boolean) =>
-    invoke<void>("screen_submit", { prompt, area, viewport, spoken }),
+  /** Anexa a área ao popup do assistente, onde se faz a pergunta, e fecha a seleção. `viewport`: o
+   *  tamanho visível da página, com que o backend converte a área em píxeis da fotografia. */
+  submit: (area: ScreenArea, viewport: { width: number; height: number }) =>
+    invoke<void>("screen_submit", { area, viewport }),
   cancel: () => invoke<void>("screen_cancel"),
   /** Conta ao ficheiro de registo o que correu mal na página. */
   report: (message: string) => invoke<void>("screen_report", { message }),
 };
-
-/// O que o microfone já ouviu, enquanto se fala (pipeline: forward_partials).
-export function onScreenPartial(handler: (text: string) => void): Promise<UnlistenFn> {
-  return listen<string>("screen:partial", (e) => handler(e.payload));
-}
-
-/// O texto final ditado, para acrescentar à caixa de pergunta (pipeline::screen_prompt).
-export function onScreenTranscript(handler: (text: string) => void): Promise<UnlistenFn> {
-  return listen<string>("screen:transcript", (e) => handler(e.payload));
-}
-
-/// O estado do microfone, o mesmo da pílula: idle | recording | processing | done | copied | failed | nothing-heard.
-export type MicState = "idle" | "recording" | "processing" | "done" | "copied" | "failed" | "nothing-heard";
-
-export function onMicState(handler: (state: MicState) => void): Promise<UnlistenFn> {
-  return listen<MicState>("overlay:state", (e) => handler(e.payload));
-}
-
-/// O nível do microfone entre 0 e 1, ~20 vezes por segundo.
-export function onMicLevel(handler: (level: number) => void): Promise<UnlistenFn> {
-  return listen<number>("overlay:level", (e) => handler(e.payload));
-}
-
-/// O motivo curto de uma falha do microfone ou da transcrição ("Sem rede"…).
-export function onMicFailure(handler: (label: string) => void): Promise<UnlistenFn> {
-  return listen<{ label: string; retry: boolean }>("overlay:failure", (e) => handler(e.payload.label));
-}

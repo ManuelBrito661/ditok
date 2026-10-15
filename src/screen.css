@@ -70,7 +70,7 @@ body { user-select: none; -webkit-user-select: none; }
   pointer-events: none;
   transition: opacity 160ms var(--ease);
 }
-.stage[data-mode="selected"]::before,
+.stage[data-mode="sending"]::before,
 .stage[data-mode="selecting"]::before { opacity: 0; }
 
 /* ---------------------------------------------------------------- a área */
@@ -81,7 +81,7 @@ body { user-select: none; -webkit-user-select: none; }
   box-shadow: 0 0 0 1px oklch(0 0 0 / 0.45), 0 0 0 99999px var(--dim);
   outline: 1.5px solid oklch(1 0 0 / 0.95);
   outline-offset: -1px;
-  cursor: move;
+  cursor: crosshair;
 }
 .stage[data-mode="selecting"] .sel { cursor: crosshair; }
 
@@ -98,32 +98,11 @@ body { user-select: none; -webkit-user-select: none; }
   white-space: nowrap;
   pointer-events: none;
 }
-/* O ecrã todo: sem moldura nem pegas (ficariam cortadas nas bordas). */
+/* O ecrã todo: sem moldura (ficaria cortada nas bordas). */
 .sel[data-full] { outline: none; box-shadow: none; cursor: default; }
-.sel[data-full] .handle { display: none; }
 /* Colada ao topo do ecrã, a etiqueta passa para dentro da área. */
 .sel[data-top] .size { bottom: auto; top: 6px; left: 6px; }
 
-.handle {
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  margin: -5px 0 0 -5px;
-  border-radius: 3px;
-  background: #fff;
-  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.5);
-}
-.stage[data-mode="selecting"] .handle { opacity: 0; }
-.handle[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
-.handle[data-h="n"]  { left: 50%; top: 0; cursor: ns-resize; }
-.handle[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
-.handle[data-h="e"]  { left: 100%; top: 50%; cursor: ew-resize; }
-.handle[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
-.handle[data-h="s"]  { left: 50%; top: 100%; cursor: ns-resize; }
-.handle[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
-.handle[data-h="w"]  { left: 0; top: 50%; cursor: ew-resize; }
-/* Mais área para agarrar do que o quadradinho que se vê. */
-.handle::after { content: ""; position: absolute; inset: -7px; }
 
 /* ---------------------------------------------------------------- dica e fechar */
 
@@ -148,7 +127,13 @@ body { user-select: none; -webkit-user-select: none; }
 .hint .line { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 10px; margin: 0; }
 .hint .sep { color: var(--faint); }
 .hint .line + .line { color: var(--faint); font-size: 12.5px; }
-.stage:not([data-mode="idle"]) .hint { opacity: 0; translate: -50% -8px; }
+.stage[data-mode="selecting"] .hint { opacity: 0; translate: -50% -8px; }
+/* A recortar a área: a dica dá lugar ao estado. */
+.stage[data-mode="sending"] { cursor: progress; }
+.stage[data-mode="sending"] .hint .line:not(.status) { display: none; }
+.hint .line.status { color: var(--text); font-size: 13px; }
+.hint .line.status[hidden] { display: none; }
+.hint .line.status.error { color: var(--danger-text); }
 
 kbd {
   display: inline-block;
@@ -180,125 +165,11 @@ kbd {
 }
 .close:hover { background: var(--surface); color: var(--text); }
 .close:active { scale: 0.92; }
-.close svg, .mic svg, .send svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.close svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .close svg { width: 16px; height: 16px; }
 
-button:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-/* ---------------------------------------------------------------- a pergunta */
-
-.ask {
-  position: absolute;
-  width: min(580px, calc(100vw - 32px));
-  padding: 10px 10px 8px;
-  border-radius: 18px;
-  background: var(--panel);
-  box-shadow: var(--sh-panel);
-  cursor: default;
-  user-select: text;
-  -webkit-user-select: text;
-  animation: rise 200ms var(--ease);
-}
-@keyframes rise { from { opacity: 0; translate: 0 6px; } }
-
-.ask textarea {
-  display: block;
-  width: 100%;
-  min-height: 44px;
-  max-height: 168px;
-  margin: 0;
-  padding: 8px 10px;
-  resize: none;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 15px;
-  line-height: 1.5;
-}
-.ask textarea::placeholder { color: var(--faint); }
-.ask textarea:focus-visible { outline: none; }
-.ask:focus-within { box-shadow: 0 0 0 1.5px var(--accent-soft), var(--sh-panel); }
-
-/* O que o microfone já ouviu, enquanto se fala. */
-.live {
-  margin: 0;
-  padding: 6px 10px 0;
-  max-height: 72px;
-  overflow: hidden;
-  color: var(--accent);
-  font-style: italic;
-}
-
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 2px 2px 0;
-}
-.status {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-.status:empty { display: none; }
-.status.error { color: var(--danger-text); }
-.status:not(:empty) + .keys-hint { display: none; }
-.keys-hint { flex: 1; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.keys-hint kbd { min-width: 0; padding: 0 5px; font-size: 11px; }
-
-.mic, .send {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 36px;
-  border: 0;
-  cursor: pointer;
-  font: inherit;
-  transition: background 120ms var(--ease), color 120ms var(--ease), scale 120ms var(--ease), box-shadow 120ms var(--ease);
-}
-.mic {
-  position: relative;
-  width: 36px;
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-}
-.mic:hover { background: var(--surface-2); color: var(--text); }
-.mic svg { width: 18px; height: 18px; }
-.mic:active, .send:active:not(:disabled) { scale: 0.94; }
-
-/* A ouvir: vermelho, com um anel que cresce com o volume da voz (--level, de 0 a 1). */
-.ask[data-mic="recording"] .mic {
-  background: var(--danger);
-  color: oklch(0.16 0.04 25);
-  box-shadow: 0 0 0 calc(2px + var(--level, 0) * 9px) var(--danger-soft);
-  transition: box-shadow 60ms linear, background 120ms var(--ease);
-}
-.ask[data-mic="processing"] .mic { background: var(--accent-soft); color: var(--accent); }
-.ask[data-mic="processing"] .mic svg { animation: pulse 900ms ease-in-out infinite; }
-@keyframes pulse { 50% { opacity: 0.35; } }
-
-.send {
-  padding: 0 14px 0 16px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-.send:hover:not(:disabled) { background: oklch(0.76 0.15 258); }
-.send svg { width: 16px; height: 16px; stroke-width: 2.2; }
-.send:disabled { background: var(--surface); color: var(--faint); cursor: default; }
-.ask[data-sending] { opacity: 0.85; pointer-events: none; }
+button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .ask { animation: none; }
-  .ask[data-mic="processing"] .mic svg { animation: none; }
   * { transition-duration: 0.01ms !important; }
 }

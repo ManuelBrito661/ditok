@@ -136,7 +136,7 @@ struct Orchestrator {
     /// (um Ctrl+C ali copiaria da própria janela).
     follow_up: bool,
     /// A janela de seleção da captura do ecrã estava aberta quando a gravação começou: o que
-    /// dizes é a pergunta sobre a captura e vai para a caixa de texto dela, em vez de ser
+    /// dizes é a pergunta sobre a captura e vai para a caixa de texto do assistente, em vez de ser
     /// colado numa app (ver `pipeline::screen_prompt`). Vale para os dois atalhos.
     into_screen: bool,
     /// O stream de transcrição do ditado (ou comando) em curso. Largá-lo fecha a
@@ -408,11 +408,11 @@ impl Orchestrator {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             let keyterms = xai::stt::keyterms(&config.dictionary);
             let session = xai.stream(config.language.clone(), keyterms, rx);
-            // O texto ao vivo só aparece no ditado: no comando, a pílula diz "Comando". Com a
-            // captura do ecrã aberta, aparece na caixa de pergunta dela (seja qual for o atalho).
+            // O texto ao vivo só aparece no ditado (e na pergunta da captura do ecrã): no
+            // comando, a pílula diz "Comando".
             self.into_screen = crate::screen::window::is_open(&app);
             if mode == Mode::Dictation || self.into_screen {
-                forward_partials(&app, session.partials.clone(), self.into_screen);
+                forward_partials(&app, session.partials.clone());
             }
             self.live = Some(session);
             tx
@@ -720,23 +720,14 @@ impl Orchestrator {
 /// Quanto tempo se agrupam as atualizações do texto ao vivo antes de chegarem à barra.
 const PARTIAL_EVERY: Duration = Duration::from_millis(100);
 
-/// Leva o texto que o stream vai ouvindo à barra (ou, com `to_screen`, à caixa de pergunta
-/// da captura do ecrã), no máximo ~10 vezes por segundo. Acaba sozinha quando o stream
+/// Leva o texto que o stream vai ouvindo à barra, no máximo ~10 vezes por segundo. Acaba sozinha quando o stream
 /// termina (o emissor é largado).
-fn forward_partials(
-    app: &tauri::AppHandle,
-    mut partials: tokio::sync::watch::Receiver<String>,
-    to_screen: bool,
-) {
+fn forward_partials(app: &tauri::AppHandle, mut partials: tokio::sync::watch::Receiver<String>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         while partials.changed().await.is_ok() {
             let text = partials.borrow_and_update().clone();
-            if to_screen {
-                crate::screen::emit_partial(&app, &text);
-            } else {
-                crate::overlay::emit_partial(&app, &text);
-            }
+            crate::overlay::emit_partial(&app, &text);
             tokio::time::sleep(PARTIAL_EVERY).await;
         }
     });

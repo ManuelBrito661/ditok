@@ -8,8 +8,10 @@
 //!   conversa nova, e com a janela em primeiro plano o que dizes continua a conversa
 //!   (`ask`, com `spoken`);
 //! - a caixa de texto da janela (`ask`);
-//! - uma captura do ecrã (`start_screen`, ver `screen/`): a imagem segue com o primeiro
-//!   pedido, e as perguntas seguintes falam dela. A imagem só vive na memória.
+//! - uma captura do ecrã (ver `screen/`): a área escolhida fica anexada à caixa de texto
+//!   (`attach_screen`) até escreveres ou dizeres a pergunta; aí abre uma conversa nova
+//!   (`start_screen`), a imagem segue com o primeiro pedido e as perguntas seguintes falam
+//!   dela. A imagem só vive na memória.
 //!
 //! A resposta chega em streaming (`Xai::chat_stream`): `assistant:stream` leva o texto
 //! até agora (no máximo ~12 vezes por segundo, sempre inteiro, para um evento perdido ou
@@ -222,6 +224,16 @@ struct Shot {
     thumb: Arc<Vec<u8>>,
 }
 
+/// Uma captura do ecrã já escolhida, à espera da pergunta: aparece por cima da caixa de texto
+/// e vai com o próximo pedido, que abre uma conversa nova sobre ela. Só na memória.
+struct Pending {
+    image: Image,
+    size: (u32, u32),
+    thumb: Vec<u8>,
+    app: Option<String>,
+    origin: Option<focus::Origin>,
+}
+
 /// A resposta que está a chegar.
 struct Run {
     id: u64,
@@ -236,6 +248,10 @@ struct Inner {
     current: Option<Conversation>,
     origin: Option<Origin>,
     shot: Option<Shot>,
+    /// A captura anexada que ainda não seguiu.
+    pending: Option<Pending>,
+    /// Texto ditado à espera de ir para a caixa de texto (ver `add_draft`).
+    draft: Option<String>,
     run: Option<Run>,
     next_run: u64,
 }
@@ -292,6 +308,19 @@ pub struct View {
     /// O atalho de "perguntar sobre o ecrã"; `None` com a opção desligada.
     screen_shortcut: Option<String>,
     key_missing: bool,
+    /// A captura anexada, à espera da pergunta.
+    attachment: Option<Attachment>,
+    /// Texto ditado para pôr na caixa de texto (a janela chama `take_draft` depois).
+    draft: Option<String>,
+}
+
+/// O que a janela mostra da captura anexada.
+#[derive(Debug, Clone, Serialize)]
+pub struct Attachment {
+    width: u32,
+    height: u32,
+    /// `data:image/jpeg;base64,…`
+    thumb: String,
 }
 
 /// O que já chegou de uma resposta (`assistant:stream`): tudo inteiro, nunca só o novo.
@@ -324,6 +353,12 @@ fn view_of(state: &AppState, inner: &Inner) -> View {
             .screen_enabled
             .then(|| config.screen_shortcut.clone()),
         key_missing: !state.key_set(),
+        attachment: inner.pending.as_ref().map(|p| Attachment {
+            width: p.size.0,
+            height: p.size.1,
+            thumb: format!("data:image/jpeg;base64,{}", STANDARD.encode(&p.thumb)),
+        }),
+        draft: inner.draft.clone(),
     }
 }
 
@@ -491,6 +526,64 @@ pub fn start_screen(state: &Arc<AppState>, start: ScreenStart) -> Result<(), Str
     Ok(())
 }
 
+/// O que a seleção do ecrã traz: a área escolhida, já pronta a enviar, e de onde veio.
+pub struct ScreenAttach {
+    pub image: Image,
+    pub size: (u32, u32),
+    /// A mesma área, pequena, para a janela a mostrar.
+    pub thumb: Vec<u8>,
+    pub app: Option<String>,
+    pub origin: Option<focus::Origin>,
+}
+
+/// A área do ecrã foi escolhida: abre o assistente com ela anexada à caixa de texto, à espera
+/// da pergunta. A conversa que estava aberta fica no histórico; a pergunta abre uma nova.
+pub fn attach_screen(state: &Arc<AppState>, attach: ScreenAttach) {
+    {
+        let mut inner = state.assistant.lock();
+        if halt(&mut inner) {
+            persist(state, &inner);
+        }
+        inner.current = None;
+        inner.forget_context();
+        inner.pending = Some(Pending {
+            image: attach.image,
+            size: attach.size,
+            thumb: attach.thumb,
+            app: attach.app,
+            origin: attach.origin,
+        });
+        emit_state(state, &inner);
+    }
+    window::open(&state.app);
+}
+
+/// Texto ditado enquanto se escolhia a área do ecrã: vai para a caixa de texto do assistente
+/// (junta-se ao que lá esteja à espera), onde o podes corrigir e enviar com a captura. Fica
+/// guardado até a janela o ir buscar (`take_draft`): pode chegar antes de ela abrir.
+pub fn add_draft(state: &AppState, text: &str) {
+    let mut inner = state.assistant.lock();
+    let draft = inner.draft.get_or_insert_with(String::new);
+    if !draft.is_empty() {
+        draft.push(' ');
+    }
+    draft.push_str(text.trim());
+    emit_state(state, &inner);
+}
+
+/// A janela pôs o texto ditado na caixa: esquece-o.
+pub fn take_draft(state: &AppState) {
+    state.assistant.lock().draft = None;
+}
+
+/// O ✕ da captura anexada: tira-a sem perguntar nada.
+pub fn drop_attachment(state: &AppState) {
+    let mut inner = state.assistant.lock();
+    if inner.pending.take().is_some() {
+        emit_state(state, &inner);
+    }
+}
+
 /// A miniatura da captura da conversa `id` (`data:image/jpeg;base64,…`), se a conversa é a
 /// aberta e a imagem ainda existe. Uma conversa aberta do histórico não a tem.
 pub fn thumbnail(state: &AppState, id: &str) -> Option<String> {
@@ -506,15 +599,34 @@ pub fn thumbnail(state: &AppState, id: &str) -> Option<String> {
 /// escrito na janela, ou dito com o modo comando enquanto ela está em primeiro plano.
 pub fn ask(state: &Arc<AppState>, text: String, spoken: bool) -> Result<(), String> {
     let text = text.trim().to_owned();
-    if text.is_empty() {
-        return Err("Escreve ou diz o que queres.".to_owned());
-    }
     if text.chars().count() > MAX_MESSAGE_CHARS {
         return Err(format!(
             "A mensagem tem demasiados carateres (o limite são {MAX_MESSAGE_CHARS})."
         ));
     }
     let mut inner = state.assistant.lock();
+    // Há uma captura anexada: este pedido é sobre ela, numa conversa nova (sem texto, o pedido
+    // de sempre). Se faltar a chave ou o modelo, a captura fica, para não se perder.
+    if inner.pending.is_some() {
+        ready(state, true)?;
+        let p = inner.pending.take().expect("acabou de se ver que existe");
+        drop(inner);
+        return start_screen(
+            state,
+            ScreenStart {
+                instruction: text,
+                spoken,
+                image: p.image,
+                size: p.size,
+                thumb: p.thumb,
+                app: p.app,
+                origin: p.origin,
+            },
+        );
+    }
+    if text.is_empty() {
+        return Err("Escreve ou diz o que queres.".to_owned());
+    }
     if inner.run.is_some() {
         return Err(BUSY.to_owned());
     }
@@ -852,6 +964,8 @@ pub fn open_conversation(state: &Arc<AppState>, id: &str) -> Result<(), String> 
     }
     inner.current = Some(conversation);
     inner.forget_context();
+    // Uma captura anexada era para uma conversa nova, não para esta.
+    inner.pending = None;
     emit_state(state, &inner);
     Ok(())
 }
@@ -869,6 +983,7 @@ fn discard_current(state: &AppState, inner: &mut Inner) -> Option<String> {
         run.handle.abort();
     }
     inner.forget_context();
+    inner.pending = None;
     let id = inner.current.take().map(|c| c.id);
     emit_state(state, inner);
     id
@@ -1291,6 +1406,8 @@ mod tests {
             command_shortcut: Some("Control+Alt+Space".into()),
             screen_shortcut: None,
             key_missing: false,
+            attachment: None,
+            draft: None,
         };
         let v = serde_json::to_value(&view).unwrap();
         assert_eq!(v["busy"], true);
@@ -1299,6 +1416,9 @@ mod tests {
         assert_eq!(v["conversation"]["messages"][0]["role"], "user");
         assert_eq!(v["conversation"]["messages"][0]["text"], "pede");
         assert!(v["screen_shortcut"].is_null());
+        // Sem captura anexada nem texto ditado à espera, a página recebe `null` (não falta o campo).
+        assert!(v["attachment"].is_null() && v.get("attachment").is_some());
+        assert!(v["draft"].is_null() && v.get("draft").is_some());
         assert!(v["conversation"]["messages"][0].get("status").is_none());
         assert!(v["conversation"].get("app").is_none());
     }

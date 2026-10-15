@@ -9,18 +9,14 @@
     <script type="module" src="/src/screen.ts" defer></script>
   </head>
   <body>
-    <!-- A fotografia do ecrã, "congelada" (desenhada por screen.ts). Por cima dela só há a escolha da
-         área e a pergunta: tudo o resto é o ecrã tal como estava quando carregaste no atalho. -->
+    <!-- A fotografia do ecrã, "congelada" (desenhada por screen.ts) só enquanto escolhes a área: ao
+         largar o rato, a área vai para o popup do assistente e esta janela fecha. -->
     <canvas id="shot" aria-hidden="true"></canvas>
 
     <div id="stage" class="stage" data-mode="idle">
-      <!-- A área escolhida. O que fica fora é escurecido (sombra gigante); as pegas só se
-           usam com o rato (o teclado escolhe o ecrã inteiro com Enter, ou escrevendo). -->
+      <!-- A área a ser escolhida. O que fica fora é escurecido (sombra gigante). -->
       <div id="sel" class="sel" hidden>
         <span id="size" class="size" aria-hidden="true"></span>
-        <i class="handle" data-h="nw"></i><i class="handle" data-h="n"></i><i class="handle" data-h="ne"></i>
-        <i class="handle" data-h="e"></i><i class="handle" data-h="se"></i><i class="handle" data-h="s"></i>
-        <i class="handle" data-h="sw"></i><i class="handle" data-h="w"></i>
       </div>
 
       <div id="hint" class="hint">
@@ -31,33 +27,13 @@
           <span class="sep" aria-hidden="true">·</span>
           <span><kbd>Esc</kbd> cancela</span>
         </p>
+        <p class="line">Depois perguntas no popup do assistente</p>
+        <p id="status" class="line status" role="status" aria-live="polite" hidden></p>
       </div>
 
       <button id="close" type="button" class="close" aria-label="Cancelar" title="Cancelar (Esc)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
       </button>
-
-      <!-- A pergunta: escreve-se, ou diz-se (o microfone é o do ditado, mas o texto vem para aqui). -->
-      <form id="ask" class="ask" role="group" aria-label="Pergunta sobre a captura" autocomplete="off" hidden>
-        <p id="live" class="live" aria-hidden="true" hidden></p>
-        <textarea id="prompt" rows="1" maxlength="8000" spellcheck="true" enterkeyhint="send"
-                  placeholder="Pergunta sobre esta área… (vazio: explica o que se vê)"
-                  aria-label="Pergunta sobre a área escolhida"></textarea>
-        <div class="bar">
-          <button id="mic" type="button" class="mic" aria-label="Ditar a pergunta" aria-pressed="false" title="Ditar a pergunta">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="9" y="3" width="6" height="11" rx="3" />
-              <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
-            </svg>
-          </button>
-          <span id="status" class="status" role="status" aria-live="polite"></span>
-          <span id="keys" class="keys-hint"><kbd>Enter</kbd> envia · <kbd>Esc</kbd> cancela</span>
-          <button id="send" type="submit" class="send">
-            <span>Enviar</span>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
-          </button>
-        </div>
-      </form>
     </div>
   </body>
 </html>

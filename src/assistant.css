@@ -585,6 +585,33 @@ kbd {
   cursor: pointer;
 }
 
+/* A captura do ecrã anexada, à espera da pergunta: por cima da caixa de texto. */
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 6px 6px 6px 6px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--sh-card);
+  animation: attach-in var(--t-base) var(--ease) both;
+}
+.attachment[hidden] { display: none; }
+.attachment img {
+  flex: none;
+  width: 64px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+  box-shadow: var(--ring);
+  background: var(--surface-2);
+}
+.attachment-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; font-size: 12.5px; }
+.attachment-text strong { font-weight: 600; color: var(--text); }
+.attachment-text span { color: var(--faint); font-variant-numeric: tabular-nums; }
+@keyframes attach-in { from { opacity: 0; translate: 0 6px; } }
+
 .composer {
   display: flex;
   align-items: flex-end;

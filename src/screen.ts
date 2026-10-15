@@ -1,21 +1,13 @@
-// A seleção da captura do ecrã: mostra a fotografia "congelada", deixa escolher uma área com o
-// rato (ou o ecrã todo com Enter) e escrever ou ditar a pergunta. O backend (src-tauri/src/screen/)
-// guarda a fotografia e faz o recorte: esta página só desenha e diz que área e que pergunta.
+// A seleção da captura do ecrã: mostra a fotografia "congelada" só enquanto escolhes a área com
+// o rato (ou o ecrã todo com Enter ou um clique). Ao largar o rato, a área segue anexada para o
+// popup do assistente, onde se escreve (ou dita) a pergunta, e esta janela fecha: o ecrã deixa
+// de estar congelado. O backend (src-tauri/src/screen/) guarda a fotografia e faz o recorte:
+// esta página só desenha e diz que área.
 //
 // A janela cobre o monitor inteiro e está por cima de tudo, por isso tem de se poder fechar de
 // várias maneiras: Esc, o ✕, ou perder o foco (o backend trata disso).
 
-import {
-  api,
-  errorText,
-  onMicFailure,
-  onMicLevel,
-  onMicState,
-  onScreenPartial,
-  onScreenTranscript,
-  screen,
-  type MicState,
-} from "./api";
+import { errorText, screen } from "./api";
 import { $ } from "./store";
 
 /** Uma caixa em píxeis CSS da janela. */
@@ -28,41 +20,20 @@ interface Box {
 
 /** Menos do que isto, arrastado, é um clique (e um clique escolhe o ecrã todo). */
 const MIN = 8;
-const MAX_PROMPT_PX = 168;
-/** Distância entre a área e a caixa de pergunta. */
-const GAP = 12;
-const EDGE = 16;
 
-type Mode = "idle" | "selecting" | "selected";
-type Drag =
-  | { kind: "new"; ox: number; oy: number }
-  | { kind: "move"; px: number; py: number; start: Box }
-  | { kind: "resize"; handle: string; start: Box };
+type Mode = "idle" | "selecting" | "sending";
 
 let mode: Mode = "idle";
 let box: Box | null = null;
-let drag: Drag | null = null;
+/** Onde o arrasto começou (`null` sem botão premido). */
+let origin: { x: number; y: number } | null = null;
 let imageSize = { width: 1, height: 1 };
-let viewport = { width: window.innerWidth, height: window.innerHeight };
-let mic: MicState = "idle";
-let micFailure = "";
-/** A pergunta teve voz (o assistente marca-a como dita). */
-let spoken = false;
-let sending = false;
 let closing = false;
 
 const stage = () => $("stage");
 const selEl = () => $("sel");
-const askEl = () => $<HTMLFormElement>("ask");
-const promptEl = () => $<HTMLTextAreaElement>("prompt");
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  return node;
-}
 
 // ---------------------------------------------------------------- a área
 
@@ -79,208 +50,78 @@ function setMode(next: Mode) {
   stage().dataset.mode = next;
 }
 
-/** Desenha a área e põe a caixa de pergunta no sítio. */
+/** Desenha a área e o tamanho que segue para o modelo. */
 function paint() {
   const sel = selEl();
   sel.hidden = !box;
   if (!box) return;
   Object.assign(sel.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` });
-  // O ecrã todo escolhido: sem dimming nem pegas (não há nada a escurecer nem a ajustar).
+  // O ecrã todo escolhido: sem dimming (não há nada a escurecer).
   sel.toggleAttribute("data-full", box.w >= window.innerWidth - 1 && box.h >= window.innerHeight - 1);
-  // O tamanho que segue para o modelo, em píxeis da fotografia (não da janela).
+  // A etiqueta passa para dentro da área quando não cabe por cima.
+  sel.toggleAttribute("data-top", box.y < 32);
+  // Em píxeis da fotografia (não da janela).
   const rx = imageSize.width / window.innerWidth;
   const ry = imageSize.height / window.innerHeight;
   $("size").textContent = `${Math.round(box.w * rx)} × ${Math.round(box.h * ry)}`;
-  layoutAsk();
-}
-
-/** A caixa de pergunta fica por baixo da área; sem espaço, por cima; sem espaço nenhum (o ecrã
- *  todo), dentro dela, junto ao fundo. A etiqueta do tamanho passa para dentro da área quando
- *  não cabe por cima. */
-function layoutAsk() {
-  const ask = askEl();
-  if (!box || ask.hidden) return;
-  const w = ask.offsetWidth;
-  const h = ask.offsetHeight;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const x = clamp(box.x + box.w / 2 - w / 2, EDGE, Math.max(EDGE, vw - w - EDGE));
-  let y: number;
-  let labelInside = box.y < 32;
-  if (box.y + box.h + GAP + h + EDGE <= vh) {
-    y = box.y + box.h + GAP;
-  } else if (box.y - GAP - h - 34 >= EDGE) {
-    y = box.y - GAP - h - 34;
-    labelInside = true;
-  } else {
-    y = vh - h - 28;
-    labelInside = true;
-  }
-  Object.assign(ask.style, { left: `${x}px`, top: `${Math.max(EDGE, y)}px` });
-  selEl().toggleAttribute("data-top", labelInside);
-}
-
-function showAsk() {
-  const ask = askEl();
-  if (ask.hidden) {
-    ask.hidden = false;
-    updateSend();
-    autosize();
-  }
-}
-
-/** A área está escolhida: mostra a pergunta e dá-lhe o foco. */
-function settle() {
-  setMode("selected");
-  showAsk();
-  paint();
-  promptEl().focus({ preventScroll: true });
-}
-
-function selectAll() {
-  box = { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
-  settle();
-}
-
-// ---------------------------------------------------------------- rato
-
-const insideBox = (b: Box, x: number, y: number) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
-
-function onPointerDown(e: PointerEvent) {
-  if (e.button !== 0 || sending) return;
-  const target = e.target as HTMLElement;
-  if (askEl().contains(target) || target.closest("#close")) return;
-  stage().setPointerCapture(e.pointerId);
-  const handle = target.closest<HTMLElement>(".handle")?.dataset.h;
-  if (box && handle) drag = { kind: "resize", handle, start: { ...box } };
-  else if (box && insideBox(box, e.clientX, e.clientY)) drag = { kind: "move", px: e.clientX, py: e.clientY, start: { ...box } };
-  else drag = { kind: "new", ox: e.clientX, oy: e.clientY };
-}
-
-function onPointerMove(e: PointerEvent) {
-  if (!drag) return;
-  const x = e.clientX;
-  const y = e.clientY;
-  if (drag.kind === "new") {
-    // Só passa a ser uma seleção quando o rato se afasta um pouco: um clique não pisca.
-    if (mode !== "selecting" && Math.hypot(x - drag.ox, y - drag.oy) < 3) return;
-    setMode("selecting");
-    askEl().hidden = true;
-    box = fromCorners(drag.ox, drag.oy, x, y);
-  } else if (drag.kind === "move") {
-    const s = drag.start;
-    box = {
-      ...s,
-      x: clamp(s.x + x - drag.px, 0, window.innerWidth - s.w),
-      y: clamp(s.y + y - drag.py, 0, window.innerHeight - s.h),
-    };
-  } else {
-    const s = drag.start;
-    let [l, t, r, b] = [s.x, s.y, s.x + s.w, s.y + s.h];
-    const cx = clamp(x, 0, window.innerWidth);
-    const cy = clamp(y, 0, window.innerHeight);
-    if (drag.handle.includes("w")) l = cx;
-    if (drag.handle.includes("e")) r = cx;
-    if (drag.handle.includes("n")) t = cy;
-    if (drag.handle.includes("s")) b = cy;
-    box = fromCorners(l, t, r, b);
-  }
-  paint();
-}
-
-function onPointerUp(e: PointerEvent) {
-  if (!drag) return;
-  const finished = drag;
-  drag = null;
-  if (stage().hasPointerCapture(e.pointerId)) stage().releasePointerCapture(e.pointerId);
-  if (finished.kind === "new") {
-    // Um clique, ou um arrasto minúsculo: o ecrã todo.
-    if (!box || mode !== "selecting" || box.w < MIN || box.h < MIN) return selectAll();
-  } else if (box && (box.w < MIN || box.h < MIN)) {
-    box = finished.start;
-  }
-  settle();
-}
-
-// ---------------------------------------------------------------- a pergunta
-
-function autosize() {
-  const field = promptEl();
-  field.style.height = "auto";
-  field.style.height = `${Math.min(field.scrollHeight, MAX_PROMPT_PX)}px`;
-  layoutAsk();
-}
-
-/** Sem texto, o botão diz o que vai acontecer: pede-se uma explicação. */
-function updateSend() {
-  const empty = promptEl().value.trim() === "";
-  $("send").firstElementChild!.textContent = empty ? "Explicar" : "Enviar";
 }
 
 function say(text: string, isError = false) {
   const status = $("status");
   status.textContent = text;
+  status.hidden = text === "";
   status.classList.toggle("error", isError);
 }
 
-function micBusy() {
-  return mic === "recording" || mic === "processing";
-}
-
-/** O que o microfone está a fazer, na linha de estado e no botão. */
-function renderMic() {
-  const ask = askEl();
-  if (micBusy()) ask.dataset.mic = mic;
-  else delete ask.dataset.mic;
-  const button = $<HTMLButtonElement>("mic");
-  button.setAttribute("aria-pressed", String(mic === "recording"));
-  // Depois de uma falha, um clique na pílula do Ditok "tentava de novo" o ditado antigo: durante
-  // esses segundos o botão espera.
-  button.disabled = mic === "failed";
-  if (mic === "recording") say("A ouvir… clica no microfone para parar.");
-  else if (mic === "processing") say("A transcrever…");
-  else if (mic === "failed") say(micFailure ? `Falhou: ${micFailure}` : "O microfone falhou.", true);
-  else if (mic === "nothing-heard") say("Não ouvi nada.");
-  else if (!sending) say("");
-  if (!micBusy()) {
-    $("live").hidden = true;
-    ask.style.removeProperty("--level");
-  }
-  layoutAsk();
-}
-
-function onTranscript(text: string) {
-  spoken = true;
-  if (!box) selectAll();
-  const field = promptEl();
-  const before = field.value.trimEnd();
-  field.value = before ? `${before} ${text}` : text;
-  $("live").hidden = true;
-  autosize();
-  updateSend();
-  field.focus({ preventScroll: true });
-  field.setSelectionRange(field.value.length, field.value.length);
-}
-
-async function submit() {
-  if (!box || sending || closing) return;
-  if (micBusy()) return say("Espera que a gravação acabe.");
-  sending = true;
-  askEl().dataset.sending = "";
-  say("A enviar…");
+/** Anexa a área ao assistente. A janela fecha-se sozinha; se falhar, fica aberta com o motivo
+ *  e dá para escolher outra vez. */
+async function send() {
+  if (!box || mode === "sending" || closing) return;
+  setMode("sending");
+  paint();
+  say("A preparar a captura…");
   try {
     await screen.submit(
-      promptEl().value.trim(),
       { x: box.x, y: box.y, width: box.w, height: box.h },
       { width: window.innerWidth, height: window.innerHeight },
-      spoken,
     );
-    // A janela fecha-se sozinha (e o assistente abre-se com a resposta).
   } catch (e) {
-    sending = false;
-    delete askEl().dataset.sending;
+    setMode("idle");
     say(errorText(e), true);
   }
+}
+
+function selectAll() {
+  box = { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+  void send();
+}
+
+// ---------------------------------------------------------------- rato
+
+function onPointerDown(e: PointerEvent) {
+  if (e.button !== 0 || mode === "sending") return;
+  if ((e.target as HTMLElement).closest("#close")) return;
+  stage().setPointerCapture(e.pointerId);
+  origin = { x: e.clientX, y: e.clientY };
+  say("");
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!origin) return;
+  // Só passa a ser uma seleção quando o rato se afasta um pouco: um clique não pisca.
+  if (mode !== "selecting" && Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < 3) return;
+  setMode("selecting");
+  box = fromCorners(origin.x, origin.y, e.clientX, e.clientY);
+  paint();
+}
+
+function onPointerUp(e: PointerEvent) {
+  if (!origin) return;
+  origin = null;
+  if (stage().hasPointerCapture(e.pointerId)) stage().releasePointerCapture(e.pointerId);
+  // Um clique, ou um arrasto minúsculo: o ecrã todo.
+  if (!box || mode !== "selecting" || box.w < MIN || box.h < MIN) return selectAll();
+  void send();
 }
 
 async function cancel() {
@@ -297,57 +138,21 @@ function onKey(e: KeyboardEvent) {
     void cancel();
     return;
   }
-  // Uma tecla do atalho ainda em baixo (a repetir) quando a janela abre não é uma pergunta.
-  if (e.isComposing || e.repeat || sending) return;
-  const inButton = (e.target as HTMLElement).closest("button");
-  if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    if (inButton) return; // Enter num botão carrega nele
+  // Uma tecla do atalho ainda em baixo (a repetir) quando a janela abre não conta.
+  if (e.isComposing || e.repeat || mode === "sending") return;
+  if (e.key === "Enter" && !(e.target as HTMLElement).closest("button")) {
     e.preventDefault();
-    if (box) void submit();
-    else selectAll();
-    return;
-  }
-  // Começar a escrever sem ter escolhido nada: o ecrã todo, e a letra vai para a pergunta.
-  if (!box && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
     selectAll();
   }
 }
 
-/** Tira o menu do WebView (Anterior, Atualizar, Imprimir…). Fica na caixa de texto e em `tauri dev`. */
+/** Tira o menu do WebView (Anterior, Atualizar, Imprimir…). Fica em `tauri dev`. */
 function blockContextMenu() {
   if (import.meta.env.DEV) return;
-  document.addEventListener("contextmenu", (e) => {
-    if ((e.target as HTMLElement).closest("textarea")) return;
-    e.preventDefault();
-  });
-}
-
-function onResize() {
-  // A janela passou a ecrã inteiro depois de criada: o que estava escolhido acompanha.
-  if (box && viewport.width > 0 && viewport.height > 0) {
-    const sx = window.innerWidth / viewport.width;
-    const sy = window.innerHeight / viewport.height;
-    box = { x: box.x * sx, y: box.y * sy, w: box.w * sx, h: box.h * sy };
-    paint();
-  }
-  viewport = { width: window.innerWidth, height: window.innerHeight };
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
 // ---------------------------------------------------------------- arranque
-
-/** "Ctrl+Win" → duas teclas. */
-function dictateHint(label: string) {
-  const tip = el("p", "line");
-  tip.append("Segura ");
-  label.split("+").forEach((key, i) => {
-    if (i > 0) tip.append(" + ");
-    const kbd = document.createElement("kbd");
-    kbd.textContent = key;
-    tip.append(kbd);
-  });
-  tip.append(" para ditar a pergunta");
-  $("hint").append(tip);
-}
 
 async function drawShot() {
   const bytes = await screen.image();
@@ -372,7 +177,6 @@ async function main() {
     return;
   }
   imageSize = { width: view.width, height: view.height };
-  dictateHint(view.dictate);
 
   const stageEl = stage();
   stageEl.addEventListener("pointerdown", onPointerDown);
@@ -380,47 +184,7 @@ async function main() {
   stageEl.addEventListener("pointerup", onPointerUp);
   stageEl.addEventListener("pointercancel", onPointerUp);
   document.addEventListener("keydown", onKey);
-  window.addEventListener("resize", onResize);
   $("close").addEventListener("click", () => void cancel());
-
-  const field = promptEl();
-  field.addEventListener("input", () => {
-    autosize();
-    updateSend();
-  });
-  askEl().addEventListener("submit", (e) => {
-    e.preventDefault();
-    void submit();
-  });
-
-  const micButton = $("mic");
-  // O foco fica na caixa de texto: é lá que a pergunta aparece.
-  micButton.addEventListener("mousedown", (e) => e.preventDefault());
-  micButton.addEventListener("click", () => {
-    if (!box) selectAll();
-    // O mesmo clique da pílula: começa a ditar, e o seguinte pára. Com esta janela aberta, o
-    // texto vem para a caixa de pergunta em vez de ser colado numa app.
-    void api.overlayClick().catch((e) => say(errorText(e), true));
-    field.focus({ preventScroll: true });
-  });
-
-  await Promise.all([
-    onMicState((state) => {
-      mic = state;
-      // A pergunta começou a ser dita sem área escolhida: o ecrã todo, para o texto aparecer.
-      if (state === "recording" && !box) selectAll();
-      renderMic();
-    }),
-    onMicFailure((label) => (micFailure = label)),
-    onMicLevel((level) => askEl().style.setProperty("--level", String(clamp(level, 0, 1)))),
-    onScreenPartial((text) => {
-      const live = $("live");
-      live.textContent = text;
-      live.hidden = text === "";
-      layoutAsk();
-    }),
-    onScreenTranscript(onTranscript),
-  ]);
 
   try {
     await drawShot();

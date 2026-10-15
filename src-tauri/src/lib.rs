@@ -310,6 +310,8 @@ pub fn run() {
             commands::assistant_clear,
             commands::assistant_copy,
             commands::assistant_open_source,
+            commands::assistant_drop_attachment,
+            commands::assistant_take_draft,
             commands::assistant_apply,
             commands::assistant_close,
             commands::assistant_capture,

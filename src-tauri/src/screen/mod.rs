@@ -1,6 +1,6 @@
 //! Perguntar sobre o ecrã: um atalho tira uma fotografia do monitor onde está o cursor, a
-//! janela de seleção mostra-a "congelada", escolhes a área e escreves (ou dizes) o que queres
-//! saber, e a área segue para o modelo com a pergunta. A resposta abre no assistente, que
+//! janela de seleção mostra-a "congelada" só enquanto escolhes a área, e a área vai anexada
+//! para o popup do assistente, onde escreves (ou dizes) o que queres saber. A resposta
 //! continua a conversa sobre a mesma imagem.
 //!
 //! O caminho:
@@ -8,11 +8,10 @@
 //!    (`window`). A fotografia fica na memória, em `Screen`, e é a única cópia.
 //! 2. A página (`screen.ts`) pede-a (`screen_image`), desenha-a, e diz que está pronta
 //!    (`screen_ready`): só então a janela aparece.
-//! 3. O texto da pergunta escreve-se na caixa ou dita-se: o microfone é o do ditado
-//!    (`DictationEvent::Click` ou o atalho de sempre), mas com a janela aberta o texto vem
-//!    para a caixa (`screen:transcript`) em vez de ser colado numa app.
-//! 4. `submit`: a área é convertida em píxeis da imagem (`shot`), recortada e codificada, a
-//!    janela fecha e o assistente começa a responder (`assistant::start_screen`).
+//! 3. `submit` (ao largar o rato, ou Enter para o ecrã todo): a área é convertida em píxeis
+//!    da imagem (`shot`), recortada e codificada, a janela fecha e o assistente abre com a
+//!    captura anexada à caixa de texto (`assistant::attach_screen`), à espera da pergunta.
+//!    O que se ditar enquanto a seleção está aberta vai para essa caixa (`add_draft`).
 //!
 //! A fotografia nunca vai para o disco. Só se envia à xAI o recorte escolhido.
 
@@ -30,11 +29,11 @@ use std::{
 
 use image::RgbaImage;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::{
-    assistant::{self, ScreenStart},
-    focus, hotkey,
+    assistant::{self, ScreenAttach},
+    focus,
     state::{AppState, MISSING_KEY},
     xai::chat::Image,
 };
@@ -45,9 +44,6 @@ use shot::{Area, Viewport};
 const MAX_OPEN: Duration = Duration::from_secs(10 * 60);
 /// A página tem de dizer que desenhou a fotografia neste tempo; senão desiste-se.
 const READY_WITHIN: Duration = Duration::from_secs(6);
-
-const EVENT_TRANSCRIPT: &str = "screen:transcript";
-const EVENT_PARTIAL: &str = "screen:partial";
 
 #[cfg(target_os = "macos")]
 const NO_ACCESS: &str = "O Ditok precisa da permissão «Gravação do ecrã» para ver o ecrã. Dá-lha em Definições do Sistema → Privacidade e Segurança → Gravação do ecrã e do áudio do sistema; depois fecha e abre o Ditok.";
@@ -127,8 +123,6 @@ pub struct View {
     /// Tamanho, em píxeis, da fotografia.
     width: u32,
     height: u32,
-    /// O atalho de ditar, legível ("Ctrl+Win"), para a dica.
-    dictate: String,
 }
 
 // ---------------------------------------------------------------- começar e acabar
@@ -263,7 +257,6 @@ pub fn view(state: &AppState) -> Option<View> {
     Some(View {
         width: image.width(),
         height: image.height(),
-        dictate: hotkey::pretty(&state.config().shortcut),
     })
 }
 
@@ -289,15 +282,9 @@ pub fn reveal(app: &AppHandle) {
     window::reveal(app);
 }
 
-/// Envia a área escolhida e a pergunta. Em caso de erro a janela fica aberta, para não
-/// perderes a seleção nem o que escreveste.
-pub async fn submit(
-    state: &Arc<AppState>,
-    prompt: String,
-    area: Area,
-    viewport: Viewport,
-    spoken: bool,
-) -> Result<(), String> {
+/// A área foi escolhida: recorta-a e anexa-a ao assistente, que abre à espera da pergunta.
+/// Em caso de erro a janela fica aberta, para não perderes a seleção.
+pub async fn submit(state: &Arc<AppState>, area: Area, viewport: Viewport) -> Result<(), String> {
     let image = state.screen.image().ok_or("A captura já não existe.")?;
     let rect = shot::to_pixels(area, viewport, (image.width(), image.height()))
         .map_err(|e| e.to_string())?;
@@ -326,17 +313,14 @@ pub async fn submit(
         height = encoded.height,
         bytes = encoded.bytes.len(),
         mime = encoded.mime,
-        prompt_chars = prompt.chars().count(),
-        spoken,
-        "captura do ecrã enviada"
+        "captura do ecrã anexada ao assistente"
     );
-    // A janela fecha primeiro: o assistente abre a seguir e fica com o foco.
+    // A janela fecha primeiro (o ecrã deixa de estar congelado): o assistente abre a seguir e
+    // fica com o foco.
     close(state);
-    assistant::start_screen(
+    assistant::attach_screen(
         state,
-        ScreenStart {
-            instruction: prompt,
-            spoken,
+        ScreenAttach {
             size: (encoded.width, encoded.height),
             image: Image {
                 mime: encoded.mime,
@@ -346,19 +330,8 @@ pub async fn submit(
             app: target.app,
             origin: target.origin,
         },
-    )
-}
-
-// ---------------------------------------------------------------- ditar a pergunta
-
-/// O texto ditado, para a caixa de pergunta da janela.
-pub fn emit_transcript(app: &AppHandle, text: &str) {
-    let _ = app.emit_to(window::LABEL, EVENT_TRANSCRIPT, text);
-}
-
-/// O que o microfone já ouviu, enquanto se fala.
-pub fn emit_partial(app: &AppHandle, text: &str) {
-    let _ = app.emit_to(window::LABEL, EVENT_PARTIAL, text);
+    );
+    Ok(())
 }
 
 #[cfg(test)]

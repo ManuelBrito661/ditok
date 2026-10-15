@@ -45,6 +45,17 @@
 
       <footer class="dock">
         <p id="notice" class="notice" hidden></p>
+        <!-- A captura do ecrã escolhida, à espera da pergunta: segue com a próxima mensagem. -->
+        <div id="attachment" class="attachment" hidden>
+          <img id="attachment-img" alt="Captura do ecrã" />
+          <div class="attachment-text">
+            <strong>Captura do ecrã</strong>
+            <span id="attachment-size"></span>
+          </div>
+          <button id="attachment-drop" type="button" class="icon-btn" aria-label="Tirar a captura" title="Tirar a captura">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
         <form id="composer" class="composer" autocomplete="off">
           <textarea id="input" rows="1" maxlength="8000" placeholder="Escreve ou diz o que queres…" aria-label="Mensagem" enterkeyhint="send" spellcheck="true"></textarea>
           <button id="send" type="submit" class="send" aria-label="Enviar" title="Enviar (Enter)" disabled>

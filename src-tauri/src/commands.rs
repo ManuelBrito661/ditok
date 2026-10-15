@@ -1341,6 +1341,18 @@ pub fn assistant_send(state: AppStateRef<'_>, text: String) -> CmdResult<()> {
     Ok(())
 }
 
+/// O ✕ da captura do ecrã anexada à caixa de texto.
+#[tauri::command]
+pub fn assistant_drop_attachment(state: AppStateRef<'_>) {
+    assistant::drop_attachment(&state);
+}
+
+/// A janela já pôs na caixa de texto o que foi ditado durante a captura do ecrã.
+#[tauri::command]
+pub fn assistant_take_draft(state: AppStateRef<'_>) {
+    assistant::take_draft(&state);
+}
+
 #[tauri::command]
 pub fn assistant_stop(state: AppStateRef<'_>) {
     assistant::stop(&state);
@@ -1470,13 +1482,11 @@ pub fn screen_report(message: String) {
 #[tauri::command]
 pub async fn screen_submit(
     state: AppStateRef<'_>,
-    prompt: String,
     area: screen::shot::Area,
     viewport: screen::shot::Viewport,
-    spoken: bool,
 ) -> CmdResult<()> {
     let state = Arc::clone(&state);
-    screen::submit(&state, prompt, area, viewport, spoken).await?;
+    screen::submit(&state, area, viewport).await?;
     Ok(())
 }
 

@@ -328,11 +328,9 @@ fn cursor_over_pill(app: &AppHandle, window: &WebviewWindow) -> Option<bool> {
     )
 }
 
-/// Envia o estado à barra (se existir). Barato: um evento para uma janela. A janela de
-/// seleção da captura do ecrã recebe o mesmo: é lá que se vê se o microfone está a ouvir.
+/// Envia o estado à barra (se existir). Barato: um evento para uma janela.
 pub fn emit_state(app: &AppHandle, state: TrayState) {
     let _ = app.emit_to(LABEL, "overlay:state", state);
-    let _ = app.emit_to(crate::screen::window::LABEL, "overlay:state", state);
 }
 
 /// O ditado ficou em modo alternar: a barra mostra os botões ✕ e ■.
@@ -365,7 +363,6 @@ pub fn emit_selection(app: &AppHandle, has_text: bool) {
 /// Nível do microfone (0–1), ~20 vezes por segundo durante a gravação.
 pub fn emit_level(app: &AppHandle, level: f32) {
     let _ = app.emit_to(LABEL, "overlay:level", level);
-    let _ = app.emit_to(crate::screen::window::LABEL, "overlay:level", level);
 }
 
 /// O texto que a transcrição em streaming já ouviu (frases acabadas + a frase em
@@ -386,7 +383,6 @@ struct Failure<'a> {
 pub fn emit_failure(app: &AppHandle, label: &str, retry: bool) {
     let failure = Failure { label, retry };
     let _ = app.emit_to(LABEL, "overlay:failure", &failure);
-    let _ = app.emit_to(crate::screen::window::LABEL, "overlay:failure", &failure);
 }
 
 /// Premiste o atalho a meio do processamento: a pílula abana.

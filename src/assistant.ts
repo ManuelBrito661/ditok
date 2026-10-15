@@ -473,7 +473,12 @@ function renderChrome(v: AssistantView) {
   // Outra maneira de chegar aqui: perguntar sobre o ecrã.
   $("empty-screen").hidden = !v.screen_shortcut;
   if (v.screen_shortcut) renderKeys($("empty-screen-keys"), v.screen_shortcut);
-  input().placeholder = v.conversation?.capture ? "Pergunta mais sobre a captura…" : "Escreve ou diz o que queres…";
+  input().placeholder = v.attachment
+    ? "Pergunta sobre a captura… (Enter sem texto: explica)"
+    : v.conversation?.capture
+      ? "Pergunta mais sobre a captura…"
+      : "Escreve ou diz o que queres…";
+  renderAttachment(v);
 
   const notice = $("notice");
   notice.hidden = !v.key_missing;
@@ -484,6 +489,40 @@ function renderChrome(v: AssistantView) {
     notice.replaceChildren(document.createTextNode("Falta a chave da xAI. "), open, document.createTextNode("."));
   }
   updateSend();
+}
+
+/** A captura anexada que já se mostrou (para dar o foco à caixa só quando chega uma nova). */
+let shownAttachment: string | null = null;
+
+/** A captura do ecrã por cima da caixa de texto, à espera da pergunta. */
+function renderAttachment(v: AssistantView) {
+  const box = $("attachment");
+  const a = v.attachment;
+  box.hidden = !a;
+  if (!a) {
+    shownAttachment = null;
+    return;
+  }
+  if (a.thumb !== shownAttachment) {
+    shownAttachment = a.thumb;
+    $<HTMLImageElement>("attachment-img").src = a.thumb;
+    input().focus();
+  }
+  $("attachment-size").textContent = `${a.width} × ${a.height}`;
+}
+
+/** O que foi ditado enquanto se escolhia a área do ecrã: entra na caixa de texto. */
+function takeDraft(v: AssistantView) {
+  const text = v.draft?.trim();
+  if (!text) return;
+  const box = input();
+  const before = box.value.trimEnd();
+  box.value = before ? `${before} ${text}` : text;
+  autosize();
+  updateSend();
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+  void assistant.takeDraft().catch(() => {});
 }
 
 function toEnd() {
@@ -518,6 +557,7 @@ function applyView(v: AssistantView) {
   dirty.clear();
   renderChrome(v);
   renderThread(v);
+  takeDraft(v);
   syncTicker(v.busy);
   syncHistory({ activeId: id, saved: v.saved });
   if (wasBusy && !v.busy) announceAnswer(v);
@@ -571,10 +611,12 @@ function autosize() {
 function updateSend() {
   const send = $<HTMLButtonElement>("send");
   const busy = !!view?.busy;
-  send.disabled = !busy && input().value.trim() === "";
-  const label = busy ? "Parar" : "Enviar";
+  const empty = input().value.trim() === "";
+  // Com uma captura anexada, enviar sem texto pede uma explicação do que se vê.
+  send.disabled = !busy && empty && !view?.attachment;
+  const label = busy ? "Parar" : empty && view?.attachment ? "Explicar a captura" : "Enviar";
   send.setAttribute("aria-label", label);
-  send.title = busy ? "Parar a resposta" : "Enviar (Enter)";
+  send.title = busy ? "Parar a resposta" : `${label} (Enter)`;
 }
 
 async function submit() {
@@ -584,7 +626,7 @@ async function submit() {
   }
   const box = input();
   const text = box.value.trim();
-  if (!text) return;
+  if (!text && !view?.attachment) return;
   box.value = "";
   autosize();
   updateSend();
@@ -663,6 +705,10 @@ async function main() {
   setupHistory(() => input().focus());
   $("new-chat").addEventListener("click", () => void newChat());
   $("close").addEventListener("click", () => void assistant.close());
+  $("attachment-drop").addEventListener("click", () => {
+    void assistant.dropAttachment().catch((e) => toast(errorText(e), "error"));
+    input().focus();
+  });
   scroller().addEventListener(
     "scroll",
     () => {

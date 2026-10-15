@@ -757,9 +757,9 @@ pub async fn command(
     outcome
 }
 
-/// A pergunta da captura do ecrã, do fim da gravação ao texto: transcreve o que disseste e
-/// entrega-o à caixa de pergunta da janela de seleção (`screen:transcript`), onde o podes
-/// ler, corrigir e enviar com a captura. Não se cola em lado nenhum e não passa pela limpeza
+/// A pergunta da captura do ecrã, ditada enquanto se escolhia a área: transcreve o que disseste
+/// e entrega-o à caixa de texto do assistente (`assistant::add_draft`), onde a captura está
+/// anexada e o podes ler, corrigir e enviar. Não se cola em lado nenhum e não passa pela limpeza
 /// com IA (uma pergunta a um modelo não precisa de ser polida, e poupa-se o pedido).
 ///
 /// Só se aplica o dicionário. Os comandos falados ("nova linha") não fazem sentido numa
@@ -818,7 +818,7 @@ pub async fn screen_prompt(
                     tracing::info!("pergunta da captura cancelada antes de chegar à caixa");
                     return Outcome::Nothing;
                 }
-                crate::screen::emit_transcript(&state.app, &text);
+                crate::assistant::add_draft(&state, &text);
                 m.total_ms = Some(ms(released_at.elapsed()));
                 Outcome::Shown
             }
