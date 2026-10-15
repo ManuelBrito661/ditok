@@ -66,8 +66,14 @@ pub fn open(app: &AppHandle, monitor: &Monitor, session: u64) -> Result<(), Stri
 
     let handle = app.clone();
     window.on_window_event(move |event| match event {
-        WindowEvent::Focused(true) => FOCUSED_ONCE.store(true, Ordering::Relaxed),
-        WindowEvent::Focused(false) if FOCUSED_ONCE.load(Ordering::Relaxed) => {
+        // Só conta o foco depois de a janela ser mostrada: escondida, o sistema dá-o e tira-o
+        // (o foco passa da janela para o WebView) e isso fechava a captura antes de aparecer.
+        WindowEvent::Focused(true) if REVEALED.load(Ordering::Relaxed) => {
+            FOCUSED_ONCE.store(true, Ordering::Relaxed);
+        }
+        WindowEvent::Focused(false)
+            if REVEALED.load(Ordering::Relaxed) && FOCUSED_ONCE.load(Ordering::Relaxed) =>
+        {
             let app = handle.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(FOCUS_GRACE).await;
@@ -100,9 +106,10 @@ pub fn reveal(app: &AppHandle) {
     if let Err(e) = window.set_simple_fullscreen(true) {
         tracing::warn!(error = %e, "não foi possível pôr a captura em ecrã inteiro");
     }
+    FOCUSED_ONCE.store(false, Ordering::Relaxed);
+    REVEALED.store(true, Ordering::Relaxed);
     let _ = window.show();
     let _ = window.set_focus();
-    REVEALED.store(true, Ordering::Relaxed);
 }
 
 /// Fecha a janela. Sai do ecrã inteiro primeiro: no macOS isso devolve a barra de menus e o

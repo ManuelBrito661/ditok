@@ -154,6 +154,7 @@ fn begin(app: &AppHandle, settle: Duration) -> Result<(), String> {
         .ok_or("O Ditok ainda está a arrancar.")?;
     let state = Arc::clone(&state);
     if window::is_open(app) {
+        tracing::info!("captura do ecrã pedida com uma já aberta; a fechar");
         close(&state);
         return Ok(());
     }

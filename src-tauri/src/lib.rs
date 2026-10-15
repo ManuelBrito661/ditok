@@ -316,6 +316,7 @@ pub fn run() {
             commands::screen_ready,
             commands::screen_submit,
             commands::screen_cancel,
+            commands::screen_report,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,

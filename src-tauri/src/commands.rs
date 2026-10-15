@@ -1397,7 +1397,9 @@ pub fn assistant_capture(state: AppStateRef<'_>, id: String) -> Option<String> {
 /// O que a janela de seleção precisa para se desenhar; `null` se a captura já não existe.
 #[tauri::command]
 pub fn screen_view(state: AppStateRef<'_>) -> Option<screen::View> {
-    screen::view(&state)
+    let view = screen::view(&state);
+    tracing::info!(found = view.is_some(), "a página da captura pediu a vista");
+    view
 }
 
 /// A fotografia do ecrã, em JPEG (binário, sem passar por base64).
@@ -1405,13 +1407,21 @@ pub fn screen_view(state: AppStateRef<'_>) -> Option<screen::View> {
 pub async fn screen_image(state: AppStateRef<'_>) -> CmdResult<tauri::ipc::Response> {
     let state = Arc::clone(&state);
     let bytes = blocking(move || screen::display_image(&state)).await??;
+    tracing::info!(bytes = bytes.len(), "a página da captura pediu a fotografia");
     Ok(tauri::ipc::Response::new(bytes.as_ref().clone()))
 }
 
 /// A página desenhou a fotografia: mostra a janela.
 #[tauri::command]
 pub fn screen_ready(app: AppHandle) {
+    tracing::info!("a página da captura está pronta");
     screen::reveal(&app);
+}
+
+/// A página conta o que lhe correu mal (vai para o ficheiro de registo).
+#[tauri::command]
+pub fn screen_report(message: String) {
+    tracing::warn!(%message, "a página da captura do ecrã reportou");
 }
 
 /// Envia a área escolhida com a pergunta (`prompt` vazio = o pedido de sempre). `spoken`:
@@ -1431,5 +1441,6 @@ pub async fn screen_submit(
 
 #[tauri::command]
 pub fn screen_cancel(app: AppHandle) {
+    tracing::info!("a página da captura pediu para fechar");
     screen::cancel(&app);
 }

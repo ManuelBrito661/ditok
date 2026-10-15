@@ -665,6 +665,8 @@ export const screen = {
   submit: (prompt: string, area: ScreenArea, viewport: { width: number; height: number }, spoken: boolean) =>
     invoke<void>("screen_submit", { prompt, area, viewport, spoken }),
   cancel: () => invoke<void>("screen_cancel"),
+  /** Conta ao ficheiro de registo o que correu mal na página. */
+  report: (message: string) => invoke<void>("screen_report", { message }),
 };
 
 /// O que o microfone já ouviu, enquanto se fala (pipeline: forward_partials).

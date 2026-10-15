@@ -421,6 +421,7 @@ async function main() {
     await drawShot();
   } catch (e) {
     console.error("não foi possível desenhar a captura", e);
+    await screen.report(`não foi possível desenhar a captura: ${errorText(e)}`).catch(() => {});
     await cancel();
     return;
   }
