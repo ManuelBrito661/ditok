@@ -148,7 +148,13 @@ function actionsNode(m: ChatMessage, last: boolean, conv: ChatConversation): HTM
       try {
         const { pasted } = await assistant.apply(m.id);
         flash(apply, pasted ? "Feito" : "Copiado");
-        if (!pasted) toast(`Não consegui voltar à app: o texto ficou copiado, cola com ${isMac ? "⌘V" : "Ctrl+V"}.`);
+        if (pasted) {
+          // Um popup cumpriu a sua função: não fica por cima da app onde acabaste de colar.
+          // A conversa continua no histórico.
+          window.setTimeout(() => void assistant.close(), 450);
+        } else {
+          toast(`Não consegui voltar à app: o texto ficou copiado, cola com ${isMac ? "⌘V" : "Ctrl+V"}.`);
+        }
       } catch (e) {
         toast(errorText(e), "error");
       } finally {
@@ -420,13 +426,13 @@ function blockContextMenu() {
 }
 
 async function main() {
-  if (isMac) document.documentElement.dataset.platform = "mac";
   $<HTMLImageElement>("mascot").src = mascotUrl;
   blockContextMenu();
   setupComposer();
   setupKeys();
   setupHistory(() => input().focus());
   $("new-chat").addEventListener("click", () => void newChat());
+  $("close").addEventListener("click", () => void assistant.close());
   scroller().addEventListener(
     "scroll",
     () => {

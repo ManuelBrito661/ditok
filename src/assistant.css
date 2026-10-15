@@ -1,4 +1,4 @@
-/* O assistente do Ditok: a mini-app onde o modo comando mostra a resposta.
+/* O assistente do Ditok: o popup onde o modo comando mostra a resposta.
    Mesma linguagem do resto da app (ver styles.css): cores em OKLCH com neutros
    ligeiramente azulados e um só acento (o azul da mascote), serifa só nos títulos,
    profundidade com sombras em camadas. Aqui tudo é mais calmo e mais pequeno: uma
@@ -8,6 +8,15 @@
   color-scheme: light dark;
 
   --canvas: oklch(0.985 0.003 255);
+  /* O vidro: o fundo do painel é translúcido (a janela é transparente, o desktop vê-se
+     por trás), e o fundo do histórico, que fica por cima da conversa, quase opaco.
+     O 0,88 é o que sobra depois de experimentar com texto por trás: abaixo de ~0,85 as
+     letras da app de trás atravessam o painel e atrapalham a leitura. Uma página web não
+     desfoca o que está fora da janela (isso pede um efeito nativo do sistema). */
+  --glass: oklch(0.985 0.004 255 / 0.88);
+  --glass-solid: oklch(0.985 0.004 255 / 0.95);
+  --rim: oklch(1 0 0 / 0.65);
+  --rim-out: oklch(0.2 0.02 262 / 0.16);
   --surface: oklch(1 0 0);
   --surface-2: oklch(0.962 0.004 255);
   --surface-3: oklch(0.935 0.006 255);
@@ -34,6 +43,8 @@
   --on-danger: oklch(0.99 0 0);
 
   --ring: 0 0 0 1px var(--line);
+  /* A sombra do painel tem de caber na margem transparente da janela (--margin). */
+  --sh-panel: 0 0 0 1px var(--rim-out), 0 12px 30px -8px oklch(0.15 0.03 262 / 0.4), 0 2px 8px oklch(0.15 0.03 262 / 0.18);
   --sh-card: var(--ring), 0 1px 2px oklch(0.2 0.02 262 / 0.04), 0 10px 28px -16px oklch(0.2 0.02 262 / 0.2);
   --sh-pop: var(--ring), 0 30px 80px -24px oklch(0.15 0.03 262 / 0.5);
   --sh-toast: 0 14px 36px -10px oklch(0.15 0.03 262 / 0.45);
@@ -47,6 +58,9 @@
   --r-md: 10px;
   --r-lg: 16px;
   --r-pill: 999px;
+  --r-panel: 22px;
+  /* A janela é maior do que o painel: esta margem transparente é onde cai a sombra. */
+  --margin: 24px;
 
   --ease: cubic-bezier(0.23, 1, 0.32, 1);
   --t-fast: 120ms;
@@ -56,7 +70,6 @@
   font-size: 14px;
   line-height: 1.5;
   color: var(--text);
-  background: var(--canvas);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -64,6 +77,10 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --canvas: oklch(0.172 0.006 265);
+    --glass: oklch(0.19 0.007 265 / 0.88);
+    --glass-solid: oklch(0.19 0.007 265 / 0.95);
+    --rim: oklch(1 0 0 / 0.1);
+    --rim-out: oklch(0 0 0 / 0.55);
     --surface: oklch(0.222 0.008 265);
     --surface-2: oklch(0.25 0.009 265);
     --surface-3: oklch(0.3 0.01 265);
@@ -89,6 +106,7 @@
     --danger-fill: oklch(0.72 0.17 25);
     --on-danger: oklch(0.17 0.04 25);
 
+    --sh-panel: 0 0 0 1px var(--rim-out), 0 12px 30px -8px oklch(0 0 0 / 0.6), 0 2px 8px oklch(0 0 0 / 0.35);
     --sh-card: var(--ring), 0 1px 2px oklch(0 0 0 / 0.3), 0 12px 30px -16px oklch(0 0 0 / 0.65);
     --sh-pop: var(--ring), 0 30px 80px -24px oklch(0 0 0 / 0.85);
     --sh-toast: 0 14px 36px -10px oklch(0 0 0 / 0.75);
@@ -98,9 +116,10 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
+/* A janela é transparente (ver window.rs): quem desenha o popup é o .app. */
+html, body { background: transparent; }
 body {
   overflow: hidden;
-  background: var(--canvas);
   -webkit-user-select: none;
   user-select: none;
 }
@@ -137,8 +156,22 @@ button { font: inherit; color: inherit; }
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  height: 100vh;
+  height: calc(100vh - 2 * var(--margin));
+  margin: var(--margin);
   overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--glass);
+  box-shadow: var(--sh-panel);
+}
+/* O brilho fino da borda do vidro, por cima de tudo mas sem apanhar cliques. */
+.app::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--rim), inset 0 1px 0 var(--rim);
+  pointer-events: none;
 }
 
 /* ---------------------------------------------------------------- barra de cima */
@@ -153,8 +186,6 @@ button { font: inherit; color: inherit; }
   transition: box-shadow var(--t-base) var(--ease);
 }
 .head.scrolled { box-shadow: 0 1px 0 var(--line); }
-/* O macOS desenha os três botões da janela por cima desta barra. */
-html[data-platform="mac"] .head { padding-left: 80px; }
 
 .head-title {
   flex: 1;
@@ -523,7 +554,7 @@ kbd {
   display: flex;
   flex-direction: column;
   width: min(340px, 90%);
-  background: var(--canvas);
+  background: var(--glass-solid);
   box-shadow: var(--sh-pop);
   visibility: hidden;
   transform: translateX(-104%);
@@ -537,7 +568,6 @@ kbd {
   justify-content: space-between;
   padding: 12px 10px 4px 20px;
 }
-html[data-platform="mac"] .history-head { padding-top: 38px; }
 .history-head h2 { font-size: 26px; line-height: 1.2; }
 
 .search {
@@ -684,8 +714,8 @@ html[data-platform="mac"] .history-head { padding-top: 38px; }
 #toast {
   position: fixed;
   left: 50%;
-  bottom: 96px;
-  z-index: 20;
+  bottom: calc(var(--margin) + 78px);
+  z-index: 40;
   max-width: calc(100% - 32px);
   padding: 8px 16px;
   border-radius: var(--r-pill);

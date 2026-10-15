@@ -10,7 +10,7 @@
   </head>
   <body>
     <div id="app" class="app">
-      <!-- A barra de cima também arrasta a janela (no macOS, que não tem barra de título própria). -->
+      <!-- Um popup sem moldura: a barra de cima arrasta-o, e o ✕ (ou Esc) fecha-o. -->
       <header id="head" class="head" data-tauri-drag-region>
         <button id="open-history" type="button" class="icon-btn" aria-label="Conversas" aria-controls="history" aria-expanded="false" title="Conversas (Ctrl+K)">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
@@ -18,6 +18,9 @@
         <h1 id="title" class="head-title" data-tauri-drag-region>Nova conversa</h1>
         <button id="new-chat" type="button" class="icon-btn" aria-label="Nova conversa" title="Nova conversa (Ctrl+N)">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
+        <button id="close" type="button" class="icon-btn" aria-label="Fechar" title="Fechar (Esc)">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
       </header>
 

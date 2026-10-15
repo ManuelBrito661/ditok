@@ -93,10 +93,10 @@ Em **Onde aparece a resposta** (também em Definições → Geral) podes voltar 
 
 ### O assistente
 
-Uma janela pequena (440×660, redimensionável), com a sua própria interface, onde o modo comando mostra a resposta. Segue o tema do sistema (claro ou escuro).
+Um popup sem moldura, de cantos arredondados e fundo ligeiramente translúcido (420×650), com a sua própria interface, onde o modo comando mostra a resposta. Segue o tema do sistema (claro ou escuro). Aparece junto ao canto direito do monitor onde estás, a meio da altura (para não tapar o texto que editas), fica por cima das outras apps e não ocupa lugar na barra de tarefas. Arrasta-se pela barra de cima e fecha-se com o ✕ ou com `Esc`.
 
 - **A resposta chega à medida que é escrita.** O botão da caixa de texto passa a **Parar**, e o que já veio fica. Por cima do primeiro pedido fica o texto que tinhas selecionado, numa citação que se abre com um clique.
-- **Por baixo de cada resposta:** **Copiar**, **Substituir seleção** (ou **Inserir no cursor**, se não havia seleção) e **Tentar de novo**. "Substituir" volta à app de onde deste o comando e cola lá a resposta (ver as limitações). Os botões da última resposta estão sempre à vista; os das outras aparecem ao passar o rato. Um bloco de código tem o seu próprio **Copiar**.
+- **Por baixo de cada resposta:** **Copiar**, **Substituir seleção** (ou **Inserir no cursor**, se não havia seleção) e **Tentar de novo**. "Substituir" volta à app de onde deste o comando e cola lá a resposta (ver as limitações) e fecha o popup, para não ficar por cima do que acabaste de editar; a conversa fica no histórico. Os botões da última resposta estão sempre à vista; os das outras aparecem ao passar o rato. Um bloco de código tem o seu próprio **Copiar**.
 - **A conversa continua.** Escreve na caixa de texto ("mais curto", "em inglês", "porquê?") ou, com a janela em primeiro plano, carrega no atalho de comando e diz o pedido: nesse caso não se copia nenhuma seleção, o que dizes é mais uma mensagem da conversa. Um comando dado noutra app abre uma conversa nova.
 - **Histórico** (o botão ☰ ou `Ctrl+K`): as conversas agrupadas por dia (hoje, ontem, últimos 7 e 30 dias, mais antigas), com pesquisa no texto todo. Apagar pede um segundo clique, e **Apagar todas** também. A pesquisa não distingue maiúsculas.
 - **Teclas:** `Enter` envia, `Shift+Enter` muda de linha, `Ctrl+N` abre uma conversa nova, `Ctrl+K` abre o histórico e `Esc` fecha o histórico (ou a janela, se a caixa de texto estiver vazia). No macOS é `⌘` em vez de `Ctrl`.
@@ -309,7 +309,7 @@ src-tauri/src/
                       falhas, seleção
   command.rs          modo comando: o prompt e a resposta sem janela (`command_output: paste`)
   assistant/          o assistente: conversa e streaming (mod.rs), conversas em disco (store.rs),
-                      janela (window.rs)
+                      popup transparente (window.rs)
   text.rs             comandos falados, dicionário e expansões (no computador)
   dict_io.rs          importar e exportar o dicionário (JSON, CSV, TXT)
   audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV,
@@ -361,6 +361,9 @@ scripts/gen-icons.mjs geração dos ícones (pnpm icons)
 
 ### Windows: apps abertas como administrador
 O Windows impede que um processo normal envie teclas a uma janela com privilégios elevados (UIPI). O atalho funciona, mas a colagem falha em apps abertas "como administrador" (por exemplo, um terminal elevado). A alternativa é correr também o Ditok como administrador.
+
+### Assistente: translúcido, mas sem desfoque
+O fundo do popup é translúcido, mas não desfocado: uma página web só desfoca o que está dentro da sua própria janela, não o ambiente de trabalho por trás dela. O desfoque a sério ("vidro fosco") pede um efeito nativo do sistema (Acrylic no Windows, vibrancy no macOS), que tem custos próprios (no Windows, arrastar a janela fica pesado e os cantos ficam quadrados fora do Windows 11). Por isso o fundo tem 88 % de opacidade, o que deixa perceber o que está por trás sem atrapalhar a leitura (`--glass` em `src/assistant.css`).
 
 ### Assistente: "Substituir" e a app de origem
 "Substituir" volta à app de onde deste o comando e cola lá a resposta. No Windows volta à **janela**; se a fechaste (ou se era uma app aberta como administrador), o texto fica no clipboard e o botão avisa. No macOS volta à **app** (pelo número do processo, porque as janelas não se verificam) e precisa da mesma permissão de Acessibilidade da colagem. Uma conversa que reabras do histórico, ou que comeces a escrever na própria janela, já não sabe de onde veio: só tem **Copiar**.
