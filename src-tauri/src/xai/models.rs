@@ -25,6 +25,10 @@ pub struct ModelInfo {
     /// Raciocina antes de responder (mais lento e mais caro para limpar um ditado).
     #[serde(default)]
     pub reasoning: bool,
+    /// Também lê imagens (`input_modalities` tem "image"): serve para as capturas do ecrã.
+    /// Uma cache escrita antes deste campo não o tem: conta como "não", até ser renovada.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +82,7 @@ fn parse_models(body: &[u8]) -> Result<Vec<ModelInfo>, ApiError> {
                 .capabilities
                 .is_some_and(|c| !c.reasoning_effort.is_empty())
                 || (m.id.contains("reasoning") && !m.id.contains("non-reasoning")),
+            vision: m.input_modalities.iter().any(|x| x == "image"),
             prompt_price: m.prompt_text_token_price.map(usd_per_token),
             completion_price: m.completion_text_token_price.map(usd_per_token),
             id: m.id,
@@ -162,6 +167,8 @@ mod tests {
         assert!((models[0].completion_price.unwrap() * 1e6 - 2.5).abs() < 1e-9);
         assert!(!models[0].reasoning);
         assert!(models[1].reasoning);
+        assert!(!models[0].vision, "só texto");
+        assert!(models[1].vision, "lê imagens");
     }
 
     #[test]
@@ -192,6 +199,13 @@ mod tests {
     }
 
     #[test]
+    fn an_old_cache_without_the_vision_field_still_reads() {
+        let old = r#"{"fetched_at":"2026-10-11T12:00:00Z","models":[{"id":"grok-4.7","prompt_price":2e-6,"completion_price":6e-6,"reasoning":true}]}"#;
+        let list: ModelList = serde_json::from_str(old).unwrap();
+        assert!(!list.models[0].vision);
+    }
+
+    #[test]
     fn freshness_uses_ttl() {
         let list = ModelList {
             fetched_at: datetime!(2026-10-11 12:00 UTC),
@@ -216,6 +230,7 @@ mod tests {
                 prompt_price: Some(1.25e-6),
                 completion_price: Some(2.5e-6),
                 reasoning: false,
+                vision: false,
             }],
             stale: false,
         };

@@ -11,10 +11,11 @@
 
 use std::{
     collections::HashSet,
-    sync::{Mutex, OnceLock, PoisonError},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::Duration,
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
@@ -239,11 +240,32 @@ impl Role {
     }
 }
 
+/// Uma imagem anexada a uma mensagem (uma captura do ecrã): PNG ou JPEG já codificado. Os
+/// bytes são partilhados, para a conversa a poder enviar a cada pedido sem os copiar.
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub mime: &'static str,
+    pub data: Arc<Vec<u8>>,
+}
+
+impl Image {
+    /// `data:image/png;base64,…`: a forma de mandar uma imagem dentro do próprio pedido.
+    fn data_url(&self) -> String {
+        format!(
+            "data:{};base64,{}",
+            self.mime,
+            STANDARD.encode(self.data.as_slice())
+        )
+    }
+}
+
 /// Uma mensagem de uma conversa, tal como vai ao modelo.
 #[derive(Debug, Clone)]
 pub struct Turn {
     pub role: Role,
     pub content: String,
+    /// Imagens que acompanham a mensagem (só as do utilizador).
+    pub images: Vec<Image>,
 }
 
 /// Um pedido de conversa: o prompt de sistema e as mensagens até agora (a última é
@@ -262,7 +284,7 @@ pub struct ChatStream<'a> {
 #[derive(Serialize)]
 struct StreamRequest<'a> {
     model: &'a str,
-    messages: Vec<Message<'a>>,
+    messages: Vec<StreamMessage<'a>>,
     temperature: f32,
     max_completion_tokens: u32,
     stream: bool,
@@ -276,6 +298,70 @@ struct StreamRequest<'a> {
 #[derive(Serialize)]
 struct StreamOptions {
     include_usage: bool,
+}
+
+#[derive(Serialize)]
+struct StreamMessage<'a> {
+    role: &'a str,
+    content: Content<'a>,
+}
+
+/// O conteúdo de uma mensagem: texto simples, ou, com imagens, uma lista de partes (o
+/// formato do `/chat/completions` para modelos que veem).
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Content<'a> {
+    Text(&'a str),
+    Parts(Vec<Part<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Part<'a> {
+    Text { text: &'a str },
+    ImageUrl { image_url: ImageUrl<'a> },
+}
+
+#[derive(Serialize)]
+struct ImageUrl<'a> {
+    url: &'a str,
+    /// "high": o texto pequeno de uma interface só se lê com o detalhe todo.
+    detail: &'static str,
+}
+
+/// O prompt de sistema e as mensagens da conversa; `urls[i]` são as imagens de `turns[i]`.
+fn stream_messages<'a>(
+    system: &'a str,
+    turns: &'a [Turn],
+    urls: &'a [Vec<String>],
+) -> Vec<StreamMessage<'a>> {
+    let mut messages = vec![StreamMessage {
+        role: "system",
+        content: Content::Text(system),
+    }];
+    messages.extend(turns.iter().zip(urls).map(|(t, urls)| StreamMessage {
+        role: t.role.api(),
+        content: content(&t.content, urls),
+    }));
+    messages
+}
+
+/// As imagens primeiro e o texto a seguir (a xAI aceita qualquer ordem).
+fn content<'a>(text: &'a str, urls: &'a [String]) -> Content<'a> {
+    if urls.is_empty() {
+        return Content::Text(text);
+    }
+    let mut parts: Vec<Part<'a>> = urls
+        .iter()
+        .map(|url| Part::ImageUrl {
+            image_url: ImageUrl {
+                url,
+                detail: "high",
+            },
+        })
+        .collect();
+    parts.push(Part::Text { text });
+    Content::Parts(parts)
 }
 
 #[derive(Deserialize, Default)]
@@ -425,18 +511,16 @@ impl Xai {
     ) -> Result<Answer, ApiError> {
         let mut effort = reasoning_effort(req.model);
         let mut usage_option = true;
+        // Codificar uma captura em base64 custa; faz-se uma vez, mesmo que o pedido se repita.
+        let urls: Vec<Vec<String>> = req
+            .turns
+            .iter()
+            .map(|t| t.images.iter().map(Image::data_url).collect())
+            .collect();
         loop {
-            let mut messages = vec![Message {
-                role: "system",
-                content: req.system,
-            }];
-            messages.extend(req.turns.iter().map(|t| Message {
-                role: t.role.api(),
-                content: &t.content,
-            }));
             let body = StreamRequest {
                 model: req.model,
-                messages,
+                messages: stream_messages(req.system, req.turns, &urls),
                 temperature: req.temperature,
                 max_completion_tokens: req.max_tokens
                     + if effort.is_some() {
@@ -690,20 +774,16 @@ data: [DONE]
             Turn {
                 role: Role::User,
                 content: "u1".into(),
+                images: Vec::new(),
             },
             Turn {
                 role: Role::Assistant,
                 content: "a1".into(),
+                images: Vec::new(),
             },
         ];
-        let mut messages = vec![Message {
-            role: "system",
-            content: "s",
-        }];
-        messages.extend(turns.iter().map(|t| Message {
-            role: t.role.api(),
-            content: &t.content,
-        }));
+        let urls = vec![Vec::new(), Vec::new()];
+        let messages = stream_messages("s", &turns, &urls);
         let body = StreamRequest {
             model: "grok-4.20-0309-non-reasoning",
             messages,
@@ -738,6 +818,52 @@ data: [DONE]
         );
     }
 
+    fn capture() -> Image {
+        Image {
+            mime: "image/png",
+            data: Arc::new(vec![0x89, b'P', b'N', b'G']),
+        }
+    }
+
+    #[test]
+    fn text_only_messages_keep_a_plain_string() {
+        let turns = [Turn {
+            role: Role::User,
+            content: "olá".into(),
+            images: Vec::new(),
+        }];
+        let urls = vec![Vec::new()];
+        let v = serde_json::to_value(stream_messages("s", &turns, &urls)).unwrap();
+        assert_eq!(v[0]["content"], "s");
+        assert_eq!(v[1]["content"], "olá", "sem imagens, o formato de sempre");
+    }
+
+    #[test]
+    fn a_capture_goes_as_an_image_part_before_the_text() {
+        let turns = [Turn {
+            role: Role::User,
+            content: "<instrucao>o que é isto?</instrucao>".into(),
+            images: vec![capture()],
+        }];
+        let urls: Vec<Vec<String>> = turns
+            .iter()
+            .map(|t| t.images.iter().map(Image::data_url).collect())
+            .collect();
+        let v = serde_json::to_value(stream_messages("s", &turns, &urls)).unwrap();
+        let parts = v[1]["content"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "image_url");
+        assert_eq!(parts[0]["image_url"]["detail"], "high");
+        assert_eq!(
+            parts[0]["image_url"]["url"],
+            "data:image/png;base64,iVBORw=="
+        );
+        assert_eq!(parts[1]["type"], "text");
+        assert_eq!(parts[1]["text"], "<instrucao>o que é isto?</instrucao>");
+        // O prompt de sistema continua a ser texto simples.
+        assert_eq!(v[0]["content"], "s");
+    }
+
     #[test]
     fn a_refusal_of_stream_options_is_recognised() {
         assert!(is_stream_options_refusal(&ApiError::BadRequest(
@@ -766,14 +892,17 @@ data: [DONE]
             Turn {
                 role: Role::User,
                 content: "<instrucao>escreve uma saudação curta ao Pedro</instrucao>".into(),
+                images: Vec::new(),
             },
             Turn {
                 role: Role::Assistant,
                 content: "Olá, Pedro! Espero que estejas bem.".into(),
+                images: Vec::new(),
             },
             Turn {
                 role: Role::User,
                 content: "<instrucao>agora em inglês</instrucao>".into(),
+                images: Vec::new(),
             },
         ];
         let mut pieces = 0;
@@ -932,14 +1061,17 @@ mod http_tests {
             Turn {
                 role: Role::User,
                 content: "u1".into(),
+                images: Vec::new(),
             },
             Turn {
                 role: Role::Assistant,
                 content: "a1".into(),
+                images: Vec::new(),
             },
             Turn {
                 role: Role::User,
                 content: "u2".into(),
+                images: Vec::new(),
             },
         ]
     }
@@ -996,6 +1128,61 @@ mod http_tests {
         assert_eq!(roles, ["system", "user", "assistant", "user"]);
         assert_eq!(messages[3]["content"], "u2");
         assert!(body.get("reasoning_effort").is_none(), "não raciocina");
+    }
+
+    /// Só contra um servidor local: nada vai à xAI.
+    #[tokio::test]
+    async fn a_capture_reaches_the_server_as_an_image_part_and_survives_a_retry() {
+        let refusal = json_error(
+            "400 Bad Request",
+            "{\"error\":\"Model does not support parameter reasoningEffort\"}",
+        );
+        let (xai, seen) = fake_server(vec![refusal, good_stream()]).await;
+        let png = vec![0x89, b'P', b'N', b'G', 1, 2, 3];
+        let turns = [
+            Turn {
+                role: Role::User,
+                content: "<instrucao>o que é isto?</instrucao>".into(),
+                images: vec![Image {
+                    mime: "image/png",
+                    data: Arc::new(png.clone()),
+                }],
+            },
+            Turn {
+                role: Role::Assistant,
+                content: "Um erro de tipos.".into(),
+                images: Vec::new(),
+            },
+            Turn {
+                role: Role::User,
+                content: "<instrucao>e como se corrige?</instrucao>".into(),
+                images: Vec::new(),
+            },
+        ];
+        let answer = xai
+            .chat_stream(&request("http-d-grok-reasoner", &turns), |_| {})
+            .await
+            .unwrap();
+        assert_eq!(answer.text, "Olá, mundo");
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "o pedido repetiu-se sem o esforço");
+        let expected_url = format!("data:image/png;base64,{}", STANDARD.encode(&png));
+        for request in seen.iter() {
+            let messages = request.body["messages"].as_array().unwrap();
+            assert_eq!(messages[0]["content"], "sistema");
+            let parts = messages[1]["content"].as_array().unwrap();
+            assert_eq!(parts[0]["type"], "image_url");
+            assert_eq!(parts[0]["image_url"]["url"], expected_url.as_str());
+            assert_eq!(parts[0]["image_url"]["detail"], "high");
+            assert_eq!(parts[1]["text"], "<instrucao>o que é isto?</instrucao>");
+            // As mensagens seguintes continuam a ser texto simples.
+            assert_eq!(messages[2]["content"], "Um erro de tipos.");
+            assert_eq!(
+                messages[3]["content"],
+                "<instrucao>e como se corrige?</instrucao>"
+            );
+        }
     }
 
     #[tokio::test]

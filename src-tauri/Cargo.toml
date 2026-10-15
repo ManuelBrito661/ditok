@@ -65,6 +65,9 @@ tauri-plugin-dialog = "2.8.2"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+# Perguntar sobre o ecrã: a imagem vai ao modelo em base64 e é recortada/codificada aqui.
+base64 = "0.23"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -74,6 +77,11 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+# Captura do ecrã (GDI no Windows, CoreGraphics no macOS). Sem `wgc`: a captura por GDI chega
+# para uma fotografia e não puxa mais da API do Windows. O Linux não é suportado (ver screen/grab.rs).
+xcap = { version = "0.9", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

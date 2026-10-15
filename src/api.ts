@@ -12,6 +12,11 @@ export interface Config {
   command_shortcut: string;
   /** Onde aparece a resposta do modo comando: na janela do assistente ou colada no texto. */
   command_output: CommandOutput;
+  /** Perguntar sobre o ecrã: um atalho fotografa o ecrã, escolhes a área e perguntas (src/screen.ts). */
+  screen_enabled: boolean;
+  screen_shortcut: string;
+  /** Modelo que vê as capturas do ecrã; vazio = o da limpeza. */
+  vision_model: string;
   language: string | null;
   cleanup_level: CleanupLevel;
   /** O modelo Grok da limpeza e dos comandos. */
@@ -142,6 +147,8 @@ export interface SettingsView {
   command_ok: boolean;
   /** `false`: o atalho do histórico rápido está ocupado por outra app. */
   quick_ok: boolean;
+  /** `false`: perguntar sobre o ecrã está ligado mas outra app ocupou o atalho. */
+  screen_ok: boolean;
   autostart: boolean;
   paths: { config: string; data: string; logs: string };
 }
@@ -160,6 +167,8 @@ export interface ModelInfo {
   completion_price: number | null;
   /** Raciocina antes de responder (mais lento e mais caro). */
   reasoning: boolean;
+  /** Também lê imagens: serve para as capturas do ecrã. */
+  vision: boolean;
 }
 
 export interface ModelList {
@@ -262,6 +271,9 @@ export interface Status {
   command_label: string | null;
   /** `false` só com o modo comando ligado e o atalho ocupado por outra app. */
   command_ok: boolean;
+  /** O atalho de perguntar sobre o ecrã, legível; `null` com a opção desligada. */
+  screen_label: string | null;
+  screen_ok: boolean;
 }
 
 /** Sítios para onde a janela pode ser levada de fora (settings_window.rs, open_at). */
@@ -551,6 +563,8 @@ export interface ChatConversation {
   selection?: string;
   /** A app onde estavas ("outlook.exe"). */
   app?: string;
+  /** A conversa é sobre uma captura do ecrã (a imagem não fica guardada em disco). */
+  capture?: { width: number; height: number };
   messages: ChatMessage[];
 }
 
@@ -565,6 +579,8 @@ export interface AssistantView {
   saved: boolean;
   /** O atalho do modo comando, no formato do config; `null` com o modo desligado. */
   command_shortcut: string | null;
+  /** O atalho de perguntar sobre o ecrã, no formato do config; `null` com a opção desligada. */
+  screen_shortcut: string | null;
   key_missing: boolean;
 }
 
@@ -603,6 +619,9 @@ export const assistant = {
    *  voltar a ela e o texto ficou no clipboard. */
   apply: (messageId: string) => invoke<{ pasted: boolean }>("assistant_apply", { messageId }),
   close: () => invoke<void>("assistant_close"),
+  /** A miniatura da captura de uma conversa (`data:image/jpeg;base64,…`); `null` se já não existe
+   *  (a imagem só vive na memória, nunca no histórico). */
+  capture: (id: string) => invoke<string | null>("assistant_capture", { id }),
 };
 
 /** A conversa mudou (nova mensagem, resposta acabada, outra conversa aberta…). */
@@ -613,4 +632,64 @@ export function onAssistantState(handler: (view: AssistantView) => void): Promis
 /** A resposta em curso ganhou texto (no máximo ~10 vezes por segundo). */
 export function onAssistantStream(handler: (e: ChatStreamEvent) => void): Promise<UnlistenFn> {
   return listen<ChatStreamEvent>("assistant:stream", (e) => handler(e.payload));
+}
+
+// ---------------------------------------------------------------- perguntar sobre o ecrã (screen/)
+
+/** O que a janela de seleção precisa para se desenhar (screen/mod.rs, View). */
+export interface ScreenView {
+  /** Tamanho, em píxeis, da fotografia. */
+  width: number;
+  height: number;
+  /** O atalho de ditar, legível ("Ctrl+Win"). */
+  dictate: string;
+}
+
+/** A área escolhida, em píxeis CSS da janela (screen/shot.rs, Area). */
+export interface ScreenArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export const screen = {
+  /** `null`: a captura já não existe. */
+  view: () => invoke<ScreenView | null>("screen_view"),
+  /** A fotografia do ecrã, em JPEG. */
+  image: () => invoke<ArrayBuffer>("screen_image"),
+  /** Já desenhei a fotografia: mostra a janela. */
+  ready: () => invoke<void>("screen_ready"),
+  /** Envia a área com a pergunta (vazia = "explica o que se vê"). `viewport`: o tamanho visível da
+   *  página, com que o backend converte a área em píxeis da fotografia. */
+  submit: (prompt: string, area: ScreenArea, viewport: { width: number; height: number }, spoken: boolean) =>
+    invoke<void>("screen_submit", { prompt, area, viewport, spoken }),
+  cancel: () => invoke<void>("screen_cancel"),
+};
+
+/// O que o microfone já ouviu, enquanto se fala (pipeline: forward_partials).
+export function onScreenPartial(handler: (text: string) => void): Promise<UnlistenFn> {
+  return listen<string>("screen:partial", (e) => handler(e.payload));
+}
+
+/// O texto final ditado, para acrescentar à caixa de pergunta (pipeline::screen_prompt).
+export function onScreenTranscript(handler: (text: string) => void): Promise<UnlistenFn> {
+  return listen<string>("screen:transcript", (e) => handler(e.payload));
+}
+
+/// O estado do microfone, o mesmo da pílula: idle | recording | processing | done | copied | failed | nothing-heard.
+export type MicState = "idle" | "recording" | "processing" | "done" | "copied" | "failed" | "nothing-heard";
+
+export function onMicState(handler: (state: MicState) => void): Promise<UnlistenFn> {
+  return listen<MicState>("overlay:state", (e) => handler(e.payload));
+}
+
+/// O nível do microfone entre 0 e 1, ~20 vezes por segundo.
+export function onMicLevel(handler: (level: number) => void): Promise<UnlistenFn> {
+  return listen<number>("overlay:level", (e) => handler(e.payload));
+}
+
+/// O motivo curto de uma falha do microfone ou da transcrição ("Sem rede"…).
+export function onMicFailure(handler: (label: string) => void): Promise<UnlistenFn> {
+  return listen<{ label: string; retry: boolean }>("overlay:failure", (e) => handler(e.payload.label));
 }

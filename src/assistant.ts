@@ -33,6 +33,11 @@ let view: AssistantView | null = null;
 let seen = new Set<string>();
 let shownConversation: string | null = null;
 let contextOpen = false;
+/** A miniatura da captura está aberta (toda, em vez de uma tira). */
+let shotOpen = false;
+/** Miniaturas já pedidas ao backend, por conversa; `null` = a imagem já não existe. */
+const shots = new Map<string, string | null>();
+const shotsAsked = new Set<string>();
 let stick = true;
 /** Respostas a chegar cujo texto ainda não foi desenhado (uma vez por frame). */
 const dirty = new Set<string>();
@@ -94,6 +99,51 @@ function contextNode(conv: ChatConversation): HTMLElement {
     toggle.setAttribute("aria-expanded", String(contextOpen));
   });
   wrap.append(toggle, el("blockquote", undefined, conv.selection));
+  return wrap;
+}
+
+/** Pede (uma vez) a miniatura da captura de uma conversa; quando chega, redesenha. */
+function loadShot(id: string) {
+  if (shots.has(id) || shotsAsked.has(id)) return;
+  shotsAsked.add(id);
+  assistant
+    .capture(id)
+    .then((url) => shots.set(id, url))
+    .catch(() => shots.set(id, null))
+    .finally(() => {
+      if (view?.conversation?.id === id) renderThread(view);
+    });
+}
+
+/** A captura do ecrã sobre que a conversa começou: uma tira que se abre com um clique. A imagem só
+ *  existe na memória do Ditok enquanto a conversa está aberta; uma conversa do histórico já não a tem. */
+function shotNode(conv: ChatConversation): HTMLElement {
+  const capture = conv.capture!;
+  const url = shots.get(conv.id);
+  const size = `${capture.width} × ${capture.height}`;
+  const where = conv.app ? ` · ${prettyApp(conv.app)}` : "";
+  const wrap = el("figure", shotOpen ? "shot open" : "shot");
+  if (!url) {
+    wrap.classList.add("gone");
+    wrap.append(el("figcaption", undefined, url === null ? `Captura do ecrã${where} · já não está guardada` : `Captura do ecrã${where}`));
+    loadShot(conv.id);
+    return wrap;
+  }
+  const toggle = el("button", "shot-toggle");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", String(shotOpen));
+  toggle.setAttribute("aria-label", "Captura do ecrã: ver inteira");
+  const img = el("img");
+  img.src = url;
+  img.alt = "Captura do ecrã";
+  img.decoding = "async";
+  toggle.append(img);
+  toggle.addEventListener("click", () => {
+    shotOpen = !shotOpen;
+    wrap.classList.toggle("open", shotOpen);
+    toggle.setAttribute("aria-expanded", String(shotOpen));
+  });
+  wrap.append(toggle, el("figcaption", undefined, `Captura do ecrã · ${size}${where}`));
   return wrap;
 }
 
@@ -230,6 +280,7 @@ function renderThread(v: AssistantView) {
   }
 
   const nodes: HTMLElement[] = [];
+  if (conv.capture) nodes.push(shotNode(conv));
   if (conv.selection) nodes.push(contextNode(conv));
   messages.forEach((m, i) => {
     const last = i === messages.length - 1;
@@ -256,6 +307,10 @@ function renderChrome(v: AssistantView) {
   const keys = $("empty-keys");
   keys.hidden = !v.command_shortcut;
   if (v.command_shortcut) renderKeys(keys, v.command_shortcut);
+  // Outra maneira de chegar aqui: perguntar sobre o ecrã.
+  $("empty-screen").hidden = !v.screen_shortcut;
+  if (v.screen_shortcut) renderKeys($("empty-screen-keys"), v.screen_shortcut);
+  input().placeholder = v.conversation?.capture ? "Pergunta mais sobre a captura…" : "Escreve ou diz o que queres…";
 
   const notice = $("notice");
   notice.hidden = !v.key_missing;
@@ -293,6 +348,7 @@ function applyView(v: AssistantView) {
     shownConversation = id;
     seen = new Set(v.conversation?.messages.map((m) => m.id));
     contextOpen = false;
+    shotOpen = false;
     stick = true;
   }
   view = v;

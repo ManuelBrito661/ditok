@@ -20,8 +20,8 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
     assistant::Assistant, config::Config, dictation::DictationEvent, files::FileJobs,
-    history::HistoryStore, hotkey, metrics::MetricsStore, overlay, secrets, text::TextRules, tray,
-    usage::UsageStore, xai::Xai,
+    history::HistoryStore, hotkey, metrics::MetricsStore, overlay, screen::Screen, secrets,
+    text::TextRules, tray, usage::UsageStore, xai::Xai,
 };
 
 /// Emitido para a janela principal quando as definições mudam por fora dela (ex.:
@@ -47,6 +47,10 @@ pub struct Status {
     pub quick_label: Option<String>,
     /// `false` só quando há atalho do histórico rápido e outra app o tem.
     pub quick_ok: bool,
+    /// O atalho de perguntar sobre o ecrã, legível; `None` com a opção desligada.
+    pub screen_label: Option<String>,
+    /// `false` só quando a opção está ligada e outra app tem o atalho.
+    pub screen_ok: bool,
     /// Está a gravar notas de uma reunião (mostra o item de parar no menu do tray).
     pub notes_recording: bool,
 }
@@ -70,6 +74,8 @@ pub struct AppState {
     pub history: HistoryStore,
     /// As conversas do assistente (a janela do modo comando), ver `assistant/`.
     pub assistant: Assistant,
+    /// A captura do ecrã em curso (a fotografia), ver `screen/`.
+    pub screen: Screen,
     /// O ficheiro a ser transcrito (ou o último), ver `files.rs`.
     pub files: FileJobs,
     /// Para avisar o orquestrador (ex.: um atalho do tray).
@@ -83,6 +89,8 @@ pub struct AppState {
     command_ok: AtomicBool,
     /// O atalho do histórico rápido não está em falta (sem atalho conta como "ok").
     quick_ok: AtomicBool,
+    /// O atalho de perguntar sobre o ecrã não está em falta (desligado conta como "ok").
+    screen_ok: AtomicBool,
     /// As últimas apps onde ditaste, mais recente primeiro. Só em memória (nunca
     /// em disco): servem para a janela de definições propor "Usar esta app" sem
     /// teres de saber o nome do executável. Um `Mutex` chega: é tocado uma vez
@@ -129,6 +137,7 @@ impl AppState {
             notes: Default::default(),
             history: HistoryStore::new(dirs.data.clone()),
             assistant: Assistant::new(&dirs.data),
+            screen: Screen::default(),
             files: FileJobs::default(),
             config_dir: dirs.config,
             data_dir: dirs.data,
@@ -140,6 +149,7 @@ impl AppState {
             shortcut_ok: AtomicBool::new(true),
             command_ok: AtomicBool::new(true),
             quick_ok: AtomicBool::new(true),
+            screen_ok: AtomicBool::new(true),
             recent_apps: Mutex::new(VecDeque::new()),
         }
     }
@@ -160,6 +170,10 @@ impl AppState {
                 .filter(|s| !s.is_empty())
                 .map(hotkey::pretty),
             quick_ok: self.quick_ok(),
+            screen_label: config
+                .screen_enabled
+                .then(|| hotkey::pretty(&config.screen_shortcut)),
+            screen_ok: self.screen_ok(),
             notes_recording: self.notes.recording(),
         }
     }
@@ -185,6 +199,15 @@ impl AppState {
     /// Como `set_command_ok`: só guarda; quem chama faz `publish`.
     pub fn set_quick_ok(&self, ok: bool) {
         self.quick_ok.store(ok, Ordering::Relaxed);
+    }
+
+    pub fn screen_ok(&self) -> bool {
+        self.screen_ok.load(Ordering::Relaxed)
+    }
+
+    /// Como `set_quick_ok`: só guarda; quem chama faz `publish`.
+    pub fn set_screen_ok(&self, ok: bool) {
+        self.screen_ok.store(ok, Ordering::Relaxed);
     }
 
     /// O cliente da xAI, ou `None` sem chave. Barato: clonar copia dois ponteiros.

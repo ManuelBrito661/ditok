@@ -1,0 +1,304 @@
+/* A seleção da captura do ecrã: a fotografia a toda a largura, a área escolhida e a pergunta.
+   Sempre escura, seja qual for o tema do sistema: está por cima de um ecrã que pode ter
+   qualquer cor, e o painel tem de se ler em todas. Mesmos tokens do resto da app (OKLCH,
+   neutros azulados, um só acento). */
+
+:root {
+  color-scheme: dark;
+
+  --dim: oklch(0.1 0.01 265 / 0.58);
+  --dim-idle: oklch(0.1 0.01 265 / 0.3);
+
+  --panel: oklch(0.19 0.008 265 / 0.95);
+  --surface: oklch(0.25 0.009 265);
+  --surface-2: oklch(0.3 0.01 265);
+  --hover: oklch(1 0 0 / 0.07);
+  --line: oklch(1 0 0 / 0.11);
+  --line-strong: oklch(1 0 0 / 0.2);
+
+  --text: oklch(0.955 0.004 265);
+  --muted: oklch(0.74 0.01 265);
+  --faint: oklch(0.66 0.01 265);
+
+  --accent: oklch(0.7 0.15 258);
+  --on-accent: oklch(0.15 0.03 258);
+  --accent-soft: oklch(0.7 0.15 258 / 0.16);
+  --danger: oklch(0.7 0.19 25);
+  --danger-soft: oklch(0.7 0.19 25 / 0.18);
+  --danger-text: oklch(0.82 0.13 25);
+  --focus: oklch(0.76 0.14 258);
+
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", monospace;
+
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --sh-panel: 0 0 0 1px var(--line), 0 24px 60px -18px oklch(0 0 0 / 0.75), 0 4px 14px oklch(0 0 0 / 0.4);
+
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: #000; }
+body { user-select: none; -webkit-user-select: none; }
+
+#shot {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+}
+/* Sem área escolhida, o ecrã todo fica ligeiramente mais escuro: sinal de que está "congelado". */
+.stage::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--dim-idle);
+  pointer-events: none;
+  transition: opacity 160ms var(--ease);
+}
+.stage[data-mode="selected"]::before,
+.stage[data-mode="selecting"]::before { opacity: 0; }
+
+/* ---------------------------------------------------------------- a área */
+
+.sel {
+  position: absolute;
+  /* O que está fora escurece com uma sombra enorme: um só elemento, sem quatro painéis. */
+  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.45), 0 0 0 99999px var(--dim);
+  outline: 1.5px solid oklch(1 0 0 / 0.95);
+  outline-offset: -1px;
+  cursor: move;
+}
+.stage[data-mode="selecting"] .sel { cursor: crosshair; }
+
+.size {
+  position: absolute;
+  left: -1px;
+  bottom: calc(100% + 6px);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: oklch(0.15 0.01 265 / 0.9);
+  color: var(--text);
+  font: 600 11.5px/1.5 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* O ecrã todo: sem moldura nem pegas (ficariam cortadas nas bordas). */
+.sel[data-full] { outline: none; box-shadow: none; cursor: default; }
+.sel[data-full] .handle { display: none; }
+/* Colada ao topo do ecrã, a etiqueta passa para dentro da área. */
+.sel[data-top] .size { bottom: auto; top: 6px; left: 6px; }
+
+.handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.5);
+}
+.stage[data-mode="selecting"] .handle { opacity: 0; }
+.handle[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.handle[data-h="n"]  { left: 50%; top: 0; cursor: ns-resize; }
+.handle[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.handle[data-h="e"]  { left: 100%; top: 50%; cursor: ew-resize; }
+.handle[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+.handle[data-h="s"]  { left: 50%; top: 100%; cursor: ns-resize; }
+.handle[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.handle[data-h="w"]  { left: 0; top: 50%; cursor: ew-resize; }
+/* Mais área para agarrar do que o quadradinho que se vê. */
+.handle::after { content: ""; position: absolute; inset: -7px; }
+
+/* ---------------------------------------------------------------- dica e fechar */
+
+.hint {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  translate: -50% 0;
+  max-width: calc(100vw - 96px);
+  padding: 9px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--sh-panel);
+  color: var(--muted);
+  pointer-events: none;
+  transition: opacity 160ms var(--ease), translate 160ms var(--ease);
+}
+.hint .line { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 10px; margin: 0; }
+.hint .sep { color: var(--faint); }
+.hint .line + .line { color: var(--faint); font-size: 12.5px; }
+.stage:not([data-mode="idle"]) .hint { opacity: 0; translate: -50% -8px; }
+
+kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line), 0 1px 0 var(--line-strong);
+  color: var(--text);
+  font: 600 11.5px/1.65 var(--font-ui);
+  text-align: center;
+}
+
+.close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: var(--sh-panel);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms var(--ease), color 120ms var(--ease), scale 120ms var(--ease);
+}
+.close:hover { background: var(--surface); color: var(--text); }
+.close:active { scale: 0.92; }
+.close svg, .mic svg, .send svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.close svg { width: 16px; height: 16px; }
+
+button:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---------------------------------------------------------------- a pergunta */
+
+.ask {
+  position: absolute;
+  width: min(580px, calc(100vw - 32px));
+  padding: 10px 10px 8px;
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--sh-panel);
+  cursor: default;
+  user-select: text;
+  -webkit-user-select: text;
+  animation: rise 200ms var(--ease);
+}
+@keyframes rise { from { opacity: 0; translate: 0 6px; } }
+
+.ask textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  max-height: 168px;
+  margin: 0;
+  padding: 8px 10px;
+  resize: none;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.ask textarea::placeholder { color: var(--faint); }
+.ask textarea:focus-visible { outline: none; }
+.ask:focus-within { box-shadow: 0 0 0 1.5px var(--accent-soft), var(--sh-panel); }
+
+/* O que o microfone já ouviu, enquanto se fala. */
+.live {
+  margin: 0;
+  padding: 6px 10px 0;
+  max-height: 72px;
+  overflow: hidden;
+  color: var(--accent);
+  font-style: italic;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 2px 0;
+}
+.status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.status:empty { display: none; }
+.status.error { color: var(--danger-text); }
+.status:not(:empty) + .keys-hint { display: none; }
+.keys-hint { flex: 1; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.keys-hint kbd { min-width: 0; padding: 0 5px; font-size: 11px; }
+
+.mic, .send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  transition: background 120ms var(--ease), color 120ms var(--ease), scale 120ms var(--ease), box-shadow 120ms var(--ease);
+}
+.mic {
+  position: relative;
+  width: 36px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.mic:hover { background: var(--surface-2); color: var(--text); }
+.mic svg { width: 18px; height: 18px; }
+.mic:active, .send:active:not(:disabled) { scale: 0.94; }
+
+/* A ouvir: vermelho, com um anel que cresce com o volume da voz (--level, de 0 a 1). */
+.ask[data-mic="recording"] .mic {
+  background: var(--danger);
+  color: oklch(0.16 0.04 25);
+  box-shadow: 0 0 0 calc(2px + var(--level, 0) * 9px) var(--danger-soft);
+  transition: box-shadow 60ms linear, background 120ms var(--ease);
+}
+.ask[data-mic="processing"] .mic { background: var(--accent-soft); color: var(--accent); }
+.ask[data-mic="processing"] .mic svg { animation: pulse 900ms ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+.send {
+  padding: 0 14px 0 16px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.send:hover:not(:disabled) { background: oklch(0.76 0.15 258); }
+.send svg { width: 16px; height: 16px; stroke-width: 2.2; }
+.send:disabled { background: var(--surface); color: var(--faint); cursor: default; }
+.ask[data-sending] { opacity: 0.85; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ask { animation: none; }
+  .ask[data-mic="processing"] .mic svg { animation: none; }
+  * { transition-duration: 0.01ms !important; }
+}

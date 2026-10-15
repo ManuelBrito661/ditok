@@ -17,6 +17,7 @@ pub mod notes;
 mod overlay;
 mod paste;
 mod quick_history;
+mod screen;
 pub mod secrets;
 mod settings_window;
 mod sound;
@@ -139,6 +140,16 @@ pub fn run() {
                     }
                 };
 
+            // Perguntar sobre o ecrã também é um extra: atalho ocupado = só o aviso nas definições.
+            let screen_ok = !config.screen_enabled
+                || match hotkey::register_screen(app.handle(), &config.screen_shortcut) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "sem atalho de perguntar sobre o ecrã");
+                        false
+                    }
+                };
+
             let dirs = state::Dirs {
                 config: config_dir,
                 data: paths.app_data_dir()?,
@@ -171,6 +182,7 @@ pub fn run() {
             state.set_key(key);
             state.set_command_ok(command_ok);
             state.set_quick_ok(quick_ok);
+            state.set_screen_ok(screen_ok);
             state.set_shortcut_ok(shortcut_ok);
             if !shortcut_ok {
                 let shortcut = hotkey::pretty(&state.config().shortcut);
@@ -298,6 +310,12 @@ pub fn run() {
             commands::assistant_copy,
             commands::assistant_apply,
             commands::assistant_close,
+            commands::assistant_capture,
+            commands::screen_view,
+            commands::screen_image,
+            commands::screen_ready,
+            commands::screen_submit,
+            commands::screen_cancel,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,

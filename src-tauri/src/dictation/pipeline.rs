@@ -757,6 +757,89 @@ pub async fn command(
     outcome
 }
 
+/// A pergunta da captura do ecrã, do fim da gravação ao texto: transcreve o que disseste e
+/// entrega-o à caixa de pergunta da janela de seleção (`screen:transcript`), onde o podes
+/// ler, corrigir e enviar com a captura. Não se cola em lado nenhum e não passa pela limpeza
+/// com IA (uma pergunta a um modelo não precisa de ser polida, e poupa-se o pedido).
+///
+/// Só se aplica o dicionário. Os comandos falados ("nova linha") não fazem sentido numa
+/// pergunta, e as expansões ficam de fora de propósito: o texto vai para a xAI com a captura,
+/// e as expansões (o teu email, a tua morada) nunca saem do computador.
+pub async fn screen_prompt(
+    state: Arc<AppState>,
+    xai: Xai,
+    recording: impl Future<Output = Result<Recording, AudioError>>,
+    released_at: Instant,
+    commit: Commit,
+    live: Option<LiveSession>,
+) -> Outcome {
+    let (rec, release_to_wav) = match ready_recording(&state, recording, released_at).await {
+        Ok(ready) => ready,
+        Err(outcome) => return outcome,
+    };
+    let config = state.config();
+    let rules = state.text_rules();
+    let keyterms = stt::keyterms(&config.dictionary);
+    let req = SttRequest {
+        language: config.language.as_deref(),
+        keyterms: &keyterms,
+    };
+    let mut m = new_metrics(&rec, release_to_wav, false);
+    let mut stt_guard: Option<SttMetricsGuard> = None;
+
+    let outcome = match transcribe_recording(&xai, live, &rec, &req).await {
+        Err(e) => {
+            tracing::error!(error = %e, "transcrição da pergunta da captura falhou");
+            state.notify(&format!("Transcrição falhou: {e}"));
+            m.error = Some(e.to_string());
+            Outcome::failed(FailReason::from_api(&e))
+        }
+        Ok(t) => {
+            m.stt_ms = Some(ms(t.elapsed));
+            m.transport = Some(t.transport);
+            m.cost_usd = t.usage.cost;
+            // Como no ditado: se for cancelado a seguir, o custo da transcrição fica registado.
+            stt_guard = Some(SttMetricsGuard {
+                state: Arc::clone(&state),
+                budget: config.monthly_budget_usd,
+                metrics: Some(m.clone()),
+            });
+            let text = rules.apply_dictionary(t.text.trim()).trim().to_owned();
+            if text.is_empty() {
+                tracing::info!("nenhuma fala detetada; nada para a pergunta");
+                Outcome::Nothing
+            } else {
+                m.set_text(&text);
+                if let Some(guard) = &mut stt_guard {
+                    guard.metrics = Some(m.clone());
+                }
+                // Ponto sem retorno, como na colagem: um Esc a seguir já não retira o texto.
+                if !commit.try_commit() {
+                    tracing::info!("pergunta da captura cancelada antes de chegar à caixa");
+                    return Outcome::Nothing;
+                }
+                crate::screen::emit_transcript(&state.app, &text);
+                m.total_ms = Some(ms(released_at.elapsed()));
+                Outcome::Shown
+            }
+        }
+    };
+
+    tracing::info!(
+        audio_ms = m.audio_ms,
+        stt_ms = m.stt_ms,
+        total_ms = m.total_ms,
+        cost_usd = m.cost_usd,
+        chars = m.chars,
+        "pergunta ditada para a captura do ecrã"
+    );
+    if let Some(guard) = &mut stt_guard {
+        guard.disarm();
+    }
+    record_in_background(state, config, m, None, rec);
+    outcome
+}
+
 /// O resultado de "Reprocessar": o texto novo e o que o STT devolveu.
 #[derive(Debug)]
 pub struct Reprocessed {
