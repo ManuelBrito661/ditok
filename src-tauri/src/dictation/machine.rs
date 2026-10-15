@@ -42,8 +42,9 @@ pub enum Input {
     Pressed(Mode),
     Released(Mode),
     Cancel,
-    /// Clique na barra flutuante: começa em modo alternar ou termina-o.
-    Click,
+    /// Clique na barra flutuante (numa das bolhas: ditar ou comando): começa nesse modo,
+    /// em modo alternar, ou termina a gravação em curso.
+    Click(Mode),
     /// "Tentar de novo" a transcrição da última gravação falhada. Quem envia isto
     /// já confirmou que há uma gravação guardada.
     Retry,
@@ -126,13 +127,13 @@ impl Machine {
                 }
             }
             (Latched, Pressed(m)) if same(m) => (Processing, Some(Action::StopAndProcess)),
-            // Com o rato não há "segurar": um clique começa logo em modo alternar.
-            // A pílula só dita; o comando tem o seu atalho.
-            (Idle, Click) => {
-                self.mode = Mode::Dictation;
-                (Latched, Some(Action::StartRecording(Mode::Dictation)))
+            // Com o rato não há "segurar": um clique começa logo em modo alternar, no
+            // modo da bolha. Qualquer clique a seguir pára (seja qual for a bolha).
+            (Idle, Click(m)) => {
+                self.mode = m;
+                (Latched, Some(Action::StartRecording(m)))
             }
-            (Latched, Click) => (Processing, Some(Action::StopAndProcess)),
+            (Latched, Click(_)) => (Processing, Some(Action::StopAndProcess)),
             (Holding { .. } | Latched, Cancel) => (Idle, Some(Action::CancelRecording)),
             (Processing, Cancel) => (Idle, Some(Action::CancelProcessing)),
             // Só os ditados oferecem "Tentar de novo" (ver `pipeline::command`).
@@ -338,13 +339,41 @@ mod tests {
     fn click_starts_latched_and_next_click_stops() {
         let t0 = Instant::now();
         let mut m = Machine::default();
-        assert_eq!(m.handle(Input::Click, t0), Some(Action::StartRecording(D)));
+        assert_eq!(
+            m.handle(Input::Click(D), t0),
+            Some(Action::StartRecording(D))
+        );
         assert_eq!(m.phase(), Phase::Latched);
         assert_eq!(
-            m.handle(Input::Click, t0 + ms(3000)),
+            m.handle(Input::Click(D), t0 + ms(3000)),
             Some(Action::StopAndProcess)
         );
         assert_eq!(m.phase(), Phase::Processing);
+    }
+
+    #[test]
+    fn the_command_bubble_starts_a_command_that_its_own_shortcut_or_a_click_stops() {
+        let c = Mode::Command;
+        let t0 = Instant::now();
+        let mut m = Machine::default();
+        assert_eq!(
+            m.handle(Input::Click(c), t0),
+            Some(Action::StartRecording(c))
+        );
+        assert_eq!(m.mode(), c);
+        // O atalho do ditado não pára um comando.
+        assert_eq!(m.handle(Input::Pressed(D), t0 + ms(500)), None);
+        m.handle(Input::Released(D), t0 + ms(600));
+        assert_eq!(
+            m.handle(Input::Click(D), t0 + ms(2000)),
+            Some(Action::StopAndProcess)
+        );
+        m.handle(Input::ProcessingFinished, t0 + ms(2500));
+        m.handle(Input::Click(c), t0 + ms(3000));
+        assert_eq!(
+            m.handle(Input::Pressed(c), t0 + ms(4000)),
+            Some(Action::StopAndProcess)
+        );
     }
 
     #[test]
@@ -352,7 +381,7 @@ mod tests {
         let t0 = Instant::now();
         let mut m = Machine::default();
         // Começa com um clique, termina com o atalho.
-        m.handle(Input::Click, t0);
+        m.handle(Input::Click(D), t0);
         assert_eq!(
             m.handle(Input::Pressed(D), t0 + ms(2000)),
             Some(Action::StopAndProcess)
@@ -360,11 +389,11 @@ mod tests {
         m.handle(Input::ProcessingFinished, t0 + ms(2500));
         // Clicar com a tecla em baixo não interrompe o push-to-talk.
         m.handle(Input::Pressed(D), t0 + ms(3000));
-        assert_eq!(m.handle(Input::Click, t0 + ms(3100)), None);
+        assert_eq!(m.handle(Input::Click(D), t0 + ms(3100)), None);
         assert!(matches!(m.phase(), Phase::Holding { .. }));
         // Clicar durante o processamento é ignorado.
         m.handle(Input::Released(D), t0 + ms(4000));
-        assert_eq!(m.handle(Input::Click, t0 + ms(4100)), None);
+        assert_eq!(m.handle(Input::Click(D), t0 + ms(4100)), None);
         assert_eq!(m.phase(), Phase::Processing);
     }
 
@@ -372,7 +401,7 @@ mod tests {
     fn cancel_after_click_returns_to_idle() {
         let t0 = Instant::now();
         let mut m = Machine::default();
-        m.handle(Input::Click, t0);
+        m.handle(Input::Click(D), t0);
         assert_eq!(
             m.handle(Input::Cancel, t0 + ms(500)),
             Some(Action::CancelRecording)
@@ -450,7 +479,7 @@ mod tests {
         m.handle(Input::Pressed(C), t0);
         m.handle(Input::Cancel, t0 + ms(100));
         assert_eq!(
-            m.handle(Input::Click, t0 + ms(200)),
+            m.handle(Input::Click(D), t0 + ms(200)),
             Some(Action::StartRecording(D))
         );
         assert_eq!(m.mode(), D);

@@ -14,6 +14,8 @@
     <div id="tip" role="tooltip">
       <span id="tip-dictate">Clica ou segura <span id="tip-keys" class="keys"></span> para ditar</span>
       <span id="tip-notice" hidden></span>
+      <!-- Com o rato numa das bolhas: o que ela faz e o atalho. -->
+      <span id="tip-bubble" hidden><span id="tip-bubble-text"></span> <span id="tip-bubble-keys" class="keys"></span></span>
     </div>
 
     <!-- O que a transcrição em streaming já ouviu (só com o motor xAI): aparece enquanto se fala.
@@ -39,6 +41,19 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
       </button>
       <img id="mascot" alt="" draggable="false" />
+      <!-- Em repouso, com o rato por cima, a pílula parte-se nestas bolhas (class "open").
+           Só aparecem as que estão ligadas (data-off esconde as outras). -->
+      <div id="bubbles" role="group" aria-label="O que fazer">
+        <button class="bubble" type="button" data-action="dictate" aria-label="Ditar">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+        </button>
+        <button class="bubble" type="button" data-action="command" aria-label="Comando">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 10-10"/><path d="m13 7 1-3 1 3 3 1-3 1-1 3-1-3-3-1z"/><path d="M19 13.5v3M17.5 15h3"/></svg>
+        </button>
+        <button class="bubble" type="button" data-action="screen" aria-label="Perguntar sobre o ecrã">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="2.5"/></svg>
+        </button>
+      </div>
       <div id="bars" aria-hidden="true"></div>
       <div id="dots" aria-hidden="true"><span></span><span></span><span></span></div>
       <span id="label" aria-hidden="true"></span>

@@ -268,6 +268,7 @@ pub fn run() {
             commands::check_update,
             commands::install_update,
             commands::overlay_click,
+            commands::overlay_screen,
             commands::overlay_cancel,
             commands::overlay_hit_rect,
             commands::file_probe,

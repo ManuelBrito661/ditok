@@ -203,6 +203,104 @@ function renderNotice() {
 function onStatus(s: Status) {
   status = s;
   renderNotice();
+  syncBubbles();
+}
+
+// ---------------------------------------------------------------- bolhas
+// Em repouso, com o rato por cima, a pílula parte-se em bolhas (Ditar, Comando, Perguntar
+// sobre o ecrã): cada uma nasce no centro e afasta-se para o seu lugar; ao sair, juntam-se.
+
+type BubbleAction = "dictate" | "command" | "screen";
+
+const bubblesEl = document.getElementById("bubbles")!;
+const bubbles = Array.from(bubblesEl.querySelectorAll<HTMLButtonElement>(".bubble"));
+/** Tamanho de uma bolha e o espaço entre elas (o mesmo que no CSS). */
+const BUBBLE_PX = 34;
+const BUBBLE_GAP_PX = 8;
+/** Entre bolhas, cada uma sai este tempo depois da do centro. */
+const STAGGER_MS = 45;
+/** O rato saiu: espera isto antes de as juntar (passar de raspão não as fecha). */
+const CLOSE_AFTER_MS = 200;
+let closeTimer: number | undefined;
+
+const BUBBLE_TIP: Record<BubbleAction, string> = {
+  dictate: "Ditar",
+  command: "Comando",
+  screen: "Perguntar sobre o ecrã",
+};
+
+/** Só as opções ligadas; com uma só (ditar), a pílula não se parte. */
+function syncBubbles() {
+  const on: Record<BubbleAction, boolean> = {
+    dictate: true,
+    command: !!status?.command_label,
+    screen: !!status?.screen_label,
+  };
+  const shown = bubbles.filter((b) => {
+    const visible = on[b.dataset.action as BubbleAction];
+    b.hidden = !visible;
+    return visible;
+  });
+  const n = shown.length;
+  const middle = (n - 1) / 2;
+  shown.forEach((b, i) => {
+    // Para nascer no centro, cada bolha começa deslocada para lá.
+    b.style.setProperty("--from", `${(middle - i) * (BUBBLE_PX + BUBBLE_GAP_PX)}px`);
+    b.style.setProperty("--delay", `${Math.abs(i - middle) * STAGGER_MS}ms`);
+  });
+  pill.style.setProperty("--open-w", `${n * BUBBLE_PX + (n - 1) * BUBBLE_GAP_PX}px`);
+  pill.classList.toggle("has-bubbles", n > 1);
+  // Ficou uma só opção, ou apareceu um aviso ("Falta a chave"): a pílula volta a ser uma.
+  if (!canOpen()) closeBubbles();
+}
+
+function canOpen(): boolean {
+  return pill.dataset.state === "idle" && currentNotice() === null && pill.classList.contains("has-bubbles");
+}
+
+function openBubbles() {
+  window.clearTimeout(closeTimer);
+  if (canOpen()) pill.classList.add("open");
+}
+
+function closeBubbles() {
+  window.clearTimeout(closeTimer);
+  pill.classList.remove("open");
+  showBubbleTip(null);
+}
+
+/** A dica por cima diz o que a bolha debaixo do rato faz, e o atalho. */
+function showBubbleTip(action: BubbleAction | null) {
+  const tip = document.getElementById("tip-bubble")!;
+  tip.hidden = action === null;
+  document.getElementById("tip-dictate")!.hidden = action !== null || currentNotice() !== null;
+  if (!action || !status) return;
+  document.getElementById("tip-bubble-text")!.textContent = BUBBLE_TIP[action];
+  const keys = document.getElementById("tip-bubble-keys")!;
+  if (action === "dictate") renderKeys(keys, status.shortcut);
+  else {
+    // Os outros atalhos já vêm legíveis ("Ctrl+Shift+Alt+Espaço").
+    const label = (action === "command" ? status.command_label : status.screen_label) ?? "";
+    keys.replaceChildren(
+      ...label.split("+").filter(Boolean).map((k) => {
+        const kbd = document.createElement("kbd");
+        kbd.textContent = k;
+        return kbd;
+      }),
+    );
+  }
+}
+
+for (const b of bubbles) {
+  b.addEventListener("pointerenter", () => showBubbleTip(b.dataset.action as BubbleAction));
+  b.addEventListener("pointerleave", () => showBubbleTip(null));
+}
+
+function runBubble(action: BubbleAction) {
+  // Juntam-se logo: a captura do ecrã não as apanha, e a pílula passa a mostrar o ditado.
+  closeBubbles();
+  if (action === "screen") void api.overlayScreen();
+  else void api.overlayClick(action === "command" ? "command" : undefined);
 }
 
 const caption = document.getElementById("caption")!;
@@ -265,7 +363,11 @@ function setState(state: State) {
   }
   if (state !== "failed") failure = null;
   announce.textContent = spoken;
-  if (state === "idle") renderNotice();
+  if (state === "idle") {
+    renderNotice();
+    // O rato ainda está por cima (acabou um ditado começado por uma bolha): voltam a abrir.
+    if (pill.classList.contains("hover")) openBubbles();
+  } else closeBubbles();
 }
 
 function onFailure(f: Failure) {
@@ -320,6 +422,11 @@ new ResizeObserver(reportHitRect).observe(pill);
 
 function onHover(inside: boolean) {
   pill.classList.toggle("hover", inside);
+  if (inside) openBubbles();
+  else {
+    window.clearTimeout(closeTimer);
+    closeTimer = window.setTimeout(closeBubbles, CLOSE_AFTER_MS);
+  }
 }
 
 // ---------------------------------------------------------------- arrastar
@@ -359,6 +466,12 @@ pill.addEventListener("click", (e) => {
   // Os botões tratam de si; aqui só o clique na pílula em repouso ou numa falha
   // que oferece "Tentar de novo" (o backend decide qual dos dois é).
   if ((e.target as Element).closest(".pill-button")) return;
+  // Com as bolhas abertas, só uma bolha faz alguma coisa (o espaço entre elas não).
+  if (pill.classList.contains("open")) {
+    const bubble = (e.target as Element).closest<HTMLElement>(".bubble");
+    if (bubble) runBubble(bubble.dataset.action as BubbleAction);
+    return;
+  }
   const state = pill.dataset.state;
   const notice = currentNotice();
   if (state === "idle" && notice) {

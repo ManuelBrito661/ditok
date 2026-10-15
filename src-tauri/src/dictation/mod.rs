@@ -50,9 +50,9 @@ pub enum DictationEvent {
         mode: Mode,
     },
     Cancel,
-    /// Clique na barra flutuante: começa ou termina um ditado em modo alternar,
-    /// ou, numa falha com gravação guardada, tenta de novo.
-    Click,
+    /// Clique na barra flutuante: começa em modo alternar (no modo da bolha: ditado ou
+    /// comando) ou termina a gravação, ou, numa falha com gravação guardada, tenta de novo.
+    Click(Mode),
     /// "Tentar de novo" no menu do tray.
     Retry,
     /// O microfone não abriu ou desligou-se a meio.
@@ -236,14 +236,14 @@ impl Orchestrator {
             DictationEvent::Cancel => (Input::Cancel, Instant::now()),
             // Clicar numa falha que oferece "Tentar de novo" tenta de novo; nos
             // outros casos é o clique normal (começar/terminar).
-            DictationEvent::Click
+            DictationEvent::Click(_)
                 if self.deps.tray.state() == TrayState::Failed
                     && self.retry_offered
                     && self.failed.is_some() =>
             {
                 (Input::Retry, Instant::now())
             }
-            DictationEvent::Click => (Input::Click, Instant::now()),
+            DictationEvent::Click(mode) => (Input::Click(mode), Instant::now()),
             DictationEvent::Retry => {
                 if self.failed.is_none() {
                     tracing::debug!("tentar de novo pedido sem gravação guardada");

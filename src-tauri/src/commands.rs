@@ -8,7 +8,7 @@
 //! - Trabalho bloqueante (disco, cofre, lista de processos) vai para
 //!   `spawn_blocking` para não ocupar as threads do runtime assíncrono.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -20,7 +20,7 @@ use crate::{
     audio::{self, InputDevice, Recorder},
     config::Config,
     dict_io,
-    dictation::{DictationEvent, pipeline},
+    dictation::{DictationEvent, machine, pipeline},
     files::{self, JobView},
     history::{self, HistoryEntry, HistoryItem},
     hotkey,
@@ -678,10 +678,31 @@ pub async fn install_update(app: AppHandle) -> CmdResult<()> {
 
 // ---------------------------------------------------------------- barra flutuante
 
-/// Clique na pílula: começa um ditado em modo alternar, ou termina-o.
+/// Clique na pílula (ou numa das suas bolhas): começa em modo alternar, ou termina a
+/// gravação em curso. `mode`: "command" na bolha do comando; o resto é ditado.
 #[tauri::command]
-pub fn overlay_click(state: AppStateRef<'_>) {
-    let _ = state.events.send(DictationEvent::Click);
+pub fn overlay_click(state: AppStateRef<'_>, mode: Option<String>) {
+    let mode = match mode.as_deref() {
+        Some("command") if state.config().command_enabled => machine::Mode::Command,
+        Some("command") => {
+            tracing::info!("bolha do comando com o modo comando desligado; ignorada");
+            return;
+        }
+        _ => machine::Mode::Dictation,
+    };
+    let _ = state.events.send(DictationEvent::Click(mode));
+}
+
+/// A bolha "Perguntar sobre o ecrã": o mesmo que o atalho. Espera um instante antes de
+/// fotografar, para as bolhas já se terem recolhido.
+#[tauri::command]
+pub fn overlay_screen(state: AppStateRef<'_>) {
+    if !state.config().screen_enabled {
+        return;
+    }
+    let _ = state.events.send(DictationEvent::Screen {
+        settle: Duration::from_millis(250),
+    });
 }
 
 /// Botão ✕ da pílula: igual a carregar em Esc.

@@ -313,7 +313,10 @@ export const api = {
   /** Para onde a janela foi chamada (ex.: clique na pílula); uma só vez. */
   takeOpen: () => invoke<OpenTarget | null>("main_take_open"),
   // Barra flutuante (overlay.ts)
-  overlayClick: () => invoke<void>("overlay_click"),
+  /** Clique na pílula. `mode: "command"` na bolha do comando; sem nada, dita (ou pára). */
+  overlayClick: (mode?: "command") => invoke<void>("overlay_click", { mode: mode ?? null }),
+  /** A bolha "Perguntar sobre o ecrã". */
+  overlayScreen: () => invoke<void>("overlay_screen"),
   overlayCancel: () => invoke<void>("overlay_cancel"),
   overlayHitRect: (rect: { x: number; y: number; width: number; height: number }) =>
     invoke<void>("overlay_hit_rect", { rect }),
