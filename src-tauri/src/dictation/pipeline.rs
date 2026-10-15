@@ -17,9 +17,10 @@ use tauri::Emitter;
 
 use super::{failure::FailReason, selection::Selection};
 use crate::{
+    assistant::{self, CommandStart},
     audio::{AudioError, Recording},
     cleanup, command,
-    config::Config,
+    config::{CommandOutput, Config},
     focus,
     history::HistoryEntry,
     metrics::{self, DictationMetrics},
@@ -50,6 +51,9 @@ pub enum Outcome {
     Copied,
     /// Nada para colar: toque acidental ou silêncio. Não é um erro.
     Nothing,
+    /// O pedido do modo comando foi entregue à janela do assistente, onde a resposta
+    /// chega (ver `assistant`). Para a barra é como "colado".
+    Shown,
     /// A gravação, a transcrição ou a colagem falharam (há uma notificação).
     Failed {
         reason: FailReason,
@@ -519,14 +523,21 @@ fn new_metrics(rec: &Recording, release_to_wav: Duration, command: bool) -> Dict
     }
 }
 
-/// Modo comando, do fim da gravação à colagem: a instrução falada passa pelo
-/// STT, o LLM aplica-a à seleção (ou escreve texto novo, sem seleção) e o
-/// resultado substitui a seleção.
+/// Modo comando, do fim da gravação à resposta: a instrução falada passa pelo STT e
+/// depois, conforme `Config::command_output`:
+/// - `Window` (por omissão): é entregue ao assistente (`assistant`), que abre uma conversa
+///   nova com a instrução e a seleção e mostra a resposta numa janela. Com a janela do
+///   assistente em primeiro plano (`selection` é `None`), continua a conversa que lá está.
+/// - `Paste`: o LLM aplica-a à seleção (ou escreve texto novo, sem seleção) e o
+///   resultado substitui a seleção, sem janela.
 ///
 /// Diferenças do ditado: sem regras locais nem limpeza (a instrução não é texto
 /// a colar), sem "Tentar de novo" (repetir precisava da mesma seleção) e com o
 /// clipboard já mexido pela cópia da seleção (ver `selection.rs`). A instrução
 /// também vai em streaming (`live`): o texto já está pronto quando largas o atalho.
+///
+/// `selection`: `None` só quando o que dizes continua a conversa do assistente e por
+/// isso não há nada a copiar.
 #[allow(clippy::too_many_arguments)] // cada um é uma parte distinta do comando
 pub async fn command(
     state: Arc<AppState>,
@@ -534,10 +545,11 @@ pub async fn command(
     recording: impl Future<Output = Result<Recording, AudioError>>,
     released_at: Instant,
     target: focus::Target,
-    selection: Selection,
+    selection: Option<Selection>,
     commit: Commit,
     live: Option<LiveSession>,
 ) -> Outcome {
+    let follow_up = selection.is_none();
     // Se sairmos daqui sem colar (falha, silêncio, cancelamento), o `Drop` da
     // `selection` repõe o clipboard. Não é preciso fazer nada nesses caminhos.
     let (rec, release_to_wav) = match ready_recording(&state, recording, released_at).await {
@@ -564,10 +576,13 @@ pub async fn command(
 
     // A cópia da seleção começou antes deste processamento (ver `Selection`),
     // por isso corre ao mesmo tempo que a transcrição: `join!` espera pelas duas.
-    let (transcribed, selected) = tokio::join!(
-        transcribe_recording(&xai, live, &rec, &req),
-        selection.text()
-    );
+    let (transcribed, selected) =
+        tokio::join!(transcribe_recording(&xai, live, &rec, &req), async {
+            match &selection {
+                Some(selection) => selection.text().await,
+                None => None,
+            }
+        });
 
     let outcome = match transcribed {
         Err(e) => {
@@ -602,6 +617,46 @@ pub async fn command(
                 ));
                 m.error = Some("seleção grande demais".into());
                 Outcome::failed(FailReason::SelectionTooLarge)
+            } else if follow_up || config.command_output == CommandOutput::Window {
+                // A resposta vai para a janela do assistente, que a pede e a mostra à
+                // medida que chega: este ditado acaba quando o pedido lhe é entregue.
+                // Ponto sem retorno, como na colagem.
+                if !commit.try_commit() {
+                    tracing::info!("comando cancelado antes de abrir o assistente");
+                    return Outcome::Nothing;
+                }
+                tracing::info!(
+                    instruction_chars = instruction.chars().count(),
+                    selection_chars = chars,
+                    follow_up,
+                    "a entregar o comando ao assistente"
+                );
+                let handed_over = if follow_up {
+                    assistant::ask(&state, instruction.clone(), true)
+                } else {
+                    assistant::start_command(
+                        &state,
+                        CommandStart {
+                            instruction: instruction.clone(),
+                            selection: selected,
+                            app: target.app.clone(),
+                            origin: target.origin,
+                        },
+                    )
+                };
+                match handed_over {
+                    Ok(()) => {
+                        m.total_ms = Some(ms(released_at.elapsed()));
+                        m.chars = instruction.chars().count();
+                        Outcome::Shown
+                    }
+                    Err(message) => {
+                        tracing::error!(error = %message, "o assistente não aceitou o comando");
+                        state.notify(&message);
+                        m.error = Some(message);
+                        Outcome::failed(FailReason::Generic)
+                    }
+                }
             } else {
                 tracing::info!(
                     instruction_chars = instruction.chars().count(),
@@ -639,7 +694,7 @@ pub async fn command(
                         // A colagem fica com o clipboard de antes da cópia: é
                         // esse que se repõe (ou não, com "deixar no clipboard").
                         // Sem cópia, lê-se o clipboard atual.
-                        let before = match selection.take() {
+                        let before = match selection.as_ref().and_then(Selection::take) {
                             Some(captured) => captured.into_before(),
                             None => paste::Before::ReadNow,
                         };

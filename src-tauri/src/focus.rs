@@ -22,6 +22,9 @@ pub struct Target {
     /// Nome da app em minúsculas: o executável no Windows ("whatsapp.exe"), o
     /// nome do Dock no macOS ("whatsapp").
     pub app: Option<String>,
+    /// Para onde o assistente devolve o foco, se pedires para pôr lá a resposta
+    /// de um comando (ver `Origin`).
+    pub origin: Option<Origin>,
 }
 
 impl Target {
@@ -31,8 +34,29 @@ impl Target {
         Self {
             window,
             app: window.and_then(app_name),
+            origin: origin(window),
         }
     }
+}
+
+/// Para onde voltar mais tarde: a app onde estavas quando deste um comando, para o
+/// assistente lhe devolver o foco e colar lá a resposta ("Substituir"). No Windows é a
+/// janela; no macOS, a app em primeiro plano (pelo número do processo, porque as
+/// janelas não se verificam aqui, ver o início deste ficheiro). Noutros sistemas não há.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Origin(imp::OriginId);
+
+/// A app onde estás agora, ou `None` se for o próprio Ditok, a barra de tarefas ou se o
+/// sistema não deixar saber. `window`: a janela já capturada ao começar o comando.
+pub fn origin(window: Option<Window>) -> Option<Origin> {
+    imp::origin(window).map(Origin)
+}
+
+/// Bloqueante. Volta à app de `origin` e diz se ela ficou em primeiro plano (pode ter
+/// fechado, ou o sistema não deixar). Quem chama deve ter acabado de receber um clique
+/// do utilizador: o Windows só deixa trocar de janela a quem o recebeu.
+pub fn restore(origin: Origin) -> bool {
+    imp::restore(origin.0)
 }
 
 /// A janela em primeiro plano agora. `None` se não houver nenhuma (acontece por
@@ -171,6 +195,16 @@ mod imp {
         exe_of(search.found).or(Some(name))
     }
 
+    pub type OriginId = Window;
+
+    pub fn origin(window: Option<Window>) -> Option<OriginId> {
+        window.filter(|w| !is_ours_or_shell(*w))
+    }
+
+    pub fn restore(w: OriginId) -> bool {
+        super::activate(w)
+    }
+
     pub fn activate(w: Window) {
         // SAFETY: um `hwnd` que entretanto fechou não é perigoso; a função só
         // devolve 0 (falhou), e quem chama confirma com `foreground()`.
@@ -204,6 +238,61 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     use super::Window;
+
+    /// No macOS, o número do processo da app.
+    #[cfg(target_os = "macos")]
+    pub type OriginId = i32;
+    #[cfg(not(target_os = "macos"))]
+    pub type OriginId = std::convert::Infallible;
+
+    /// A app em primeiro plano, a não ser que seja o próprio Ditok.
+    #[cfg(target_os = "macos")]
+    pub fn origin(_: Option<Window>) -> Option<OriginId> {
+        use objc2_app_kit::NSWorkspace;
+        let pid = NSWorkspace::sharedWorkspace()
+            .frontmostApplication()?
+            .processIdentifier();
+        (u32::try_from(pid).ok()? != std::process::id()).then_some(pid)
+    }
+
+    /// Ativa a app e espera (até ~0,6 s) que ela fique em primeiro plano.
+    #[cfg(target_os = "macos")]
+    pub fn restore(pid: OriginId) -> bool {
+        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
+        use std::time::Duration;
+        let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
+            return false;
+        };
+        if app.isTerminated() {
+            return false;
+        }
+        // Depreciado no macOS 14 (o "ignoring" deixa de contar), mas é o que existe desde o
+        // macOS 11, e a app que está ativa (esta, logo após um clique) pode ativar outra.
+        #[allow(deprecated)]
+        app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(30));
+            let front = NSWorkspace::sharedWorkspace()
+                .frontmostApplication()
+                .map(|a| a.processIdentifier());
+            if front == Some(pid) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Sem janelas a sério, não há como saber nem voltar a elas: o assistente deixa o
+    /// texto no clipboard.
+    #[cfg(not(target_os = "macos"))]
+    pub fn origin(_: Option<Window>) -> Option<OriginId> {
+        None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn restore(never: OriginId) -> bool {
+        match never {}
+    }
 
     pub fn foreground() -> Option<Window> {
         Some(Window(0))

@@ -28,6 +28,8 @@ pub struct Config {
     /// para outras apps, mas a escolha em `command_shortcut` é guardada.
     pub command_enabled: bool,
     pub command_shortcut: String,
+    /// Onde aparece a resposta do modo comando (ver `CommandOutput`).
+    pub command_output: CommandOutput,
     /// ISO-639-1 (ex.: "pt"); `None` para deteção automática.
     pub language: Option<String>,
     /// Quanto o LLM mexe no texto (ver `cleanup.rs`). Substitui o antigo
@@ -111,6 +113,19 @@ pub enum CleanupLevel {
     Medium,
     /// Reescreve para ficar claro e bem estruturado.
     High,
+}
+
+/// Para onde vai a resposta do modo comando. `rename_all = "lowercase"`: no JSON fica
+/// "window" ou "paste".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandOutput {
+    /// Na janela do assistente (ver `assistant/`), onde a podes ler, pedir mudanças
+    /// e, com um clique, pôr no sítio de onde veio.
+    #[default]
+    Window,
+    /// Colada logo na app em foco, por cima da seleção, sem janela.
+    Paste,
 }
 
 /// O tom de um ditado, escolhido pela app onde estás a escrever.
@@ -209,6 +224,7 @@ impl Default for Config {
             shortcut: DEFAULT_SHORTCUT.to_owned(),
             command_enabled: true,
             command_shortcut: DEFAULT_COMMAND_SHORTCUT.to_owned(),
+            command_output: CommandOutput::default(),
             language: Some("pt".to_owned()),
             cleanup_level: CleanupLevel::Off,
             cleanup_model: DEFAULT_CHAT_MODEL.to_owned(),
@@ -620,6 +636,19 @@ mod tests {
     }
 
     #[test]
+    fn the_command_output_is_read_from_the_json() {
+        let paste = Config::from_json(br#"{"command_output": "paste"}"#).unwrap();
+        assert_eq!(paste.command_output, CommandOutput::Paste);
+        // Um config.json de antes do assistente não tem o campo.
+        let old = Config::from_json(br#"{"command_enabled": true}"#).unwrap();
+        assert_eq!(old.command_output, CommandOutput::Window);
+        assert_eq!(
+            serde_json::to_value(CommandOutput::Window).unwrap(),
+            "window"
+        );
+    }
+
+    #[test]
     fn old_names_missing_and_unknown_fields_are_tolerated() {
         // Os campos do tempo do OpenRouter e do motor local já não existem: lêem-se e ignoram-se.
         let c = Config::from_json(
@@ -660,6 +689,11 @@ mod tests {
         assert!(!c.onboarding_done);
         assert!(c.command_enabled, "modo comando ligado por omissão");
         assert_eq!(c.command_shortcut, DEFAULT_COMMAND_SHORTCUT);
+        assert_eq!(
+            c.command_output,
+            CommandOutput::Window,
+            "a resposta abre na janela do assistente por omissão"
+        );
     }
 
     #[test]

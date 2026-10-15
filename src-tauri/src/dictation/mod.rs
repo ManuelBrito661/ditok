@@ -125,6 +125,10 @@ struct Orchestrator {
     /// curso. Largá-la repõe o clipboard (ver `selection.rs`), por isso basta
     /// pôr `None` para "desistir" dela.
     selection: Option<Selection>,
+    /// Modo comando: a janela do assistente estava em primeiro plano quando o comando
+    /// começou, por isso o que dizes continua a conversa dela e não há seleção a copiar
+    /// (um Ctrl+C ali copiaria da própria janela).
+    follow_up: bool,
     /// O stream de transcrição do ditado (ou comando) em curso. Largá-lo fecha a
     /// ligação; ao parar passa para o processamento, que espera pelo texto final.
     live: Option<LiveSession>,
@@ -178,6 +182,7 @@ async fn run(
         machine: Machine::default(),
         target: focus::Target::default(),
         selection: None,
+        follow_up: false,
         live: None,
         job: None,
         next_job: 0,
@@ -275,7 +280,7 @@ impl Orchestrator {
                     Outcome::Pasted => self.show_result(TrayState::Done, DONE_FOR),
                     Outcome::Copied => self.show_result(TrayState::Copied, COPIED_FOR),
                     Outcome::Failed { reason, .. } => self.show_failure(reason, false),
-                    Outcome::Nothing => {}
+                    Outcome::Nothing | Outcome::Shown => {}
                 }
                 return;
             }
@@ -349,7 +354,7 @@ impl Orchestrator {
             crate::overlay::emit_latched(&app);
             // Modo comando alternado: a tecla acabou de ser largada, por isso é a
             // altura segura de copiar a seleção (ver `capture_selection`).
-            if self.machine.mode() == Mode::Command && self.selection.is_none() {
+            if self.machine.mode() == Mode::Command && self.selection.is_none() && !self.follow_up {
                 self.selection = Some(Selection::capture(app.clone(), self.target.window));
             }
         }
@@ -407,6 +412,8 @@ impl Orchestrator {
         // Uma seleção de um comando anterior que tenha ficado para trás (não
         // devia) é largada já: repõe o clipboard antes de copiar outra.
         self.selection = None;
+        // Com a janela do assistente em primeiro plano, o comando continua a conversa.
+        self.follow_up = mode == Mode::Command && crate::assistant::window::is_focused(&app);
         // Sem um sítio guardado pelo utilizador, a barra segue o monitor onde está o
         // cursor (como no Wispr Flow); com um, fica onde a deixaste.
         crate::overlay::reposition_for(&app);
@@ -451,10 +458,11 @@ impl Orchestrator {
             // Em modo alternar a seleção já foi copiada ao largar a tecla; a
             // segurar, copia-se agora (a tecla acabou de ser largada). Corre
             // ao mesmo tempo que o fim da gravação e a transcrição.
-            let selection = self
-                .selection
-                .take()
-                .unwrap_or_else(|| Selection::capture(self.deps.state.app.clone(), target.window));
+            let selection = (!self.follow_up).then(|| {
+                self.selection.take().unwrap_or_else(|| {
+                    Selection::capture(self.deps.state.app.clone(), target.window)
+                })
+            });
             self.spawn_job(commit.clone(), false, async move {
                 pipeline::command(
                     state,
@@ -569,6 +577,11 @@ impl Orchestrator {
             Outcome::Copied => {
                 self.set_failed(None);
                 self.show_result(TrayState::Copied, COPIED_FOR);
+            }
+            // A resposta está na janela do assistente: para a barra é como colado.
+            Outcome::Shown => {
+                self.set_failed(None);
+                self.show_result(TrayState::Done, DONE_FOR);
             }
             // Sem isto, um ditado sem voz acabava sem dizer nada e parecia avariado.
             Outcome::Nothing => {

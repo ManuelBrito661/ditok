@@ -5,6 +5,7 @@ import {
   api,
   errorText,
   type CleanupLevel,
+  type CommandOutput,
   type Config,
   type ModelInfo,
   type ModelList,
@@ -351,6 +352,8 @@ function renderControls() {
   const budget = $<HTMLInputElement>("budget");
   if (document.activeElement !== budget) budget.value = c.monthly_budget_usd == null ? "" : String(c.monthly_budget_usd);
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="cleanup-level"]')) r.checked = r.value === c.cleanup_level;
+  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="command-output"]')) r.checked = r.value === c.command_output;
+  $("command-output-row").classList.toggle("is-off", !c.command_enabled);
   $<HTMLInputElement>("history-enabled").checked = c.history_enabled;
   $<HTMLInputElement>("history-limit").value = String(c.history_limit);
   $<HTMLInputElement>("keep-audio").checked = c.keep_audio;
@@ -388,6 +391,9 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="cleanup-level"]')) {
     r.addEventListener("change", () => r.checked && save({ cleanup_level: r.value as CleanupLevel }));
   }
+  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="command-output"]')) {
+    r.addEventListener("change", () => r.checked && save({ command_output: r.value as CommandOutput }));
+  }
   // Ligações entre os dois separadores (o nível e os estilos dependem um do outro).
   $("cleanup-open-styles").addEventListener("click", () => {
     selectTab("estilos");
@@ -412,7 +418,7 @@ function bindSimpleControls(onHistoryCleared: () => void) {
   $("history-clear").addEventListener("click", async () => {
     const ok = await confirmDanger(
       "Apagar todo o histórico?",
-      "Removo todos os ditados guardados neste computador. Não dá para desfazer.",
+      "Removo todos os ditados e as conversas do assistente guardados neste computador. Não dá para desfazer.",
       "Apagar histórico",
     );
     if (!ok) return;

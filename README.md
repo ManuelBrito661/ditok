@@ -1,6 +1,6 @@
 # Ditok
 
-App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, notas de reuniões, métricas e definições.
+App pessoal de ditado por voz para Windows e macOS: seguras um atalho, falas, largas e o texto aparece na app em foco. Vive na bandeja do sistema (no macOS também na Dock e no Command-Tab), mostra o estado numa pequena barra com a mascote e tem uma janela, ao estilo do Wispr Flow, com os teus ditados, notas de reuniões, métricas e definições. O modo comando tem ainda a sua mini-janela, o assistente, com conversa e histórico.
 
 Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. Tudo o que usa IA passa pelos modelos da [xAI](https://x.ai), com uma só chave: a transcrição (em tempo real enquanto falas), a limpeza do texto, o modo comando e os resumos.
 
@@ -14,6 +14,7 @@ Feito com Tauri v2 (Rust) e uma UI mínima em TypeScript. Tudo o que usa IA pass
 | Mover a barra | arrastar a pílula (fora dos botões) para outro sítio do ecrã |
 | Cancelar a gravação | **Esc** (ou o **✕** na barra) |
 | Modo comando | atalho próprio, ligado em **Definições → Geral** (ver abaixo) |
+| Abrir o assistente | tray → **Abrir o assistente** (ver abaixo) |
 | Histórico rápido | atalho próprio, sem nenhum por omissão (ver abaixo) |
 
 O atalho de ditado pode ser mudado nas definições (também aceita só modificadores, como Ctrl+Alt).
@@ -86,7 +87,23 @@ Com a limpeza com IA ligada, as palavras vão no pedido ao modelo, para ele as e
 
 ### Modo comando
 
-Seleciona um texto numa app, carrega no atalho de comando e diz o que queres: "torna isto mais formal", "traduz para inglês". O texto selecionado é substituído pela resposta do modelo. Sem seleção, a instrução escreve texto novo no cursor ("escreve um email a recusar a reunião"). Usa o modelo de texto da limpeza, mesmo com a limpeza desligada. Liga-se em **Definições → Geral**, com o atalho próprio (por omissão `Ctrl+Shift+Alt+Space`).
+Seleciona um texto numa app, carrega no atalho de comando e diz o que queres: "torna isto mais formal", "traduz para inglês". A resposta abre no [assistente](#o-assistente), uma janela pequena onde a lês, pedes mudanças e a pões no sítio de onde veio. Sem seleção, a instrução escreve texto novo ("escreve um email a recusar a reunião"). Usa o modelo de texto da limpeza, mesmo com a limpeza desligada, e aceita seleções até 8000 caracteres. Liga-se em **Definições → Geral**, com o atalho próprio (por omissão `Ctrl+Shift+Alt+Space`).
+
+Em **Onde aparece a resposta** (também em Definições → Geral) podes voltar ao modo sem janela: a resposta é colada logo por cima da seleção (ou no cursor, sem seleção), como antes do assistente existir.
+
+### O assistente
+
+Uma janela pequena (440×660, redimensionável), com a sua própria interface, onde o modo comando mostra a resposta. Segue o tema do sistema (claro ou escuro).
+
+- **A resposta chega à medida que é escrita.** O botão da caixa de texto passa a **Parar**, e o que já veio fica. Por cima do primeiro pedido fica o texto que tinhas selecionado, numa citação que se abre com um clique.
+- **Por baixo de cada resposta:** **Copiar**, **Substituir seleção** (ou **Inserir no cursor**, se não havia seleção) e **Tentar de novo**. "Substituir" volta à app de onde deste o comando e cola lá a resposta (ver as limitações). Os botões da última resposta estão sempre à vista; os das outras aparecem ao passar o rato. Um bloco de código tem o seu próprio **Copiar**.
+- **A conversa continua.** Escreve na caixa de texto ("mais curto", "em inglês", "porquê?") ou, com a janela em primeiro plano, carrega no atalho de comando e diz o pedido: nesse caso não se copia nenhuma seleção, o que dizes é mais uma mensagem da conversa. Um comando dado noutra app abre uma conversa nova.
+- **Histórico** (o botão ☰ ou `Ctrl+K`): as conversas agrupadas por dia (hoje, ontem, últimos 7 e 30 dias, mais antigas), com pesquisa no texto todo. Apagar pede um segundo clique, e **Apagar todas** também. A pesquisa não distingue maiúsculas.
+- **Teclas:** `Enter` envia, `Shift+Enter` muda de linha, `Ctrl+N` abre uma conversa nova, `Ctrl+K` abre o histórico e `Esc` fecha o histórico (ou a janela, se a caixa de texto estiver vazia). No macOS é `⌘` em vez de `Ctrl`.
+
+Fechar a janela não pára uma resposta a chegar nem perde a conversa: ela continua no Ditok e reabre-se em tray → **Abrir o assistente** (ou no próximo comando). As conversas ficam guardadas em `conversas\` na pasta de dados (um ficheiro por conversa, as últimas 200) **só com o histórico ligado** (Definições → Geral); desligado, a conversa só existe enquanto está aberta, e nada fica em disco. **Apagar histórico** (Definições → Dados) apaga também as conversas.
+
+Cada resposta custa o que a xAI cobrar ao modelo de texto, com o custo exato, e entra nas Métricas e no orçamento do mês. Numa conversa comprida seguem para o modelo as mensagens mais recentes (até ~48 mil caracteres); o primeiro pedido, com o texto selecionado, vai sempre. O texto selecionado é tratado como dados: uma instrução escrita lá dentro não é obedecida.
 
 ### Histórico rápido
 
@@ -211,6 +228,7 @@ O WebView2 corre com a aceleração por GPU desligada, o que poupa ~55 MB e não
 | `costs.json` | `%APPDATA%\com.manuelbrito.ditok\` | custo e número de ditados por mês |
 | `usage.json` | `%APPDATA%\com.manuelbrito.ditok\` | contagens de palavras por dia e por app (sem texto) |
 | `history.json` | `%APPDATA%\com.manuelbrito.ditok\` | texto dos últimos ditados (só se o histórico estiver ligado) |
+| `conversas\` | `%APPDATA%\com.manuelbrito.ditok\` | as conversas do assistente, um ficheiro cada, as últimas 200 (só se o histórico estiver ligado) |
 | `audio\` | `%APPDATA%\com.manuelbrito.ditok\` | o áudio dos últimos 20 ditados (só se a opção estiver ligada) |
 | `transcricoes\` | `%APPDATA%\com.manuelbrito.ditok\` | uma cópia do texto de cada ficheiro transcrito |
 | `notas\` | `%APPDATA%\com.manuelbrito.ditok\` | as sessões de reuniões: metadados, transcrição, resumo |
@@ -289,13 +307,16 @@ src-tauri/src/
   state.rs            estado partilhado entre os módulos
   dictation/          orquestrador (actor), máquina de estados do atalho, pipeline do ditado,
                       falhas, seleção
-  command.rs          modo comando: texto selecionado + instrução, com o modelo de texto
+  command.rs          modo comando: o prompt e a resposta sem janela (`command_output: paste`)
+  assistant/          o assistente: conversa e streaming (mod.rs), conversas em disco (store.rs),
+                      janela (window.rs)
   text.rs             comandos falados, dicionário e expansões (no computador)
   dict_io.rs          importar e exportar o dicionário (JSON, CSV, TXT)
   audio/              captura (cpal + ring buffer), mono 16 kHz, deteção de voz, WAV,
                       leitura de ficheiros (symphonia) e cortes nas pausas
   xai/                o único fornecedor de modelos: cliente (mod.rs), transcrição em lote e em
-                      streaming (stt.rs), texto (chat.rs), lista de modelos com cache (models.rs)
+                      streaming (stt.rs), texto e conversas em streaming (chat.rs), lista de
+                      modelos com cache (models.rs)
                       e repetição de pedidos (retry.rs)
   notes/              notetaker: as duas faixas (microfone e sistema), segmentação, sessões,
                       armazenamento, separação de oradores (xAI) e verificações
@@ -303,7 +324,8 @@ src-tauri/src/
   cleanup.rs          limpeza opcional com LLM
   summarize.rs        resumos de transcrições (uma chamada ao modelo de texto)
   paste.rs            clipboard + Ctrl/Cmd+V (+ reposição do clipboard, se pedida), copiar sem colar
-  focus.rs            janela em foco, para confirmar antes de colar
+  focus.rs            janela em foco, para confirmar antes de colar, e voltar à app de origem
+                      ("Substituir" do assistente)
   quick_history.rs    menu do histórico rápido
   sound.rs            sons de início e fim, gerados na app
   hotkey.rs           atalho global, troca com deteção de conflitos
@@ -323,6 +345,8 @@ src/
   metrics-page.ts, settings-page.ts, styles-panel.ts
                       Início, Dicionário, Ficheiros, Notas, Métricas e definições
   onboarding.ts       guia de primeira execução
+  assistant.ts, assistant-history.ts, assistant-text.ts, assistant-icons.ts, assistant.css
+                      a janela do assistente (assistant.html)
   devices.ts          seletor de microfone (partilhado)
   summary.ts          resumos (Ficheiros e Notas)
   api.ts, store.ts, format.ts   tipos dos comandos, estado partilhado e formatação
@@ -337,6 +361,9 @@ scripts/gen-icons.mjs geração dos ícones (pnpm icons)
 
 ### Windows: apps abertas como administrador
 O Windows impede que um processo normal envie teclas a uma janela com privilégios elevados (UIPI). O atalho funciona, mas a colagem falha em apps abertas "como administrador" (por exemplo, um terminal elevado). A alternativa é correr também o Ditok como administrador.
+
+### Assistente: "Substituir" e a app de origem
+"Substituir" volta à app de onde deste o comando e cola lá a resposta. No Windows volta à **janela**; se a fechaste (ou se era uma app aberta como administrador), o texto fica no clipboard e o botão avisa. No macOS volta à **app** (pelo número do processo, porque as janelas não se verificam) e precisa da mesma permissão de Acessibilidade da colagem. Uma conversa que reabras do histórico, ou que comeces a escrever na própria janela, já não sabe de onde veio: só tem **Copiar**.
 
 ### Esc durante a gravação
 Enquanto gravas, o Esc fica reservado ao Ditok para cancelar e não chega às outras apps. Fora da gravação não é intercetado.

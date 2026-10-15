@@ -28,13 +28,14 @@ use crate::{
 };
 
 const MENU_OPEN_SETTINGS: &str = "open_settings";
+const MENU_OPEN_ASSISTANT: &str = "open_assistant";
 const MENU_PASTE_LAST: &str = "paste_last";
 const MENU_RETRY: &str = "retry";
 const MENU_SHORTCUT: &str = "shortcut";
 const MENU_COMMAND: &str = "command";
 /// Onde fica a linha do atalho de comando: logo a seguir à do atalho de ditado
-/// (abrir, colar, tentar de novo, separador, atalho → posição 5).
-const COMMAND_POSITION: usize = 5;
+/// (abrir, assistente, colar, tentar de novo, separador, atalho → posição 6).
+const COMMAND_POSITION: usize = 6;
 const MENU_MUTE: &str = "mute";
 const MENU_RESET_OVERLAY: &str = "reset_overlay";
 const MENU_QUIT: &str = "quit";
@@ -223,6 +224,8 @@ impl Tray {
         let done = Image::from_bytes(include_bytes!("../icons/tray/done.png"))?;
 
         let open = MenuItemBuilder::with_id(MENU_OPEN_SETTINGS, "Abrir o Ditok").build(app)?;
+        let assistant =
+            MenuItemBuilder::with_id(MENU_OPEN_ASSISTANT, "Abrir o assistente").build(app)?;
         // Desativado até haver um ditado para colar (o orquestrador ativa-o).
         let paste_last = MenuItemBuilder::with_id(MENU_PASTE_LAST, "Colar o último ditado")
             .enabled(false)
@@ -252,6 +255,7 @@ impl Tray {
         let quit = MenuItemBuilder::with_id(MENU_QUIT, "Sair").build(app)?;
         let menu = MenuBuilder::new(app)
             .item(&open)
+            .item(&assistant)
             .item(&paste_last)
             .item(&retry)
             .separator()
@@ -285,6 +289,9 @@ impl Tray {
                 move |app: &AppHandle<Wry>, event| match event.id().as_ref() {
                     MENU_OPEN_SETTINGS => {
                         crate::settings_window::open(app);
+                    }
+                    MENU_OPEN_ASSISTANT => {
+                        crate::assistant::window::open(app);
                     }
                     MENU_PASTE_LAST => {
                         tracing::info!("menu: colar o último ditado");

@@ -1,0 +1,451 @@
+// A janela do assistente: a mini-app onde o modo comando mostra a resposta. O backend
+// (src-tauri/src/assistant/) é dono da conversa; esta página só a desenha e manda os
+// pedidos. Sem framework, como o resto: cada mudança do backend chega como o estado
+// completo (`assistant:state`) e as respostas a chegar como o texto até agora
+// (`assistant:stream`), que atualiza só a última resposta.
+
+import "@fontsource/instrument-serif/latin-400.css";
+import mascotUrl from "../design/mascot/parado.svg?inline";
+import {
+  api,
+  assistant,
+  errorText,
+  onAssistantState,
+  onAssistantStream,
+  type AssistantView,
+  type ChatConversation,
+  type ChatMessage,
+  type ChatStreamEvent,
+} from "./api";
+import { icon } from "./assistant-icons";
+import { closeHistory, isHistoryOpen, openHistory, setupHistory, syncHistory } from "./assistant-history";
+import { parseBody, prettyApp, type Block } from "./assistant-text";
+import { isMac, renderKeys } from "./format";
+import { $, toast } from "./store";
+
+/** A janela acompanha o fim da conversa enquanto estás perto dele. */
+const STICK_PX = 80;
+const MAX_INPUT_PX = 148;
+const FLASH_MS = 1600;
+
+let view: AssistantView | null = null;
+/** Mensagens já mostradas: só as novas entram com animação. */
+let seen = new Set<string>();
+let shownConversation: string | null = null;
+let contextOpen = false;
+let stick = true;
+/** Respostas a chegar cujo texto ainda não foi desenhado (uma vez por frame). */
+const dirty = new Set<string>();
+let frame = 0;
+
+const scroller = () => $("scroll");
+const input = () => $<HTMLTextAreaElement>("input");
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+// ---------------------------------------------------------------- mensagens
+
+function codeNode(block: Extract<Block, { kind: "code" }>): HTMLElement {
+  const wrap = el("div", "code");
+  const head = el("div", "code-head");
+  head.append(el("span", undefined, block.lang || "código"));
+  const copy = el("button", "code-copy", "Copiar");
+  copy.type = "button";
+  copy.addEventListener("click", async () => {
+    try {
+      await api.copyText(block.code);
+      copy.textContent = "Copiado";
+      window.setTimeout(() => (copy.textContent = "Copiar"), FLASH_MS);
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  });
+  head.append(copy);
+  const pre = el("pre");
+  pre.append(el("code", undefined, block.code));
+  wrap.append(head, pre);
+  return wrap;
+}
+
+/** Desenha o texto de uma resposta. Só o código tem formato (ver `parseBody`). */
+function fillBody(body: HTMLElement, text: string) {
+  const nodes: HTMLElement[] = [];
+  for (const block of parseBody(text)) {
+    if (block.kind === "code") nodes.push(codeNode(block));
+    else for (const paragraph of block.paragraphs) nodes.push(el("p", undefined, paragraph));
+  }
+  body.replaceChildren(...nodes);
+}
+
+function contextNode(conv: ChatConversation): HTMLElement {
+  const wrap = el("aside", contextOpen ? "context open" : "context");
+  const toggle = el("button", "context-toggle");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", String(contextOpen));
+  toggle.append(icon("chevron"), el("span", undefined, conv.app ? `Texto selecionado · ${prettyApp(conv.app)}` : "Texto selecionado"));
+  toggle.addEventListener("click", () => {
+    contextOpen = !contextOpen;
+    wrap.classList.toggle("open", contextOpen);
+    toggle.setAttribute("aria-expanded", String(contextOpen));
+  });
+  wrap.append(toggle, el("blockquote", undefined, conv.selection));
+  return wrap;
+}
+
+function userNode(m: ChatMessage): HTMLElement {
+  const node = el("article", "msg user");
+  node.dataset.id = m.id;
+  node.append(el("div", "bubble", m.text));
+  return node;
+}
+
+/** As mensagens de erro do backend começam em minúscula ("sem créditos…"). */
+const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** Mostra "feito" num botão durante um instante e volta ao que era. */
+function flash(button: HTMLButtonElement, done: string) {
+  const before = Array.from(button.childNodes);
+  button.replaceChildren(icon("check"), document.createTextNode(done));
+  button.classList.add("done");
+  window.setTimeout(() => {
+    button.replaceChildren(...before);
+    button.classList.remove("done");
+  }, FLASH_MS);
+}
+
+function action(label: string, name: "copy" | "insert" | "retry", main = false): HTMLButtonElement {
+  const button = el("button", main ? "act main" : "act");
+  button.type = "button";
+  button.append(icon(name), document.createTextNode(label));
+  return button;
+}
+
+function actionsNode(m: ChatMessage, last: boolean, conv: ChatConversation): HTMLElement | null {
+  if (!view) return null;
+  const row = el("div", "actions");
+  const hasText = m.text.trim() !== "";
+  if (hasText) {
+    const copy = action("Copiar", "copy");
+    copy.addEventListener("click", async () => {
+      try {
+        await assistant.copy(m.id);
+        flash(copy, "Copiado");
+      } catch (e) {
+        toast(errorText(e), "error");
+      }
+    });
+    row.append(copy);
+  }
+  if (hasText && view.can_apply) {
+    const apply = action(conv.selection ? "Substituir seleção" : "Inserir no cursor", "insert", true);
+    apply.addEventListener("click", async () => {
+      apply.disabled = true;
+      try {
+        const { pasted } = await assistant.apply(m.id);
+        flash(apply, pasted ? "Feito" : "Copiado");
+        if (!pasted) toast(`Não consegui voltar à app: o texto ficou copiado, cola com ${isMac ? "⌘V" : "Ctrl+V"}.`);
+      } catch (e) {
+        toast(errorText(e), "error");
+      } finally {
+        apply.disabled = false;
+      }
+    });
+    row.append(apply);
+  }
+  if (last) row.append(retryButton());
+  return row.childElementCount > 0 ? row : null;
+}
+
+function retryButton(): HTMLButtonElement {
+  const retry = action("Tentar de novo", "retry");
+  retry.addEventListener("click", async () => {
+    stick = true;
+    try {
+      await assistant.retry();
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  });
+  return retry;
+}
+
+function botNode(m: ChatMessage, last: boolean, streaming: boolean, conv: ChatConversation): HTMLElement {
+  const node = el("article", last ? "msg bot last" : "msg bot");
+  node.dataset.id = m.id;
+  node.dataset.state = streaming ? "streaming" : (m.status ?? "done");
+  if (streaming && m.text === "") {
+    const dots = el("div", "thinking");
+    dots.setAttribute("role", "status");
+    dots.setAttribute("aria-label", "A pensar");
+    dots.append(el("i"), el("i"), el("i"));
+    node.append(dots);
+  }
+  const body = el("div", "body");
+  fillBody(body, m.text);
+  node.append(body);
+  if (!streaming && m.status === "stopped") node.append(el("p", "note", "Resposta parada."));
+  if (!streaming && m.status === "failed") {
+    node.append(el("p", "note error", sentence(m.error || "Não foi possível obter a resposta.")));
+  }
+  if (!streaming) {
+    const actions = actionsNode(m, last, conv);
+    if (actions) node.append(actions);
+  }
+  return node;
+}
+
+/** A conversa acabou num pedido sem resposta (a app fechou a meio): oferece repetir. */
+function unansweredNode(): HTMLElement {
+  const node = el("article", "msg bot last");
+  node.append(el("p", "note", "Este pedido ficou sem resposta."));
+  const row = el("div", "actions");
+  row.append(retryButton());
+  node.append(row);
+  return node;
+}
+
+// ---------------------------------------------------------------- desenhar
+
+function renderThread(v: AssistantView) {
+  const conv = v.conversation;
+  const messages = conv?.messages ?? [];
+  const thread = $("thread");
+  thread.hidden = messages.length === 0;
+  $("empty").hidden = messages.length > 0;
+  thread.setAttribute("aria-busy", String(v.busy));
+  if (!conv || messages.length === 0) {
+    thread.replaceChildren();
+    return;
+  }
+
+  const nodes: HTMLElement[] = [];
+  if (conv.selection) nodes.push(contextNode(conv));
+  messages.forEach((m, i) => {
+    const last = i === messages.length - 1;
+    // A última resposta, enquanto chega, é a única em streaming. O "Tentar de novo" é só dela.
+    const node = m.role === "user" ? userNode(m) : botNode(m, last, last && v.busy, conv);
+    if (!seen.has(m.id)) {
+      node.classList.add("enter");
+      seen.add(m.id);
+    }
+    nodes.push(node);
+  });
+  const last = messages[messages.length - 1];
+  if (last.role === "user" && !v.busy) nodes.push(unansweredNode());
+  thread.replaceChildren(...nodes);
+}
+
+function renderChrome(v: AssistantView) {
+  const conv = v.conversation;
+  $("app").toggleAttribute("data-busy", v.busy);
+  const title = $("title");
+  title.textContent = conv?.title || "Nova conversa";
+  title.classList.toggle("has-title", !!conv?.title);
+
+  const keys = $("empty-keys");
+  keys.hidden = !v.command_shortcut;
+  if (v.command_shortcut) renderKeys(keys, v.command_shortcut);
+
+  const notice = $("notice");
+  notice.hidden = !v.key_missing;
+  if (v.key_missing) {
+    const open = el("button", undefined, "Abrir as definições");
+    open.type = "button";
+    open.addEventListener("click", () => void api.overlayOpen("key").catch((e) => toast(errorText(e), "error")));
+    notice.replaceChildren(document.createTextNode("Falta a chave da xAI. "), open, document.createTextNode("."));
+  }
+  updateSend();
+}
+
+function toEnd() {
+  const s = scroller();
+  s.scrollTop = s.scrollHeight;
+}
+
+/** Diz a quem usa um leitor de ecrã que a resposta acabou (e o que diz, em resumo). */
+function announceAnswer(v: AssistantView) {
+  const messages = v.conversation?.messages ?? [];
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant" || last.status === "stopped") return;
+  const text =
+    last.status === "failed"
+      ? `A resposta falhou. ${last.error ?? ""}`
+      : `Resposta pronta. ${last.text.replace(/\s+/g, " ").slice(0, 240)}`;
+  $("announce").textContent = text;
+}
+
+function applyView(v: AssistantView) {
+  const wasBusy = view?.busy ?? false;
+  const id = v.conversation?.id ?? null;
+  if (id !== shownConversation) {
+    // Outra conversa: nada do que lá está entra com animação, e começa-se pelo fim.
+    shownConversation = id;
+    seen = new Set(v.conversation?.messages.map((m) => m.id));
+    contextOpen = false;
+    stick = true;
+  }
+  view = v;
+  dirty.clear();
+  renderChrome(v);
+  renderThread(v);
+  syncHistory({ activeId: id, saved: v.saved });
+  if (wasBusy && !v.busy) announceAnswer(v);
+  if (stick) requestAnimationFrame(toEnd);
+}
+
+// ---------------------------------------------------------------- resposta a chegar
+
+function onStream(e: ChatStreamEvent) {
+  const conv = view?.conversation;
+  if (!conv || conv.id !== e.conversation_id) return;
+  const message = conv.messages.find((m) => m.id === e.message_id);
+  // O texto vem sempre inteiro; um mais curto do que o que já temos chegou fora de ordem.
+  if (!message || e.text.length < message.text.length) return;
+  message.text = e.text;
+  dirty.add(message.id);
+  if (!frame) frame = requestAnimationFrame(flushStream);
+}
+
+function flushStream() {
+  frame = 0;
+  for (const id of dirty) {
+    const node = document.querySelector<HTMLElement>(`.msg.bot[data-id="${CSS.escape(id)}"]`);
+    const text = view?.conversation?.messages.find((m) => m.id === id)?.text ?? "";
+    if (!node) continue;
+    node.querySelector(".thinking")?.remove();
+    fillBody(node.querySelector<HTMLElement>(".body")!, text);
+  }
+  dirty.clear();
+  if (stick) toEnd();
+}
+
+// ---------------------------------------------------------------- compositor
+
+function autosize() {
+  const box = input();
+  box.style.height = "auto";
+  box.style.height = `${Math.min(box.scrollHeight, MAX_INPUT_PX)}px`;
+}
+
+function updateSend() {
+  const send = $<HTMLButtonElement>("send");
+  const busy = !!view?.busy;
+  send.disabled = !busy && input().value.trim() === "";
+  const label = busy ? "Parar" : "Enviar";
+  send.setAttribute("aria-label", label);
+  send.title = busy ? "Parar a resposta" : "Enviar (Enter)";
+}
+
+async function submit() {
+  if (view?.busy) {
+    await assistant.stop().catch((e) => toast(errorText(e), "error"));
+    return;
+  }
+  const box = input();
+  const text = box.value.trim();
+  if (!text) return;
+  box.value = "";
+  autosize();
+  updateSend();
+  stick = true;
+  try {
+    await assistant.send(text);
+  } catch (e) {
+    box.value = text;
+    autosize();
+    updateSend();
+    toast(errorText(e), "error");
+  }
+}
+
+async function newChat() {
+  closeHistory();
+  try {
+    await assistant.newChat();
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+  input().focus();
+}
+
+function setupComposer() {
+  const box = input();
+  box.addEventListener("input", () => {
+    autosize();
+    updateSend();
+  });
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    // Enter não pára uma resposta por engano: para isso há o botão.
+    if (!view?.busy) $<HTMLFormElement>("composer").requestSubmit();
+  });
+  $("composer").addEventListener("submit", (e) => {
+    e.preventDefault();
+    void submit();
+  });
+}
+
+function setupKeys() {
+  document.addEventListener("keydown", (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    if (mod && key === "k") {
+      e.preventDefault();
+      if (isHistoryOpen()) closeHistory();
+      else openHistory();
+    } else if (mod && key === "n") {
+      e.preventDefault();
+      void newChat();
+    } else if (e.key === "Escape") {
+      if (isHistoryOpen()) closeHistory();
+      else if (input().value === "") void assistant.close();
+    }
+  });
+}
+
+/** Tira o menu do WebView (Anterior, Atualizar, Imprimir…), que denuncia que é uma
+ *  página web. Fica nas caixas de texto e em `tauri dev`. */
+function blockContextMenu() {
+  if (import.meta.env.DEV) return;
+  document.addEventListener("contextmenu", (e) => {
+    if ((e.target as HTMLElement).closest("input, textarea")) return;
+    e.preventDefault();
+  });
+}
+
+async function main() {
+  if (isMac) document.documentElement.dataset.platform = "mac";
+  $<HTMLImageElement>("mascot").src = mascotUrl;
+  blockContextMenu();
+  setupComposer();
+  setupKeys();
+  setupHistory(() => input().focus());
+  $("new-chat").addEventListener("click", () => void newChat());
+  scroller().addEventListener(
+    "scroll",
+    () => {
+      const s = scroller();
+      stick = s.scrollHeight - s.scrollTop - s.clientHeight < STICK_PX;
+      $("head").classList.toggle("scrolled", s.scrollTop > 2);
+    },
+    { passive: true },
+  );
+
+  // Primeiro os ouvintes, depois o estado: o que chegar a meio não se perde (o
+  // texto de uma resposta vem sempre inteiro, por isso nada se repete nem falha).
+  await Promise.all([onAssistantState(applyView), onAssistantStream(onStream)]);
+  try {
+    applyView(await assistant.state());
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+  input().focus();
+}
+
+void main();

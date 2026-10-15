@@ -35,6 +35,9 @@ pub const CONSOLE_KEYS_URL: &str = "https://console.x.ai";
 pub struct Xai {
     client: Client,
     api_key: Arc<str>,
+    /// Só nos testes: um servidor local no lugar da xAI (ver `with_base`).
+    #[cfg(test)]
+    base: Option<Arc<str>>,
 }
 
 // A chave nunca aparece num log.
@@ -49,7 +52,26 @@ impl Xai {
         Self {
             client,
             api_key: api_key.into(),
+            #[cfg(test)]
+            base: None,
         }
+    }
+
+    /// Só para testes: fala com `base` (um servidor local) em vez de com a xAI.
+    #[cfg(test)]
+    pub(crate) fn with_base(client: Client, api_key: String, base: String) -> Self {
+        Self {
+            base: Some(base.into()),
+            ..Self::new(client, api_key)
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        #[cfg(test)]
+        if let Some(base) = &self.base {
+            return format!("{base}{path}");
+        }
+        format!("{API}{path}")
     }
 
     pub(crate) fn api_key(&self) -> &str {
@@ -59,15 +81,11 @@ impl Xai {
     /// `POST {API}{path}` já autenticado. Partilha o pool de ligações (HTTP/2), por
     /// isso um pedido logo a seguir a outro não paga o handshake.
     pub(crate) fn post(&self, path: &str) -> RequestBuilder {
-        self.client
-            .post(format!("{API}{path}"))
-            .bearer_auth(&self.api_key)
+        self.client.post(self.url(path)).bearer_auth(&self.api_key)
     }
 
     pub(crate) fn get(&self, path: &str) -> RequestBuilder {
-        self.client
-            .get(format!("{API}{path}"))
-            .bearer_auth(&self.api_key)
+        self.client.get(self.url(path)).bearer_auth(&self.api_key)
     }
 
     /// Confirma que a chave é aceite, sem gastar nada (`GET /v1/models`).

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-PT">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="stylesheet" href="/src/assistant.css" />
+    <title>Ditok</title>
+    <script type="module" src="/src/assistant.ts" defer></script>
+  </head>
+  <body>
+    <div id="app" class="app">
+      <!-- A barra de cima também arrasta a janela (no macOS, que não tem barra de título própria). -->
+      <header id="head" class="head" data-tauri-drag-region>
+        <button id="open-history" type="button" class="icon-btn" aria-label="Conversas" aria-controls="history" aria-expanded="false" title="Conversas (Ctrl+K)">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        </button>
+        <h1 id="title" class="head-title" data-tauri-drag-region>Nova conversa</h1>
+        <button id="new-chat" type="button" class="icon-btn" aria-label="Nova conversa" title="Nova conversa (Ctrl+N)">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
+      </header>
+
+      <main id="scroll" class="scroll">
+        <!-- A conversa. Não é anunciada ao desenhar: a página reconstrói-a a cada mudança e um leitor
+             de ecrã voltava a ler tudo. Quem a segue ouve só o fim de cada resposta, em #announce. -->
+        <div id="thread" class="thread" role="log" aria-live="off" hidden></div>
+        <span id="announce" class="sr-only" role="status" aria-live="polite"></span>
+
+        <section id="empty" class="empty">
+          <img id="mascot" class="empty-mascot" alt="" width="72" height="66" />
+          <h2 class="empty-title serif">Diz-me o que queres</h2>
+          <p id="empty-text" class="empty-text">
+            Seleciona um texto numa app, carrega no atalho e fala.<br />Ou escreve aqui em baixo.
+          </p>
+          <span id="empty-keys" class="keys" hidden></span>
+        </section>
+      </main>
+
+      <footer class="dock">
+        <p id="notice" class="notice" hidden></p>
+        <form id="composer" class="composer" autocomplete="off">
+          <textarea id="input" rows="1" maxlength="8000" placeholder="Escreve ou diz o que queres…" aria-label="Mensagem" enterkeyhint="send" spellcheck="true"></textarea>
+          <button id="send" type="submit" class="send" aria-label="Enviar" title="Enviar (Enter)" disabled>
+            <svg class="icon icon-send" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+            <svg class="icon icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>
+          </button>
+        </form>
+        <p class="hint"><span>Enter envia · Shift+Enter muda de linha</span></p>
+      </footer>
+
+      <div id="scrim" class="scrim"></div>
+
+      <!-- O histórico desliza por cima da conversa (a janela é estreita para uma barra lateral). -->
+      <aside id="history" class="history" aria-label="Conversas" inert>
+        <div class="history-head">
+          <h2 class="serif">Conversas</h2>
+          <button id="close-history" type="button" class="icon-btn" aria-label="Fechar" title="Fechar (Esc)">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <label class="search">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="search" type="search" placeholder="Procurar" aria-label="Procurar nas conversas" autocomplete="off" spellcheck="false" />
+        </label>
+        <div id="history-list" class="history-list"></div>
+        <p id="history-note" class="history-note" hidden></p>
+        <div class="history-foot">
+          <button id="clear-all" type="button" class="text-btn danger">Apagar todas</button>
+        </div>
+      </aside>
+
+      <div id="toast" role="status" aria-live="polite" hidden></div>
+    </div>
+  </body>
+</html>

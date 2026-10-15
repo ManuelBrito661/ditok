@@ -92,6 +92,19 @@ impl DictationMetrics {
         }
     }
 
+    /// As métricas de uma resposta do assistente (`assistant/`): como num resumo só
+    /// interessa o custo, e sem `total_ms` não conta como ditado. Sem `cleanup_ms`: uma
+    /// resposta em streaming demora o que o texto demorar a chegar, e entrava nos
+    /// percentis da limpeza como se fosse lenta.
+    pub fn for_chat(model: &str, chars: usize, cost: Option<f64>) -> Self {
+        Self {
+            cleanup_ms: None,
+            command: true,
+            summary: false,
+            ..Self::for_summary(model, chars, 0, cost)
+        }
+    }
+
     /// O único sítio que conta o texto: carateres e palavras vêm sempre do mesmo cálculo.
     pub fn set_text(&mut self, text: &str) {
         self.chars = text.chars().count();
@@ -419,6 +432,29 @@ mod tests {
             "mais recente primeiro"
         );
         assert_eq!(stats.total.map(|p| p.count), Some(2));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn assistant_answers_only_carry_the_cost() {
+        let m = DictationMetrics::for_chat("grok-4.20", 120, Some(0.0004));
+        assert!(m.command && !m.summary && !m.file);
+        assert_eq!((m.chars, m.words), (120, 0));
+        assert_eq!(m.cleanup_cost_usd, Some(0.0004));
+        // Sem latência: uma resposta em streaming demora o que o texto demorar a chegar,
+        // e não pode entrar nos percentis da limpeza.
+        assert_eq!((m.cleanup_ms, m.total_ms, m.stt_ms), (None, None, None));
+
+        let dir = std::env::temp_dir().join(format!("ditok-chat-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MetricsStore::new(dir.clone());
+        store.record(&m, None).unwrap();
+        let month = store.months()[&month_key(m.at)];
+        assert_eq!(month.dictations, 0, "uma resposta não é um ditado");
+        assert!((month.cost_usd - 0.0004).abs() < 1e-12, "mas o custo soma");
+        let stats = store.stats(10);
+        assert!(stats.cleanup.is_none(), "sem tempos, sem percentis");
+        assert!(stats.recent[0].command);
         let _ = std::fs::remove_dir_all(dir);
     }
 

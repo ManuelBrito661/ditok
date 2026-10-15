@@ -10,6 +10,8 @@ export interface Config {
   /** Modo comando: um segundo atalho que aplica uma instrução falada ao texto selecionado. */
   command_enabled: boolean;
   command_shortcut: string;
+  /** Onde aparece a resposta do modo comando: na janela do assistente ou colada no texto. */
+  command_output: CommandOutput;
   language: string | null;
   cleanup_level: CleanupLevel;
   /** O modelo Grok da limpeza e dos comandos. */
@@ -48,6 +50,9 @@ export interface Config {
 
 /** Quanto a limpeza com IA mexe no texto (config.rs, CleanupLevel). */
 export type CleanupLevel = "off" | "light" | "medium" | "high";
+
+/** Para onde vai a resposta do modo comando (config.rs, CommandOutput). */
+export type CommandOutput = "window" | "paste";
 
 /** O tom de um ditado, pela app onde estás (config.rs, Style). "default" = Predefinido. */
 export type Style = "default" | "casual" | "formal" | "literal";
@@ -516,3 +521,96 @@ export const speakers = {
   rename: (id: string, speaker: number, name: string) =>
     invoke<NotesMeta>("notes_rename_speaker", { id, speaker, name }),
 };
+
+// ---------------------------------------------------------------- assistente (assistant/)
+
+export type ChatRole = "user" | "assistant";
+/** Como acabou uma resposta; ausente = acabou bem (assistant/store.rs, Status). */
+export type ChatStatus = "done" | "stopped" | "failed";
+
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  text: string;
+  at: string;
+  model?: string;
+  cost_usd?: number;
+  status?: ChatStatus;
+  /** Com `status: "failed"`: a frase que explica a falha. */
+  error?: string;
+  /** O pedido foi dito em voz alta. */
+  spoken?: boolean;
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  /** O texto que estava selecionado quando a conversa começou. */
+  selection?: string;
+  /** A app onde estavas ("outlook.exe"). */
+  app?: string;
+  messages: ChatMessage[];
+}
+
+/** O que a janela do assistente mostra (assistant/mod.rs, View). */
+export interface AssistantView {
+  conversation: ChatConversation | null;
+  /** Há uma resposta a chegar. */
+  busy: boolean;
+  /** Dá para devolver a resposta à app de onde veio o comando (só nesta sessão). */
+  can_apply: boolean;
+  /** As conversas ficam guardadas (o histórico está ligado). */
+  saved: boolean;
+  /** O atalho do modo comando, no formato do config; `null` com o modo desligado. */
+  command_shortcut: string | null;
+  key_missing: boolean;
+}
+
+/** Uma linha da lista de conversas (assistant/store.rs, Summary). */
+export interface ChatSummary {
+  id: string;
+  title: string;
+  updated_at: string;
+  messages: number;
+  preview: string;
+}
+
+/** Um bocado de uma resposta a chegar: o texto todo até agora (assistant/mod.rs, StreamEvent). */
+export interface ChatStreamEvent {
+  conversation_id: string;
+  message_id: string;
+  text: string;
+}
+
+export const assistant = {
+  state: () => invoke<AssistantView>("assistant_state"),
+  /** Escreve na conversa aberta (ou numa nova, se não houver nenhuma). */
+  send: (text: string) => invoke<void>("assistant_send", { text }),
+  /** Pára a resposta a chegar; o texto que já veio fica. */
+  stop: () => invoke<void>("assistant_stop"),
+  /** Gera outra vez a última resposta (ou a que falhou). */
+  retry: () => invoke<void>("assistant_retry"),
+  newChat: () => invoke<void>("assistant_new"),
+  open: (id: string) => invoke<void>("assistant_open", { id }),
+  list: (query: string) => invoke<ChatSummary[]>("assistant_list", { query }),
+  remove: (id: string) => invoke<void>("assistant_delete", { id }),
+  clear: () => invoke<void>("assistant_clear"),
+  /** Copia a resposta (sem as etiquetas e a cerca de código que o modelo ponha à volta). */
+  copy: (messageId: string) => invoke<void>("assistant_copy", { messageId }),
+  /** Volta à app de onde veio o comando e cola lá a resposta. `pasted: false`: não deu para
+   *  voltar a ela e o texto ficou no clipboard. */
+  apply: (messageId: string) => invoke<{ pasted: boolean }>("assistant_apply", { messageId }),
+  close: () => invoke<void>("assistant_close"),
+};
+
+/** A conversa mudou (nova mensagem, resposta acabada, outra conversa aberta…). */
+export function onAssistantState(handler: (view: AssistantView) => void): Promise<UnlistenFn> {
+  return listen<AssistantView>("assistant:state", (e) => handler(e.payload));
+}
+
+/** A resposta em curso ganhou texto (no máximo ~10 vezes por segundo). */
+export function onAssistantStream(handler: (e: ChatStreamEvent) => void): Promise<UnlistenFn> {
+  return listen<ChatStreamEvent>("assistant:stream", (e) => handler(e.payload));
+}

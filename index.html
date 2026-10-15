@@ -684,8 +684,9 @@
 
             <h4 class="section-title">Modo comando</h4>
             <p class="muted panel-intro command-intro">
-              Seleciona texto numa app, carrega no atalho de comando e diz o que queres. Substituo a seleção pelo
-              resultado. Sem nada selecionado, escrevo texto novo onde está o cursor. Por exemplo:
+              Seleciona texto numa app, carrega no atalho de comando e diz o que queres. A resposta abre numa janela
+              pequena, o assistente, onde a podes ler, pedir mudanças ("mais curto", "em inglês") e pôr no sítio de
+              onde veio com um clique. Sem nada selecionado, escrevo texto novo. Por exemplo:
             </p>
             <ul class="command-examples">
               <li>"Torna isto mais formal"</li>
@@ -700,10 +701,28 @@
                 </span>
                 <input id="command-enabled" type="checkbox" role="switch" />
               </label>
+              <div class="row stacked" id="command-output-row">
+                <div class="row-text">
+                  <span id="command-output-label" class="row-title">Onde aparece a resposta</span>
+                  <span class="row-desc">As conversas ficam no histórico do assistente, que também abres no menu do ícone.</span>
+                </div>
+                <div class="choices" role="radiogroup" aria-labelledby="command-output-label">
+                  <div class="choice">
+                    <input type="radio" id="co-window" name="command-output" value="window" aria-describedby="co-window-desc" />
+                    <label for="co-window" class="choice-title">Na janela do assistente</label>
+                    <p id="co-window-desc" class="choice-desc">Leio a resposta à medida que chega e decido: copio, peço outra versão ou substituo a seleção com um clique.</p>
+                  </div>
+                  <div class="choice">
+                    <input type="radio" id="co-paste" name="command-output" value="paste" aria-describedby="co-paste-desc" />
+                    <label for="co-paste" class="choice-title">Colada logo no texto</label>
+                    <p id="co-paste-desc" class="choice-desc">Sem janela: substituo a seleção pelo resultado (ou escrevo no cursor, sem seleção) assim que ficar pronto.</p>
+                  </div>
+                </div>
+              </div>
               <div class="row" id="command-shortcut-row">
                 <div class="row-text">
                   <span id="command-shortcut-label" class="row-title">Atalho de comando</span>
-                  <span class="row-desc">Funciona como o de ditado: segura para falar, toca para alternar, Esc cancela.</span>
+                  <span class="row-desc">Funciona como o de ditado: segura para falar, toca para alternar, Esc cancela. Com o assistente em primeiro plano, o que dizes continua a conversa.</span>
                   <p id="command-shortcut-busy" class="error" hidden>Outra app está a usar este atalho, por isso o modo comando não funciona. Escolhe outro em "Mudar".</p>
                   <p id="command-shortcut-error" class="error" hidden></p>
                 </div>
@@ -904,7 +923,7 @@
               <label class="row switch">
                 <span class="row-text">
                   <span class="row-title">Guardar histórico</span>
-                  <span class="row-desc">O texto dos últimos ditados fica só neste computador e aparece no Início.</span>
+                  <span class="row-desc">O texto dos últimos ditados e as conversas do assistente ficam só neste computador. Os ditados aparecem no Início.</span>
                 </span>
                 <input id="history-enabled" type="checkbox" role="switch" />
               </label>
@@ -917,7 +936,7 @@
               <div class="row">
                 <div class="row-text">
                   <span class="row-title">Apagar histórico</span>
-                  <span class="row-desc">Remove todos os ditados guardados neste computador.</span>
+                  <span class="row-desc">Remove todos os ditados e as conversas do assistente guardados neste computador.</span>
                 </div>
                 <div class="row-control">
                   <button id="history-clear" type="button" class="secondary danger">Apagar</button>

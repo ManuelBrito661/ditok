@@ -19,8 +19,9 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::Config, dictation::DictationEvent, files::FileJobs, history::HistoryStore, hotkey,
-    metrics::MetricsStore, overlay, secrets, text::TextRules, tray, usage::UsageStore, xai::Xai,
+    assistant::Assistant, config::Config, dictation::DictationEvent, files::FileJobs,
+    history::HistoryStore, hotkey, metrics::MetricsStore, overlay, secrets, text::TextRules, tray,
+    usage::UsageStore, xai::Xai,
 };
 
 /// Emitido para a janela principal quando as definições mudam por fora dela (ex.:
@@ -67,6 +68,8 @@ pub struct AppState {
     /// A gravação de reuniões em curso (ver `notes/`).
     pub notes: crate::notes::session::Notes,
     pub history: HistoryStore,
+    /// As conversas do assistente (a janela do modo comando), ver `assistant/`.
+    pub assistant: Assistant,
     /// O ficheiro a ser transcrito (ou o último), ver `files.rs`.
     pub files: FileJobs,
     /// Para avisar o orquestrador (ex.: um atalho do tray).
@@ -125,6 +128,7 @@ impl AppState {
             usage: UsageStore::new(dirs.data.clone()),
             notes: Default::default(),
             history: HistoryStore::new(dirs.data.clone()),
+            assistant: Assistant::new(&dirs.data),
             files: FileJobs::default(),
             config_dir: dirs.config,
             data_dir: dirs.data,

@@ -16,6 +16,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
+    assistant,
     audio::{self, InputDevice, Recorder},
     config::Config,
     dict_io,
@@ -544,6 +545,10 @@ pub async fn clear_history(state: AppStateRef<'_>) -> CmdResult<()> {
     let state_ = Arc::clone(&state);
     // Leva também o áudio guardado (ver `HistoryStore::clear`).
     blocking(move || state_.history.clear()).await??;
+    // E as conversas do assistente: é o mesmo histórico para quem o apaga (e para quem
+    // o desliga, ver `assistant::persist`).
+    let state_ = Arc::clone(&state);
+    blocking(move || assistant::clear(&state_)).await??;
     // O "Colar o último ditado" também deixa de o ter.
     let _ = state.events.send(DictationEvent::HistoryCleared);
     tracing::info!("histórico apagado");
@@ -1209,4 +1214,90 @@ pub async fn notes_rename_speaker(
     })
     .await?
     .map_err(Into::into)
+}
+
+// ---------------------------------------------------------------- assistente (assistant/)
+
+/// Tudo o que a janela do assistente precisa para se desenhar. A página pede-o ao
+/// abrir; depois recebe-o em `assistant:state` a cada mudança.
+#[tauri::command]
+pub fn assistant_state(state: AppStateRef<'_>) -> assistant::View {
+    assistant::view(&state)
+}
+
+/// Uma mensagem escrita na caixa de texto da janela.
+#[tauri::command]
+pub fn assistant_send(state: AppStateRef<'_>, text: String) -> CmdResult<()> {
+    assistant::ask(&state, text, false)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn assistant_stop(state: AppStateRef<'_>) {
+    assistant::stop(&state);
+}
+
+#[tauri::command]
+pub fn assistant_retry(state: AppStateRef<'_>) -> CmdResult<()> {
+    assistant::retry(&state)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn assistant_new(state: AppStateRef<'_>) {
+    assistant::new_conversation(&state);
+}
+
+#[tauri::command]
+pub async fn assistant_open(state: AppStateRef<'_>, id: String) -> CmdResult<()> {
+    let state = Arc::clone(&state);
+    blocking(move || assistant::open_conversation(&state, &id)).await??;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn assistant_list(
+    state: AppStateRef<'_>,
+    query: String,
+) -> CmdResult<Vec<assistant::store::Summary>> {
+    let state = Arc::clone(&state);
+    blocking(move || assistant::list(&state, &query)).await
+}
+
+#[tauri::command]
+pub async fn assistant_delete(state: AppStateRef<'_>, id: String) -> CmdResult<()> {
+    let state = Arc::clone(&state);
+    blocking(move || assistant::delete(&state, &id)).await??;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn assistant_clear(state: AppStateRef<'_>) -> CmdResult<()> {
+    let state = Arc::clone(&state);
+    blocking(move || assistant::clear(&state)).await??;
+    Ok(())
+}
+
+/// Copia a resposta com o clipboard da colagem (ver `copy_text`), sem a cerca de código
+/// que o modelo ponha à volta de tudo.
+#[tauri::command]
+pub async fn assistant_copy(state: AppStateRef<'_>, message_id: String) -> CmdResult<()> {
+    let state = Arc::clone(&state);
+    blocking(move || assistant::copy(&state, &message_id)).await??;
+    Ok(())
+}
+
+/// "Substituir": volta à app onde deste o comando e cola lá a resposta.
+#[tauri::command]
+pub async fn assistant_apply(
+    state: AppStateRef<'_>,
+    message_id: String,
+) -> CmdResult<assistant::Applied> {
+    let state = Arc::clone(&state);
+    Ok(blocking(move || assistant::apply(&state, &message_id)).await??)
+}
+
+#[tauri::command]
+pub fn assistant_close(app: AppHandle) {
+    assistant::window::close(&app);
 }

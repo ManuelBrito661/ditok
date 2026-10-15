@@ -1,3 +1,4 @@
+mod assistant;
 mod audio;
 mod cleanup;
 mod command;
@@ -285,6 +286,18 @@ pub fn run() {
             commands::notes_output_devices,
             commands::notes_test_start,
             commands::notes_rename_speaker,
+            commands::assistant_state,
+            commands::assistant_send,
+            commands::assistant_stop,
+            commands::assistant_retry,
+            commands::assistant_new,
+            commands::assistant_open,
+            commands::assistant_list,
+            commands::assistant_delete,
+            commands::assistant_clear,
+            commands::assistant_copy,
+            commands::assistant_apply,
+            commands::assistant_close,
             commands::overlay_status,
             commands::overlay_open,
             commands::overlay_menu,
