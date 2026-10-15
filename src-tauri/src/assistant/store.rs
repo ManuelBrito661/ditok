@@ -17,7 +17,13 @@ use std::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{history, xai::chat::Role};
+use crate::{
+    history,
+    xai::{
+        chat::Role,
+        responses::{Search, Source},
+    },
+};
 
 /// Quantas conversas se guardam, no máximo (as mais recentes). Passando disto, a
 /// mais antiga é apagada ao guardar uma nova.
@@ -68,6 +74,24 @@ pub struct Message {
     /// O pedido foi dito em voz alta (e não escrito).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub spoken: bool,
+    /// Só nas respostas: o modelo raciocina antes de responder (a janela mostra "A pensar…").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub thinks: bool,
+    /// O raciocínio que a xAI mostrou (muitas vezes não mostra nenhum).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Quanto tempo pensou antes de começar a escrever, em milissegundos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_ms: Option<u64>,
+    /// Quantos tokens gastou a pensar, se a xAI o disse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    /// As pesquisas que o modelo fez na web e no X.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub searches: Vec<Search>,
+    /// As fontes que citou.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<Source>,
 }
 
 /// A captura do ecrã com que a conversa começou (ver `screen/`). A imagem NÃO se guarda em
@@ -144,6 +168,12 @@ impl Conversation {
             status: Status::Done,
             error: None,
             spoken,
+            thinks: false,
+            reasoning: None,
+            thinking_ms: None,
+            reasoning_tokens: None,
+            searches: Vec::new(),
+            sources: Vec::new(),
         });
         self.messages
             .last_mut()

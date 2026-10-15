@@ -228,6 +228,8 @@ impl AppState {
     /// Passa a usar `key` (ou nenhuma, `None`) e conta à barra e ao tray.
     pub fn set_key(&self, key: Option<String>) {
         let client = key.map(|k| Xai::new(self.http.clone(), k));
+        // Uma chave nova pode ter o acesso à Responses API que a antiga não tinha.
+        crate::xai::responses::forget_no_responses();
         *self.xai.write().unwrap_or_else(PoisonError::into_inner) = client;
         self.publish();
     }

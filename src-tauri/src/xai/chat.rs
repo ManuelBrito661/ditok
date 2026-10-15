@@ -22,11 +22,11 @@ use serde::{Deserialize, Serialize};
 use super::{ApiError, Xai, error_from_response, parse_json};
 
 /// 1 USD = 10^10 ticks (a unidade de `cost_in_usd_ticks`).
-const TICKS_PER_USD: f64 = 1e10;
+pub(super) const TICKS_PER_USD: f64 = 1e10;
 
 /// Tokens a mais, para um modelo que raciocina não gastar o limite todo a pensar e
 /// devolver uma resposta vazia.
-const REASONING_HEADROOM: u32 = 2048;
+pub(super) const REASONING_HEADROOM: u32 = 2048;
 
 /// Um pedido ao `/chat/completions`: uma mensagem de sistema e uma do utilizador.
 pub struct Chat<'a> {
@@ -103,14 +103,14 @@ struct PromptDetails {
 }
 
 /// Os modelos que já se viu recusarem o `reasoning_effort` (não raciocinam).
-fn no_effort() -> &'static Mutex<HashSet<String>> {
+pub(super) fn no_effort() -> &'static Mutex<HashSet<String>> {
     static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     SET.get_or_init(Mutex::default)
 }
 
 /// O esforço de raciocínio a pedir a `model`: nenhum nos que dizem `non-reasoning` ou que
 /// já recusaram o campo, o mais baixo nos outros.
-fn reasoning_effort(model: &str) -> Option<&'static str> {
+pub(super) fn reasoning_effort(model: &str) -> Option<&'static str> {
     if model.contains("non-reasoning")
         || no_effort()
             .lock()
@@ -123,7 +123,7 @@ fn reasoning_effort(model: &str) -> Option<&'static str> {
     }
 }
 
-fn is_effort_refusal(e: &ApiError) -> bool {
+pub(super) fn is_effort_refusal(e: &ApiError) -> bool {
     matches!(e, ApiError::BadRequest(m) if m.to_lowercase().contains("reasoning"))
 }
 
@@ -232,7 +232,7 @@ pub enum Role {
 }
 
 impl Role {
-    fn api(self) -> &'static str {
+    pub(super) fn api(self) -> &'static str {
         match self {
             Self::User => "user",
             Self::Assistant => "assistant",
@@ -250,7 +250,7 @@ pub struct Image {
 
 impl Image {
     /// `data:image/png;base64,…`: a forma de mandar uma imagem dentro do próprio pedido.
-    fn data_url(&self) -> String {
+    pub(super) fn data_url(&self) -> String {
         format!(
             "data:{};base64,{}",
             self.mime,
@@ -391,13 +391,13 @@ struct StreamDelta {
 /// Parte o que chega da rede em linhas. Um bocado pode acabar a meio de uma linha
 /// (ou de um carácter UTF-8), por isso guarda-se o resto até chegar a mudança de linha.
 #[derive(Default)]
-struct SseLines {
+pub(super) struct SseLines {
     buf: Vec<u8>,
 }
 
 impl SseLines {
     /// Acrescenta `chunk` e devolve o conteúdo das linhas `data:` que ficaram completas.
-    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+    pub(super) fn push(&mut self, chunk: &[u8]) -> Vec<String> {
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
         while let Some(end) = self.buf.iter().position(|&b| b == b'\n') {
@@ -408,7 +408,7 @@ impl SseLines {
     }
 
     /// A resposta acabou: uma última linha sem mudança de linha também conta.
-    fn finish(&mut self) -> Option<String> {
+    pub(super) fn finish(&mut self) -> Option<String> {
         let line = std::mem::take(&mut self.buf);
         data_of(&line)
     }

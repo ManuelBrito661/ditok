@@ -308,6 +308,7 @@ pub fn run() {
             commands::assistant_delete,
             commands::assistant_clear,
             commands::assistant_copy,
+            commands::assistant_open_source,
             commands::assistant_apply,
             commands::assistant_close,
             commands::assistant_capture,

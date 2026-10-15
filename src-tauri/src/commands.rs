@@ -734,7 +734,12 @@ pub fn main_take_open() -> Option<String> {
 /// janela não consegue pedir para abrir outra coisa qualquer.
 #[tauri::command]
 pub fn open_xai_console() -> CmdResult<()> {
-    const URL: &str = xai::CONSOLE_KEYS_URL;
+    open_in_browser(xai::CONSOLE_KEYS_URL)
+}
+
+/// Abre um endereço no browser predefinido. Só para endereços que a app escolheu ou
+/// validou: a janela nunca manda um endereço qualquer.
+fn open_in_browser(url: &str) -> CmdResult<()> {
     #[cfg(windows)]
     let mut command = std::process::Command::new("explorer");
     #[cfg(target_os = "macos")]
@@ -743,7 +748,7 @@ pub fn open_xai_console() -> CmdResult<()> {
     let mut command = std::process::Command::new("xdg-open");
     // O `explorer` devolve um código de saída diferente de 0 mesmo quando abre:
     // só conta se nem sequer arrancou.
-    command.arg(URL).spawn()?;
+    command.arg(url).spawn()?;
     Ok(())
 }
 
@@ -1368,6 +1373,18 @@ pub async fn assistant_copy(state: AppStateRef<'_>, message_id: String) -> CmdRe
     let state = Arc::clone(&state);
     blocking(move || assistant::copy(&state, &message_id)).await??;
     Ok(())
+}
+
+/// Abre no browser a fonte número `index` da resposta `message_id`. A janela só diz qual;
+/// o endereço vem da conversa (e é verificado), para a página nunca abrir outra coisa.
+#[tauri::command]
+pub fn assistant_open_source(
+    state: AppStateRef<'_>,
+    message_id: String,
+    index: usize,
+) -> CmdResult<()> {
+    let url = assistant::source_url(&state, &message_id, index)?;
+    open_in_browser(&url)
 }
 
 /// "Substituir": volta à app onde deste o comando e cola lá a resposta.

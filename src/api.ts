@@ -552,6 +552,29 @@ export interface ChatMessage {
   error?: string;
   /** O pedido foi dito em voz alta. */
   spoken?: boolean;
+  /** Só nas respostas: o modelo raciocina antes de responder. */
+  thinks?: boolean;
+  /** O raciocínio que a xAI mostrou (muitas vezes nenhum). */
+  reasoning?: string;
+  /** Quanto tempo pensou antes de começar a escrever. */
+  thinking_ms?: number;
+  reasoning_tokens?: number;
+  /** As pesquisas que o modelo fez. */
+  searches?: ChatSearch[];
+  /** As fontes que citou. */
+  sources?: ChatSource[];
+}
+
+/** Uma pesquisa do modelo (xai/responses.rs, Search). `query` pode faltar. */
+export interface ChatSearch {
+  kind: "web" | "x";
+  query?: string;
+}
+
+/** Uma fonte citada (xai/responses.rs, Source). */
+export interface ChatSource {
+  url: string;
+  title?: string;
 }
 
 export interface ChatConversation {
@@ -597,7 +620,12 @@ export interface ChatSummary {
 export interface ChatStreamEvent {
   conversation_id: string;
   message_id: string;
+  /** Tudo o que já chegou (nunca só o novo). */
   text: string;
+  reasoning: string | null;
+  thinking_ms: number | null;
+  searches: ChatSearch[];
+  sources: ChatSource[];
 }
 
 export const assistant = {
@@ -622,6 +650,9 @@ export const assistant = {
   /** A miniatura da captura de uma conversa (`data:image/jpeg;base64,…`); `null` se já não existe
    *  (a imagem só vive na memória, nunca no histórico). */
   capture: (id: string) => invoke<string | null>("assistant_capture", { id }),
+  /** Abre no browser a fonte `index` da resposta (o endereço vem do backend, verificado). */
+  openSource: (messageId: string, index: number) =>
+    invoke<void>("assistant_open_source", { messageId, index }),
 };
 
 /** A conversa mudou (nova mensagem, resposta acabada, outra conversa aberta…). */

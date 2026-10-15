@@ -15,6 +15,7 @@ import {
   type AssistantView,
   type ChatConversation,
   type ChatMessage,
+  type ChatSearch,
   type ChatStreamEvent,
 } from "./api";
 import { icon } from "./assistant-icons";
@@ -77,10 +78,14 @@ function codeNode(block: Extract<Block, { kind: "code" }>): HTMLElement {
   return wrap;
 }
 
+/** As marcas de citação que a xAI põe no meio do texto (`[[1]](https://…)`): as fontes
+ *  aparecem à parte, por baixo da resposta (o mesmo que `citation_marks` no backend). */
+const CITATION = /[ \t]?\[\[\d+\]\]\([^)\s]*\)/g;
+
 /** Desenha o texto de uma resposta. Só o código tem formato (ver `parseBody`). */
 function fillBody(body: HTMLElement, text: string) {
   const nodes: HTMLElement[] = [];
-  for (const block of parseBody(text)) {
+  for (const block of parseBody(text.replace(CITATION, ""))) {
     if (block.kind === "code") nodes.push(codeNode(block));
     else for (const paragraph of block.paragraphs) nodes.push(el("p", undefined, paragraph));
   }
@@ -230,11 +235,167 @@ function retryButton(): HTMLButtonElement {
   return retry;
 }
 
+// ---------------------------------------------------------------- pensar e pesquisar
+
+/** Respostas cujo raciocínio está aberto, e cuja lista de fontes está toda à vista. */
+const openActivity = new Set<string>();
+const allSources = new Set<string>();
+/** Fontes à vista antes do "mais N". */
+const SOURCES_SHOWN = 6;
+
+/** "6 s", "1 min 5 s"; abaixo de um segundo, "menos de 1 s". */
+function duration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 1) return "menos de 1 s";
+  if (s < 60) return `${s} s`;
+  const rest = s % 60;
+  return rest ? `${Math.floor(s / 60)} min ${rest} s` : `${Math.floor(s / 60)} min`;
+}
+
+/** Há quanto tempo a resposta começou (o backend cria-a no momento do pedido). */
+const elapsedMs = (m: ChatMessage) => Math.max(0, Date.now() - Date.parse(m.at));
+
+const searchIcon = (kind: ChatSearch["kind"]) => icon(kind === "x" ? "xlogo" : "globe");
+
+function searchText(s: ChatSearch, live: boolean): string {
+  const where = s.kind === "x" ? "no X" : "na web";
+  const query = s.query?.trim();
+  if (live) return query ? `A pesquisar ${where}: «${query}»` : `A pesquisar ${where}…`;
+  return query ? `«${query}» ${where}` : `Pesquisa ${where}`;
+}
+
+/** A linha por cima da resposta: o que o modelo está a fazer enquanto não escreve ("A pensar…
+ *  4 s", "A pesquisar na web: «…»") e, depois, o resumo ("Pensou 6 s · 2 pesquisas"), que abre
+ *  o raciocínio e as pesquisas. `null` se não houver nada a dizer. */
+function activityNode(m: ChatMessage, streaming: boolean): HTMLElement | null {
+  const searches = m.searches ?? [];
+  const reasoning = m.reasoning?.trim() ?? "";
+  if (!m.thinks && searches.length === 0 && !reasoning) return null;
+
+  const waiting = streaming && m.text === "";
+  const wrap = el("details", "activity");
+  wrap.dataset.id = m.id;
+  wrap.open = openActivity.has(m.id);
+  wrap.addEventListener("toggle", () => {
+    if (wrap.open) openActivity.add(m.id);
+    else openActivity.delete(m.id);
+  });
+  const summary = el("summary");
+  const lastSearch = searches[searches.length - 1];
+  if (waiting && lastSearch) {
+    // A pesquisa mais recente é o que está a acontecer agora.
+    wrap.classList.add("live");
+    summary.append(searchIcon(lastSearch.kind), el("span", "label", searchText(lastSearch, true)));
+  } else if (waiting) {
+    wrap.classList.add("live");
+    const label = el("span", "label", `A pensar… ${duration(elapsedMs(m))}`);
+    label.dataset.since = m.at;
+    summary.append(icon("spark"), label);
+  } else {
+    const parts: string[] = [];
+    if (m.thinks) {
+      const ms = m.thinking_ms;
+      parts.push(ms != null ? `Pensou ${duration(ms)}` : streaming ? "Pensou" : "Parou a pensar");
+    }
+    if (searches.length) parts.push(searches.length === 1 ? "1 pesquisa" : `${searches.length} pesquisas`);
+    const glyph = m.thinks || searches.length === 0 ? icon("spark") : searchIcon(searches[0].kind);
+    summary.append(glyph, el("span", "label", parts.join(" · ")));
+  }
+
+  const details = el("div", "activity-body");
+  if (searches.length) {
+    const list = el("ul", "searches");
+    for (const s of searches) {
+      const item = el("li");
+      item.append(searchIcon(s.kind), el("span", undefined, searchText(s, false)));
+      list.append(item);
+    }
+    details.append(list);
+  }
+  if (reasoning) details.append(el("p", "reasoning", reasoning));
+  else if (m.thinks && m.reasoning_tokens) {
+    details.append(el("p", "reasoning-none", `A xAI não mostra o raciocínio deste modelo: pensou com ${m.reasoning_tokens.toLocaleString("pt-PT")} tokens.`));
+  }
+  if (details.childElementCount === 0) {
+    // Nada para abrir: só a linha, sem seta.
+    const line = el("div", wrap.className.replace("activity", "activity flat"));
+    line.dataset.id = m.id;
+    line.append(...Array.from(summary.childNodes));
+    return line;
+  }
+  summary.prepend(icon("chevron"));
+  wrap.append(summary, details);
+  return wrap;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** As fontes citadas, como pastilhas com o domínio; o clique abre-as no browser. */
+function sourcesNode(m: ChatMessage): HTMLElement | null {
+  const sources = m.sources ?? [];
+  if (sources.length === 0) return null;
+  const wrap = el("div", "sources");
+  wrap.dataset.id = m.id;
+  wrap.append(el("span", "sources-label", "Fontes"));
+  const all = allSources.has(m.id);
+  sources.forEach((s, i) => {
+    if (!all && i >= SOURCES_SHOWN) return;
+    const chip = el("button", "source");
+    chip.type = "button";
+    chip.title = s.title ? `${s.title}\n${s.url}` : s.url;
+    chip.append(icon(hostOf(s.url).match(/^(x|twitter)\.com$/) ? "xlogo" : "link"), el("span", undefined, hostOf(s.url)));
+    chip.addEventListener("click", () => void assistant.openSource(m.id, i).catch((e) => toast(errorText(e), "error")));
+    wrap.append(chip);
+  });
+  if (!all && sources.length > SOURCES_SHOWN) {
+    const more = el("button", "source more", `mais ${sources.length - SOURCES_SHOWN}`);
+    more.type = "button";
+    more.addEventListener("click", () => {
+      allSources.add(m.id);
+      const node = sourcesNode(m);
+      if (node) wrap.replaceWith(node);
+    });
+    wrap.append(more);
+  }
+  return wrap;
+}
+
+/** Põe `next` no lugar de `current` (ou tira-o, ou acrescenta-o a seguir a `after`). */
+function swap(current: Element | null, next: HTMLElement | null, place: (n: HTMLElement) => void) {
+  if (current && next) current.replaceWith(next);
+  else if (current) current.remove();
+  else if (next) place(next);
+}
+
+/** O segundo a contar no "A pensar… 4 s": um só temporizador, que só existe enquanto há uma
+ *  resposta a chegar. */
+let ticker = 0;
+function syncTicker(busy: boolean) {
+  if (busy && !ticker) {
+    ticker = window.setInterval(() => {
+      for (const label of document.querySelectorAll<HTMLElement>(".activity.live .label[data-since]")) {
+        label.textContent = `A pensar… ${duration(Math.max(0, Date.now() - Date.parse(label.dataset.since!)))}`;
+      }
+    }, 1000);
+  } else if (!busy && ticker) {
+    window.clearInterval(ticker);
+    ticker = 0;
+  }
+}
+
 function botNode(m: ChatMessage, last: boolean, streaming: boolean, conv: ChatConversation): HTMLElement {
   const node = el("article", last ? "msg bot last" : "msg bot");
   node.dataset.id = m.id;
   node.dataset.state = streaming ? "streaming" : (m.status ?? "done");
-  if (streaming && m.text === "") {
+  const activity = activityNode(m, streaming);
+  if (activity) node.append(activity);
+  else if (streaming && m.text === "") {
     const dots = el("div", "thinking");
     dots.setAttribute("role", "status");
     dots.setAttribute("aria-label", "A pensar");
@@ -244,6 +405,8 @@ function botNode(m: ChatMessage, last: boolean, streaming: boolean, conv: ChatCo
   const body = el("div", "body");
   fillBody(body, m.text);
   node.append(body);
+  const sources = sourcesNode(m);
+  if (sources) node.append(sources);
   if (!streaming && m.status === "stopped") node.append(el("p", "note", "Resposta parada."));
   if (!streaming && m.status === "failed") {
     node.append(el("p", "note error", sentence(m.error || "Não foi possível obter a resposta.")));
@@ -355,6 +518,7 @@ function applyView(v: AssistantView) {
   dirty.clear();
   renderChrome(v);
   renderThread(v);
+  syncTicker(v.busy);
   syncHistory({ activeId: id, saved: v.saved });
   if (wasBusy && !v.busy) announceAnswer(v);
   if (stick) requestAnimationFrame(toEnd);
@@ -366,9 +530,15 @@ function onStream(e: ChatStreamEvent) {
   const conv = view?.conversation;
   if (!conv || conv.id !== e.conversation_id) return;
   const message = conv.messages.find((m) => m.id === e.message_id);
-  // O texto vem sempre inteiro; um mais curto do que o que já temos chegou fora de ordem.
+  // Tudo vem sempre inteiro; menos do que o que já temos chegou fora de ordem.
   if (!message || e.text.length < message.text.length) return;
+  if ((e.reasoning?.length ?? 0) < (message.reasoning?.length ?? 0)) return;
+  if (e.searches.length < (message.searches?.length ?? 0) || e.sources.length < (message.sources?.length ?? 0)) return;
   message.text = e.text;
+  message.reasoning = e.reasoning ?? undefined;
+  message.thinking_ms = e.thinking_ms ?? undefined;
+  message.searches = e.searches;
+  message.sources = e.sources;
   dirty.add(message.id);
   if (!frame) frame = requestAnimationFrame(flushStream);
 }
@@ -377,10 +547,14 @@ function flushStream() {
   frame = 0;
   for (const id of dirty) {
     const node = document.querySelector<HTMLElement>(`.msg.bot[data-id="${CSS.escape(id)}"]`);
-    const text = view?.conversation?.messages.find((m) => m.id === id)?.text ?? "";
-    if (!node) continue;
-    node.querySelector(".thinking")?.remove();
-    fillBody(node.querySelector<HTMLElement>(".body")!, text);
+    const m = view?.conversation?.messages.find((m) => m.id === id);
+    if (!node || !m) continue;
+    const body = node.querySelector<HTMLElement>(".body")!;
+    const activity = activityNode(m, true);
+    if (activity || m.text !== "") node.querySelector(".thinking")?.remove();
+    swap(node.querySelector(":scope > .activity"), activity, (n) => node.prepend(n));
+    fillBody(body, m.text);
+    swap(node.querySelector(":scope > .sources"), sourcesNode(m), (n) => body.after(n));
   }
   dirty.clear();
   if (stick) toEnd();

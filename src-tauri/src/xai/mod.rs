@@ -3,6 +3,7 @@
 //!
 //! - `stt`: transcrição de voz, em lote (REST) e em streaming (WebSocket);
 //! - `chat`: texto (limpeza, comandos, resumos) em `/chat/completions`;
+//! - `responses`: o assistente, com pesquisa na web e no X, em `/responses`;
 //! - `models`: a lista de modelos de texto, para o seletor das definições;
 //! - `retry`: repetição dos pedidos que falham por pouco.
 //!
@@ -13,6 +14,7 @@ pub mod chat;
 #[cfg(test)]
 mod live;
 pub mod models;
+pub mod responses;
 pub mod retry;
 pub mod stt;
 

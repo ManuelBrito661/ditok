@@ -204,6 +204,130 @@ async fn live_transcribe_path() {
     assert!(!t.text.trim().is_empty());
 }
 
+/// Sondagem da Responses API (`/v1/responses`) com as ferramentas de pesquisa: guarda o SSE
+/// cru de cada pedido em `DITOK_OUT_DIR` (para servir de exemplo aos testes) e mostra os
+/// tipos de evento que chegaram. O modelo que raciocina vem de `DITOK_REASONING_MODEL`, ou é
+/// o primeiro da lista que raciocina.
+#[tokio::test]
+#[ignore]
+async fn live_responses_probe() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use futures_util::StreamExt;
+    use serde_json::json;
+
+    let out =
+        std::path::PathBuf::from(std::env::var("DITOK_OUT_DIR").expect("define DITOK_OUT_DIR"));
+    std::fs::create_dir_all(&out).unwrap();
+    let xai = client();
+    let reasoning = match std::env::var("DITOK_REASONING_MODEL") {
+        Ok(m) => m,
+        Err(_) => {
+            xai.list_models()
+                .await
+                .expect("modelos")
+                .into_iter()
+                .find(|m| m.reasoning)
+                .expect("nenhum modelo que raciocina")
+                .id
+        }
+    };
+
+    // Um quadrado vermelho num fundo branco, para ver se as imagens passam.
+    let mut img = image::RgbImage::from_pixel(64, 64, image::Rgb([255, 255, 255]));
+    for x in 16..48 {
+        for y in 16..48 {
+            img.put_pixel(x, y, image::Rgb([220, 20, 20]));
+        }
+    }
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let data_url = format!("data:image/png;base64,{}", STANDARD.encode(&png));
+
+    let tools = json!([{"type": "web_search"}, {"type": "x_search"}]);
+    let news =
+        "Quais são as notícias mais recentes sobre a xAI? Responde em 3 frases curtas em pt-PT.";
+    let cases = [
+        (
+            "a-reasoning",
+            json!({
+                "model": reasoning,
+                "instructions": "És um assistente breve.",
+                "input": [{"role": "user", "content": news}],
+                "tools": tools,
+                "stream": true,
+                "store": false,
+                "max_output_tokens": 3000,
+                "reasoning": {"effort": "low"},
+            }),
+        ),
+        (
+            "b-non-reasoning",
+            json!({
+                "model": super::DEFAULT_CHAT_MODEL,
+                "instructions": "És um assistente breve.",
+                "input": [{"role": "user", "content": news}],
+                "tools": tools,
+                "stream": true,
+                "store": false,
+                "max_output_tokens": 1000,
+            }),
+        ),
+        (
+            "c-image",
+            json!({
+                "model": reasoning,
+                "instructions": "És um assistente breve.",
+                "input": [{"role": "user", "content": [
+                    {"type": "input_image", "image_url": data_url, "detail": "high"},
+                    {"type": "input_text", "text": "De que cor é o quadrado? Uma palavra."},
+                ]}],
+                "tools": tools,
+                "stream": true,
+                "store": false,
+                "max_output_tokens": 2000,
+                "reasoning": {"effort": "low"},
+            }),
+        ),
+    ];
+    for (name, body) in cases {
+        let started = Instant::now();
+        let response = xai
+            .post("/responses")
+            .timeout(std::time::Duration::from_secs(120))
+            .json(&body)
+            .send()
+            .await
+            .expect("pedido");
+        let status = response.status();
+        let mut raw = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            raw.extend_from_slice(&chunk.expect("bocado"));
+        }
+        std::fs::write(out.join(format!("{name}.sse")), &raw).unwrap();
+        let text = String::from_utf8_lossy(&raw);
+        let mut kinds: Vec<String> = Vec::new();
+        for line in text.lines() {
+            if let Some(kind) = line.strip_prefix("event:") {
+                let kind = kind.trim().to_owned();
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
+            }
+        }
+        println!(
+            "\n== {name} ({}) → HTTP {status} em {:?}, {} bytes\n   eventos: {kinds:?}",
+            body["model"],
+            started.elapsed(),
+            raw.len()
+        );
+        if !status.is_success() {
+            println!("   corpo: {}", text.chars().take(600).collect::<String>());
+        }
+    }
+}
+
 /// O que a chave deixa fazer (a mesma verificação do botão "Testar" das definições).
 #[tokio::test]
 #[ignore]

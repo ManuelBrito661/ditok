@@ -288,6 +288,84 @@ button { font: inherit; color: inherit; }
 .thinking i:nth-child(2) { animation-delay: 0.16s; }
 .thinking i:nth-child(3) { animation-delay: 0.32s; }
 
+/* O que o modelo está a fazer antes de escrever ("A pensar… 4 s", "A pesquisar na web: «…»") e,
+   depois, o resumo que abre o raciocínio e as pesquisas. */
+.activity { margin: 2px 0 6px; font-size: 12.5px; color: var(--faint); }
+.activity > summary,
+.activity.flat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+.activity > summary { cursor: pointer; border-radius: var(--r-xs); }
+.activity > summary::-webkit-details-marker { display: none; }
+.activity > summary:hover { color: var(--muted); }
+.activity .icon { flex: none; width: 14px; height: 14px; }
+.activity > summary > .icon:first-child { width: 12px; height: 12px; transition: rotate var(--t-base) var(--ease); }
+.activity[open] > summary > .icon:first-child { rotate: 90deg; }
+.activity .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A acontecer agora: o texto tem um brilho a passar. */
+.activity.live .label {
+  background: linear-gradient(90deg, var(--faint) 0%, var(--faint) 40%, var(--text) 50%, var(--faint) 60%, var(--faint) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+.activity.live .icon:not(:first-child),
+.activity.flat.live .icon { animation: pulse 1.8s ease-in-out infinite; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes pulse { 50% { opacity: 0.45; } }
+.activity-body {
+  margin: 4px 0 8px 6px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--line-strong);
+}
+.searches { margin: 0 0 6px; padding: 0; list-style: none; }
+.searches li { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--muted); overflow-wrap: anywhere; }
+.reasoning,
+.reasoning-none {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.reasoning-none { color: var(--faint); }
+
+/* As fontes citadas: pastilhas com o domínio, que abrem no browser. */
+.sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.sources-label { margin-right: 2px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; color: var(--faint); }
+.source {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  box-shadow: var(--ring);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.source span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source .icon { flex: none; width: 12px; height: 12px; }
+.source:hover { background: var(--surface-3); color: var(--text); }
+.source.more { color: var(--faint); }
+
 .note { margin-top: 10px; font-size: 12.5px; color: var(--faint); }
 .note.error { color: var(--danger-text); }
 
@@ -795,4 +873,6 @@ kbd {
     transition-duration: 0.01ms !important;
     transition-delay: 0s !important;
   }
+  /* Sem o brilho a passar: só o texto. */
+  .activity.live .label { background: none; color: var(--muted); }
 }
