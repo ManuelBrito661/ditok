@@ -1407,7 +1407,10 @@ pub fn screen_view(state: AppStateRef<'_>) -> Option<screen::View> {
 pub async fn screen_image(state: AppStateRef<'_>) -> CmdResult<tauri::ipc::Response> {
     let state = Arc::clone(&state);
     let bytes = blocking(move || screen::display_image(&state)).await??;
-    tracing::info!(bytes = bytes.len(), "a página da captura pediu a fotografia");
+    tracing::info!(
+        bytes = bytes.len(),
+        "a página da captura pediu a fotografia"
+    );
     Ok(tauri::ipc::Response::new(bytes.as_ref().clone()))
 }
 
