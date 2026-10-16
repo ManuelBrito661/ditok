@@ -7,6 +7,8 @@ import thinkingMascotUrl from "../design/mascot/a-processar.svg?inline";
 import readyMascotUrl from "../design/mascot/pronto.svg?inline";
 import { api, errorText, summaries, type HistoryItem, type Stats, type UsageSummary } from "./api";
 import {
+  appColor,
+  appLabel,
   budgetLevel,
   dayLabel,
   foldText,
@@ -317,9 +319,21 @@ function entryRow(h: HistoryItem): HTMLLIElement {
   // Um comando diz qual foi a instrução, à frente de tudo.
   if (h.instruction) parts.unshift(`Comando: ${h.instruction}`);
   if (h.corrected) parts.push("corrigido");
-  meta.textContent = parts.join(" · ");
   const where = h.instruction ? "comando em" : "ditado em";
   meta.title = h.app ? `${h.model} · ${where} ${h.app}` : h.model;
+  // A app onde foi dito, como pastilha com a inicial (a cor é sempre a mesma para a mesma app).
+  if (h.app) {
+    const chip = document.createElement("span");
+    chip.className = `app-chip ${appColor(h.app)}`;
+    const initial = document.createElement("i");
+    initial.setAttribute("aria-hidden", "true");
+    initial.textContent = [...appLabel(h.app)][0] ?? "?";
+    chip.append(initial, appLabel(h.app));
+    meta.append(chip);
+  }
+  const detail = document.createElement("span");
+  detail.textContent = parts.join(" · ");
+  meta.append(detail);
   body.append(meta);
 
   const links = document.createElement("div");
@@ -419,6 +433,7 @@ function entryRow(h: HistoryItem): HTMLLIElement {
 function renderHistory() {
   const enabled = app.view.config.history_enabled;
   const ready = enabled && historyState === "ready";
+  $("history-skeleton").hidden = !(enabled && historyState === "loading");
   $("history-off").hidden = enabled;
   $("history-error").hidden = !enabled || historyState !== "failed";
   $("history-empty").hidden = !ready || history.length > 0;
@@ -546,8 +561,26 @@ function setupSearch() {
   });
 }
 
+/** A onda de som decorativa do palco: barras de alturas e atrasos espalhados (sem aleatoriedade,
+ *  para ser sempre a mesma), que respiram devagar. */
+function buildWave() {
+  const wave = $("hero-wave");
+  const bars = 84;
+  wave.replaceChildren(
+    ...Array.from({ length: bars }, (_, i) => {
+      const span = document.createElement("span");
+      const shape = Math.abs(Math.sin(i * 0.62) * 0.55 + Math.sin(i * 1.7 + 1) * 0.45);
+      span.style.setProperty("--h", String(Math.round(22 + shape * 78)));
+      span.style.setProperty("--d", `${-((i * 173) % 2800)}ms`);
+      return span;
+    }),
+  );
+}
+
 export function setupHome() {
   $("home-title").textContent = greeting();
+  $("home-eyebrow").textContent = new Date().toLocaleDateString("pt-PT", { weekday: "long", day: "numeric", month: "long" });
+  buildWave();
   $("history-retry").addEventListener("click", () => void refreshHome());
   for (const img of document.querySelectorAll<HTMLImageElement>(".empty-mascot")) img.src = mascotUrl;
   cycleMascot();

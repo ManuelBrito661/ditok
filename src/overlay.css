@@ -43,9 +43,9 @@ body.tip-below {
   width: 46px;
   padding: 0 8px;
   border-radius: 999px;
-  background: rgb(13 13 12 / 0.9);
-  border: 1px solid rgb(255 255 255 / 0.16);
-  box-shadow: 0 6px 18px rgb(0 0 0 / 0.3);
+  background: linear-gradient(180deg, rgb(30 30 33 / 0.92), rgb(12 12 13 / 0.94));
+  border: 1px solid rgb(255 255 255 / 0.14);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 22px -4px rgb(0 0 0 / 0.42);
   color: var(--white);
   box-sizing: border-box;
   overflow: hidden;
@@ -107,10 +107,10 @@ body.tip-below {
   width: 34px;
   height: 34px;
   padding: 0;
-  border: 1px solid rgb(255 255 255 / 0.2);
+  border: 1px solid rgb(255 255 255 / 0.18);
   border-radius: 50%;
-  background: rgb(13 13 12 / 0.92);
-  box-shadow: 0 6px 16px rgb(0 0 0 / 0.32);
+  background: linear-gradient(180deg, rgb(32 32 35 / 0.94), rgb(12 12 13 / 0.95));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12), 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 18px -4px rgb(0 0 0 / 0.45);
   color: var(--white);
   cursor: pointer;
   opacity: 0;
@@ -191,10 +191,11 @@ body.tip-below {
 #pill.hover[data-state="idle"][data-notice="shortcut"] { width: 150px; }
 
 #tip {
-  padding: 7px 12px;
-  border-radius: 10px;
-  background: rgb(13 13 12 / 0.92);
+  padding: 8px 13px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgb(30 30 33 / 0.94), rgb(13 13 14 / 0.95));
   border: 1px solid rgb(255 255 255 / 0.12);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 8px 20px -6px rgb(0 0 0 / 0.5);
   color: #f7f5f0;
   font-weight: 500;
   white-space: nowrap;
@@ -207,7 +208,8 @@ body:has(#pill.hover[data-state="idle"]) #tip { opacity: 1; transform: none; }
 .keys { display: inline-flex; gap: 3px; vertical-align: 1px; }
 kbd {
   padding: 1px 5px;
-  border: 1px solid rgb(255 255 255 / 0.22);
+  border: 1px solid rgb(255 255 255 / 0.2);
+  border-bottom-width: 2px;
   border-radius: 5px;
   background: rgb(255 255 255 / 0.1);
   font-family: inherit;
@@ -234,8 +236,8 @@ kbd {
 #bars span {
   flex: 1;
   height: 100%;
-  border-radius: 3px;
-  background: var(--white);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fff, rgb(255 255 255 / 0.72));
   transform: scaleY(0.12);
   transition: transform 90ms linear;
 }
@@ -339,7 +341,7 @@ kbd {
 
 /* Falha: pílula em tom vermelho (sem arte nova da mascote) e um abanão. */
 #pill[data-state="failed"] {
-  background: rgb(58 14 16 / 0.94);
+  background: linear-gradient(180deg, rgb(74 20 23 / 0.95), rgb(46 11 13 / 0.96));
   border-color: rgb(255 107 110 / 0.55);
   animation: shake 300ms;
 }
@@ -413,10 +415,11 @@ kbd {
    Ocupa o lugar da dica, que fica escondida. */
 #caption {
   max-width: 320px;
-  padding: 7px 12px;
-  border-radius: 10px;
-  background: rgb(13 13 12 / 0.92);
+  padding: 8px 13px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgb(30 30 33 / 0.94), rgb(13 13 14 / 0.95));
   border: 1px solid rgb(255 255 255 / 0.12);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 8px 20px -6px rgb(0 0 0 / 0.5);
   color: #f7f5f0;
   font-weight: 500;
   line-height: 1.35;

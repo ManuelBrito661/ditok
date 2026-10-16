@@ -2,7 +2,7 @@
 // orçamento, o que resta na chave e RAM.
 
 import { api, errorText, type Percentiles, type Stats, type UsageSummary } from "./api";
-import { budgetLevel, dateTime, duration, monthLabel, ms, usd } from "./format";
+import { appLabel, budgetLevel, dateTime, duration, monthLabel, ms, usd } from "./format";
 import { openSettings } from "./settings-page";
 import { $, app, confirmDanger, onViewChange, save, toast } from "./store";
 
@@ -195,7 +195,8 @@ export async function renderUsage() {
       ...u.top_apps.map((a) => {
         const li = document.createElement("li");
         const name = document.createElement("span");
-        name.textContent = a.app;
+        name.textContent = appLabel(a.app);
+        name.title = a.app;
         const bar = document.createElement("span");
         bar.className = "app-bar";
         const fill = document.createElement("span");

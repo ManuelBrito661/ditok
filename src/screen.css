@@ -32,7 +32,7 @@
   --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", monospace;
 
   --ease: cubic-bezier(0.23, 1, 0.32, 1);
-  --sh-panel: 0 0 0 1px var(--line), 0 24px 60px -18px oklch(0 0 0 / 0.75), 0 4px 14px oklch(0 0 0 / 0.4);
+  --sh-panel: 0 0 0 1px var(--line), inset 0 1px 0 oklch(1 0 0 / 0.08), 0 24px 60px -18px oklch(0 0 0 / 0.75), 0 4px 14px oklch(0 0 0 / 0.4);
 
   font-family: var(--font-ui);
   font-size: 14px;
@@ -79,8 +79,9 @@ body { user-select: none; -webkit-user-select: none; }
   position: absolute;
   /* O que está fora escurece com uma sombra enorme: um só elemento, sem quatro painéis. */
   box-shadow: 0 0 0 1px oklch(0 0 0 / 0.45), 0 0 0 99999px var(--dim);
-  outline: 1.5px solid oklch(1 0 0 / 0.95);
+  outline: 1.5px solid oklch(1 0 0 / 0.96);
   outline-offset: -1px;
+  border-radius: 3px;
   cursor: crosshair;
 }
 .stage[data-mode="selecting"] .sel { cursor: crosshair; }
@@ -89,9 +90,10 @@ body { user-select: none; -webkit-user-select: none; }
   position: absolute;
   left: -1px;
   bottom: calc(100% + 6px);
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: oklch(0.15 0.01 265 / 0.9);
+  background: oklch(0.15 0.01 265 / 0.92);
+  box-shadow: 0 0 0 1px oklch(1 0 0 / 0.1), 0 6px 14px -4px oklch(0 0 0 / 0.5);
   color: var(--text);
   font: 600 11.5px/1.5 var(--font-ui);
   font-variant-numeric: tabular-nums;
@@ -112,12 +114,12 @@ body { user-select: none; -webkit-user-select: none; }
   left: 50%;
   translate: -50% 0;
   max-width: calc(100vw - 96px);
-  padding: 9px 20px;
+  padding: 11px 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  border-radius: 18px;
+  border-radius: 20px;
   background: var(--panel);
   box-shadow: var(--sh-panel);
   color: var(--muted);
@@ -140,8 +142,8 @@ kbd {
   min-width: 22px;
   padding: 0 6px;
   border-radius: 5px;
-  background: var(--surface);
-  box-shadow: 0 0 0 1px var(--line), 0 1px 0 var(--line-strong);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  box-shadow: 0 0 0 1px var(--line), inset 0 1px 0 oklch(1 0 0 / 0.1), 0 2px 0 var(--line-strong);
   color: var(--text);
   font: 600 11.5px/1.65 var(--font-ui);
   text-align: center;

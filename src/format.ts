@@ -28,7 +28,8 @@ const SECONDS = new Intl.NumberFormat("pt-PT", { minimumFractionDigits: 1, maxim
 
 /** "850 ms" ou "1,2 s". */
 export const ms = (v: number | null | undefined) =>
-  v == null ? "—" : v >= 1000 ? `${SECONDS.format(v / 1000)} s` : `${Math.round(v)} ms`;
+  // O espaço é inseparável: o número e a unidade nunca ficam em linhas diferentes.
+  v == null ? "—" : v >= 1000 ? `${SECONDS.format(v / 1000)}\u00A0s` : `${Math.round(v)}\u00A0ms`;
 
 /** "2026-10" → "outubro de 2026". */
 export function monthLabel(key: string): string {
@@ -65,6 +66,21 @@ export function dayLabel(d: Date): string {
   if (days === 1) return "Ontem";
   const sameYear = d.getFullYear() === new Date().getFullYear();
   return d.toLocaleDateString("pt-PT", { day: "numeric", month: "long", ...(sameYear ? {} : { year: "numeric" }) });
+}
+
+/** O nome de uma app para ler: "outlook.exe" → "Outlook", "windows-terminal.exe" → "Windows terminal".
+ *  O backend guarda o nome do executável; aqui só se tira a extensão e se põe a primeira maiúscula. */
+export function appLabel(exe: string): string {
+  const name = exe.replace(/\.(exe|app)$/i, "").replace(/[-_]+/g, " ").trim();
+  return name ? name[0].toUpperCase() + name.slice(1) : exe;
+}
+
+/** Uma das cinco cores dos intervenientes (classes `c0`…`c4` em styles.css), sempre a mesma
+ *  para a mesma app: assim o Outlook é sempre da mesma cor, em qualquer lista. */
+export function appColor(exe: string): string {
+  let h = 0;
+  for (const ch of exe.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `c${h % 5}`;
 }
 
 /** Para pesquisar sem distinguir maiúsculas nem acentos: "Ação" → "acao". O NFD
