@@ -12,12 +12,31 @@ import { renderNotesHint, setupNotes } from "./notes-page";
 import { isOnboardingOpen, openOnboarding, setupOnboarding } from "./onboarding";
 import { onPage, showPage, type Page } from "./nav";
 import { openKeySettings, openShortcutSettings, setupSettings } from "./settings-page";
+import { isMac } from "./format";
 import { $, app, notifyViewChange, onViewChange, toast } from "./store";
 
+/** As páginas pela ordem da barra lateral: `Ctrl+1` (⌘1 no Mac) abre a primeira, e assim por diante.
+ *  As definições, que ficam em baixo, têm `Ctrl+,`. */
+const PAGE_ORDER: Page[] = ["inicio", "ficheiros", "notas", "dicionario", "metricas"];
+
 function setupNav() {
+  const mod = isMac ? "⌘" : "Ctrl+";
   for (const link of document.querySelectorAll<HTMLButtonElement>(".nav-link[data-page]")) {
-    link.addEventListener("click", () => showPage(link.dataset.page as Page, true));
+    const page = link.dataset.page as Page;
+    link.addEventListener("click", () => showPage(page, true));
+    // O nome fica no tooltip (a barra estreita só mostra ícones) e diz o atalho.
+    const label = link.querySelector(".nav-label")?.textContent?.trim() ?? link.title;
+    const n = PAGE_ORDER.indexOf(page);
+    link.title = `${label} (${mod}${page === "config" ? "," : n + 1})`;
   }
+  document.addEventListener("keydown", (e) => {
+    if (!(isMac ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey || e.repeat) return;
+    if (document.querySelector("dialog[open]")) return; // o guia e as confirmações têm a vez
+    const page = e.key === "," ? "config" : PAGE_ORDER[Number(e.key) - 1];
+    if (!page) return;
+    e.preventDefault();
+    showPage(page, true);
+  });
   onPage("metricas", {
     show: () => {
       void renderMemory().catch(() => {});

@@ -66,6 +66,8 @@ Abre-se no tray → **Abrir o Ditok** ou, no macOS, clicando no ícone da Dock. 
 
 Na primeira execução aparece um guia em três passos: a chave da xAI, o microfone (com um medidor de nível ao vivo) e uma experiência de ditado. Pode ser saltado em qualquer altura e não volta a aparecer.
 
+Para mudar de página sem o rato: `Ctrl+1` a `Ctrl+5` (no macOS, `⌘1` a `⌘5`) abrem Início, Ficheiros, Notas, Dicionário e Métricas, pela ordem da barra lateral, e `Ctrl+,` (`⌘,`) abre as Definições. A dica de cada página, ao passar o rato, diz o atalho.
+
 | Página | O que tem |
 | - | - |
 | Início | ditados, palavras e custo do mês, e o histórico dos últimos ditados (com pesquisa e um botão "Copiar" em cada um). Um ditado que não chegou a ser colado também fica lá |

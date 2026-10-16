@@ -63,6 +63,7 @@
         <!-- ============================================================ Início -->
         <section id="page-inicio" class="page" aria-labelledby="home-title">
           <header class="page-head">
+            <p id="home-eyebrow" class="eyebrow"></p>
             <h1 id="home-title" class="serif" tabindex="-1">Olá</h1>
             <ul class="stats" aria-label="Este mês">
               <li>
@@ -98,9 +99,17 @@
               <h2 class="serif">Segura <span id="promo-keys" class="keys"></span> e fala em qualquer app</h2>
               <p>Quando largas, escrevo onde estiver o cursor. Um toque rápido deixa-me a ouvir até voltares a carregar; <kbd>Esc</kbd> cancela.</p>
             </div>
-            <img id="promo-mascot" class="promo-mascot" alt="" width="132" height="120" />
+            <div class="hero-art">
+              <img id="promo-mascot" class="promo-mascot" alt="" width="132" height="120" />
+            </div>
+            <div id="hero-wave" class="hero-wave" aria-hidden="true"></div>
           </div>
 
+          <div id="history-skeleton" class="skeleton-list" aria-hidden="true" hidden>
+            <div class="skeleton-row"><i></i><div><b></b><b></b><b></b></div></div>
+            <div class="skeleton-row"><i></i><div><b></b><b></b><b></b></div></div>
+            <div class="skeleton-row"><i></i><div><b></b><b></b><b></b></div></div>
+          </div>
           <div id="history-off" class="empty" hidden>
             <img class="empty-mascot" alt="" width="88" height="80" />
             <p><strong>O histórico está desligado.</strong></p>
@@ -157,7 +166,7 @@
           <h2 class="section-title">Expansões <span id="snippet-count" class="count"></span></h2>
           <p class="section-desc muted">
             Dizes a frase e eu colo o texto: <i>o meu email</i> → o teu endereço. Nunca envio o texto ao modelo de limpeza.
-            No campo do texto, Enter muda de linha e <kbd>Ctrl</kbd> + <kbd>Enter</kbd> acrescenta.
+            No campo do texto, Enter muda de linha e <span class="nowrap"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span> acrescenta.
           </p>
           <div class="list-card">
             <form id="snippet-add" class="pair add-row" novalidate>
@@ -424,7 +433,7 @@
             </p>
           </header>
 
-          <div class="cards">
+          <div class="cards thirds">
             <div class="card dark"><span class="card-label">Custo este mês</span><span id="m-cost" class="card-value">—</span></div>
             <div class="card">
               <span class="card-label">Orçamento do mês</span>

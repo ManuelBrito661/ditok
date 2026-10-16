@@ -14,7 +14,7 @@
      letras da app de trás atravessam o painel e atrapalham a leitura. Uma página web não
      desfoca o que está fora da janela (isso pede um efeito nativo do sistema). */
   --glass: oklch(0.985 0.004 255 / 0.88);
-  --glass-solid: oklch(0.985 0.004 255 / 0.95);
+  --glass-solid: oklch(0.985 0.004 255 / 0.96);
   --rim: oklch(1 0 0 / 0.65);
   --rim-out: oklch(0.2 0.02 262 / 0.16);
   --surface: oklch(1 0 0);
@@ -43,9 +43,10 @@
   --on-danger: oklch(0.99 0 0);
 
   --ring: 0 0 0 1px var(--line);
+  --hl: inset 0 1px 0 oklch(1 0 0 / 0.85);
   /* A sombra do painel tem de caber na margem transparente da janela (--margin). */
   --sh-panel: 0 0 0 1px var(--rim-out), 0 12px 30px -8px oklch(0.15 0.03 262 / 0.4), 0 2px 8px oklch(0.15 0.03 262 / 0.18);
-  --sh-card: var(--ring), 0 1px 2px oklch(0.2 0.02 262 / 0.04), 0 10px 28px -16px oklch(0.2 0.02 262 / 0.2);
+  --sh-card: var(--ring), var(--hl), 0 1px 2px oklch(0.2 0.02 262 / 0.05), 0 14px 32px -18px oklch(0.2 0.03 262 / 0.28);
   --sh-pop: var(--ring), 0 30px 80px -24px oklch(0.15 0.03 262 / 0.5);
   --sh-toast: 0 14px 36px -10px oklch(0.15 0.03 262 / 0.45);
 
@@ -58,7 +59,7 @@
   --r-md: 10px;
   --r-lg: 16px;
   --r-pill: 999px;
-  --r-panel: 22px;
+  --r-panel: 24px;
   /* A janela é maior do que o painel: esta margem transparente é onde cai a sombra. */
   --margin: 24px;
 
@@ -78,7 +79,7 @@
   :root {
     --canvas: oklch(0.172 0.006 265);
     --glass: oklch(0.19 0.007 265 / 0.88);
-    --glass-solid: oklch(0.19 0.007 265 / 0.95);
+    --glass-solid: oklch(0.19 0.007 265 / 0.96);
     --rim: oklch(1 0 0 / 0.1);
     --rim-out: oklch(0 0 0 / 0.55);
     --surface: oklch(0.222 0.008 265);
@@ -107,7 +108,8 @@
     --on-danger: oklch(0.17 0.04 25);
 
     --sh-panel: 0 0 0 1px var(--rim-out), 0 12px 30px -8px oklch(0 0 0 / 0.6), 0 2px 8px oklch(0 0 0 / 0.35);
-    --sh-card: var(--ring), 0 1px 2px oklch(0 0 0 / 0.3), 0 12px 30px -16px oklch(0 0 0 / 0.65);
+    --hl: inset 0 1px 0 oklch(1 0 0 / 0.06);
+    --sh-card: var(--ring), var(--hl), 0 1px 2px oklch(0 0 0 / 0.3), 0 14px 32px -18px oklch(0 0 0 / 0.7);
     --sh-pop: var(--ring), 0 30px 80px -24px oklch(0 0 0 / 0.85);
     --sh-toast: 0 14px 36px -10px oklch(0 0 0 / 0.75);
   }
@@ -160,7 +162,9 @@ button { font: inherit; color: inherit; }
   margin: var(--margin);
   overflow: hidden;
   border-radius: var(--r-panel);
-  background: var(--glass);
+  background:
+    radial-gradient(120% 38% at 50% 0%, color-mix(in oklab, var(--accent) 7%, transparent), transparent 70%),
+    var(--glass);
   box-shadow: var(--sh-panel);
 }
 /* O brilho fino da borda do vidro, por cima de tudo mas sem apanhar cliques. */
@@ -244,15 +248,17 @@ button { font: inherit; color: inherit; }
 
 .msg.user { align-self: flex-end; max-width: 88%; }
 .bubble {
-  padding: 9px 14px;
-  border-radius: 18px 18px 6px 18px;
-  background: var(--surface-2);
-  box-shadow: var(--ring);
+  padding: 9px 15px;
+  border-radius: 20px 20px 6px 20px;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 88%, white), var(--accent));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.22), 0 1px 2px color-mix(in oklab, var(--accent) 50%, black 30%), 0 8px 16px -10px color-mix(in oklab, var(--accent) 70%, transparent);
+  color: var(--on-accent);
   font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.bubble ::selection, .bubble::selection { background: oklch(1 0 0 / 0.3); }
 
 .msg.bot { align-self: stretch; }
 .body {
@@ -371,10 +377,10 @@ button { font: inherit; color: inherit; }
 
 /* Código: um bloco à parte, com o seu botão de copiar. */
 .code {
-  margin: 0.7em 0;
-  border-radius: var(--r-md);
+  margin: 0.8em 0;
+  border-radius: var(--r-lg);
   background: var(--surface-2);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring), var(--hl);
   overflow: hidden;
 }
 .code-head {
@@ -384,8 +390,10 @@ button { font: inherit; color: inherit; }
   min-height: 30px;
   padding: 2px 4px 0 12px;
   color: var(--faint);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .code pre {
   margin: 0;
@@ -534,15 +542,16 @@ button { font: inherit; color: inherit; }
   min-height: 100%;
   padding: 24px 32px 64px;
   text-align: center;
+  background: radial-gradient(60% 34% at 50% 36%, color-mix(in oklab, var(--accent) 13%, transparent), transparent 70%);
 }
 .empty-mascot {
-  width: 72px;
+  width: 76px;
   height: auto;
-  margin-bottom: 12px;
-  filter: drop-shadow(0 12px 16px oklch(0.45 0.18 258 / 0.22));
+  margin-bottom: 14px;
+  filter: drop-shadow(0 0 26px oklch(0.6 0.2 258 / 0.38)) drop-shadow(0 12px 14px oklch(0.45 0.18 258 / 0.25));
   animation: float 5.5s ease-in-out infinite;
 }
-.empty-title { font-size: 31px; line-height: 1.1; }
+.empty-title { font-size: 34px; line-height: 1.08; }
 .empty-text { max-width: 30ch; margin-top: 6px; color: var(--muted); font-size: 13.5px; line-height: 1.65; }
 .keys { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 5px; margin-top: 14px; }
 .empty-screen { margin: 18px 0 0; color: var(--faint); font-size: 12.5px; }
@@ -552,8 +561,8 @@ kbd {
   min-width: 24px;
   padding: 1px 7px;
   border-radius: var(--r-xs);
-  background: var(--surface);
-  box-shadow: var(--ring), inset 0 0 0 1px var(--line), 0 2px 0 var(--line-strong);
+  background: linear-gradient(180deg, var(--surface), var(--surface-2));
+  box-shadow: var(--ring), var(--hl), inset 0 0 0 1px var(--line), 0 2px 0 var(--line-strong);
   color: var(--text);
   font: 600 12px/1.6 var(--font-ui);
   text-align: center;
@@ -618,14 +627,14 @@ kbd {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 5px 5px 5px 18px;
-  border-radius: 22px;
+  padding: 6px 6px 6px 20px;
+  border-radius: 26px;
   background: var(--surface);
   box-shadow: var(--sh-card);
   transition: box-shadow var(--t-base) var(--ease);
 }
 .composer:focus-within {
-  box-shadow: var(--ring), 0 0 0 1px var(--accent-line), 0 0 0 4px var(--accent-soft), 0 10px 28px -16px oklch(0.2 0.02 262 / 0.2);
+  box-shadow: var(--ring), 0 0 0 1px var(--accent-line), 0 0 0 4px var(--accent-soft), 0 14px 32px -18px oklch(0.2 0.03 262 / 0.3);
 }
 .composer textarea {
   flex: 1;
@@ -647,23 +656,24 @@ kbd {
   display: grid;
   place-items: center;
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: var(--accent);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 86%, white), var(--accent));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.24), 0 6px 12px -6px color-mix(in oklab, var(--accent) 80%, transparent);
   color: var(--on-accent);
   cursor: pointer;
   transition: background-color var(--t-base) var(--ease), color var(--t-base) var(--ease), scale var(--t-fast) var(--ease);
 }
 .send:active:not(:disabled) { scale: 0.92; }
-.send:disabled { background: var(--surface-3); color: var(--faint); cursor: default; }
+.send:disabled { background: var(--surface-3); box-shadow: none; color: var(--faint); cursor: default; }
 .send .icon { width: 17px; height: 17px; stroke-width: 2; }
 .send .icon-stop { display: none; }
 /* Com uma resposta a chegar, o botão serve para a parar. */
-.app[data-busy] .send { background: var(--text); color: var(--canvas); cursor: pointer; }
-.app[data-busy] .send:disabled { background: var(--text); color: var(--canvas); }
+.app[data-busy] .send { background: var(--text); box-shadow: none; color: var(--canvas); cursor: pointer; }
+.app[data-busy] .send:disabled { background: var(--text); box-shadow: none; color: var(--canvas); }
 .app[data-busy] .send .icon-send { display: none; }
 .app[data-busy] .send .icon-stop { display: block; }
 
@@ -698,6 +708,9 @@ kbd {
   flex-direction: column;
   width: min(340px, 90%);
   background: var(--glass-solid);
+  /* Desfoca a conversa por trás: sem isto o texto dela atravessava a gaveta. */
+  -webkit-backdrop-filter: blur(22px) saturate(1.15);
+  backdrop-filter: blur(22px) saturate(1.15);
   box-shadow: var(--sh-pop);
   visibility: hidden;
   transform: translateX(-104%);
@@ -818,7 +831,7 @@ kbd {
 .row-del .icon { width: 15px; height: 15px; }
 .row:hover .row-del, .row:focus-within .row-del { opacity: 1; }
 .row:hover .row-time, .row:focus-within .row-time { opacity: 0; }
-.row-del:hover { background: color-mix(in oklch, var(--danger-fill) 12%, transparent); color: var(--danger-text); }
+.row-del:hover { background: color-mix(in oklab, var(--danger-fill) 12%, transparent); color: var(--danger-text); }
 .row-del.armed { opacity: 1; background: var(--danger-fill); color: var(--on-danger); }
 .row-del.armed:hover { background: var(--danger-fill); color: var(--on-danger); }
 .row:has(.row-del.armed) .row-time { opacity: 0; }
@@ -849,7 +862,7 @@ kbd {
   transition: background-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .text-btn:hover { background: var(--hover); color: var(--text); }
-.text-btn.danger:hover { background: color-mix(in oklch, var(--danger-fill) 12%, transparent); color: var(--danger-text); }
+.text-btn.danger:hover { background: color-mix(in oklab, var(--danger-fill) 12%, transparent); color: var(--danger-text); }
 .text-btn.danger.armed { background: var(--danger-fill); color: var(--on-danger); }
 .text-btn:disabled { opacity: 0.4; cursor: default; }
 
